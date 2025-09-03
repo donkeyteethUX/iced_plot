@@ -1,0 +1,201 @@
+use crate::Color;
+use crate::point::MarkerType;
+
+/// Line styling options for series connections.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineStyle {
+    Solid,
+    Dotted { spacing: f32 },
+    Dashed { length: f32 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// Marker styling options for series points.
+pub struct MarkerStyle {
+    pub color: Color,
+    pub size: f32,
+    pub marker_type: MarkerType,
+}
+
+impl Default for MarkerStyle {
+    fn default() -> Self {
+        Self {
+            color: Color::from_rgb(0.3, 0.3, 0.9),
+            size: 5.0,
+            marker_type: MarkerType::FilledCircle,
+        }
+    }
+}
+
+impl MarkerStyle {
+    pub fn new(color: Color, size: f32, marker_type: MarkerType) -> Self {
+        Self {
+            color,
+            size,
+            marker_type,
+        }
+    }
+
+    pub fn circle(color: Color, size: f32) -> Self {
+        Self {
+            color,
+            size,
+            marker_type: MarkerType::FilledCircle,
+        }
+    }
+
+    pub fn ring(color: Color, size: f32) -> Self {
+        Self {
+            color,
+            size,
+            marker_type: MarkerType::EmptyCircle,
+        }
+    }
+
+    pub fn square(color: Color, size: f32) -> Self {
+        Self {
+            color,
+            size,
+            marker_type: MarkerType::Square,
+        }
+    }
+
+    pub fn star(color: Color, size: f32) -> Self {
+        Self {
+            color,
+            size,
+            marker_type: MarkerType::Star,
+        }
+    }
+
+    pub fn triangle(color: Color, size: f32) -> Self {
+        Self {
+            color,
+            size,
+            marker_type: MarkerType::Triangle,
+        }
+    }
+}
+
+/// Errors that can occur when constructing or adding a series.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SeriesError {
+    /// No points provided
+    Empty,
+    /// Series has neither markers nor lines enabled
+    NoMarkersAndNoLines,
+    /// A series with the same non-empty label already exists
+    DuplicateLabel(String),
+    /// Axis limits are not properly set
+    InvalidAxisLimits,
+}
+
+/// A collection of per-point styled data to be plotted.
+#[derive(Debug, Clone)]
+pub struct Series {
+    /// Series point positions.
+    pub positions: Vec<[f32; 2]>,
+
+    /// Optional label for the entire series.
+    pub label: Option<String>,
+
+    /// Optional marker style for the series. If none, no markers are drawn.
+    pub marker_style: Option<MarkerStyle>,
+
+    /// Line style for connecting markers. If None, no line is drawn.
+    pub line_style: Option<LineStyle>,
+}
+
+impl Series {
+    // Constructors that produce valid series shapes directly
+    pub fn line_only(positions: Vec<[f32; 2]>, line_style: LineStyle) -> Self {
+        Self {
+            positions,
+            label: None,
+            marker_style: None,
+            line_style: Some(line_style),
+        }
+    }
+
+    pub fn markers_only(positions: Vec<[f32; 2]>, marker_style: MarkerStyle) -> Self {
+        Self {
+            positions,
+            label: None,
+            marker_style: Some(marker_style),
+            line_style: None,
+        }
+    }
+
+    pub fn markers_and_line(
+        positions: Vec<[f32; 2]>,
+        marker_style: MarkerStyle,
+        line_style: LineStyle,
+    ) -> Self {
+        Self {
+            positions,
+            label: None,
+            marker_style: Some(marker_style),
+            line_style: Some(line_style),
+        }
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        let l = label.into();
+        if !l.is_empty() {
+            self.label = Some(l);
+        }
+        self
+    }
+
+    pub fn marker_style(mut self, style: MarkerStyle) -> Self {
+        self.marker_style = Some(style);
+        self
+    }
+
+    pub fn marker(mut self, color: Color, size: f32, marker_type: MarkerType) -> Self {
+        self.marker_style = Some(MarkerStyle {
+            color,
+            size,
+            marker_type,
+        });
+        self
+    }
+
+    pub fn no_markers(mut self) -> Self {
+        self.marker_style = None;
+        self
+    }
+
+    pub fn line_style(mut self, style: LineStyle) -> Self {
+        self.line_style = Some(style);
+        self
+    }
+
+    pub fn line_solid(self) -> Self {
+        self.line_style(LineStyle::Solid)
+    }
+
+    pub fn line_dotted(self, spacing: f32) -> Self {
+        self.line_style(LineStyle::Dotted { spacing })
+    }
+
+    pub fn line_dashed(self, length: f32) -> Self {
+        self.line_style(LineStyle::Dashed { length })
+    }
+
+    pub fn no_line(mut self) -> Self {
+        self.line_style = None;
+        self
+    }
+
+    /// Validate basic invariants for a single series (does not check duplicates).
+    pub fn validate(&self) -> Result<(), SeriesError> {
+        if self.positions.is_empty() {
+            return Err(SeriesError::Empty);
+        }
+        if self.marker_style.is_none() && self.line_style.is_none() {
+            return Err(SeriesError::NoMarkersAndNoLines);
+        }
+        Ok(())
+    }
+}
