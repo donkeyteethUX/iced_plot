@@ -35,7 +35,7 @@ pub(crate) struct PickResult {
 pub(crate) struct Hit {
     pub series_label: String,
     pub point_index: usize, // index within its series span
-    pub world: [f32; 2],
+    pub world: [f64; 2],
     pub size_px: f32,
 }
 

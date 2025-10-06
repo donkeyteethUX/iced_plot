@@ -15,16 +15,18 @@ pub struct PlotWidgetBuilder {
     tooltip_provider: Option<TooltipProvider>,
     cursor_overlay: Option<bool>,
     cursor_provider: Option<CursorProvider>,
-    x_lim: Option<(f32, f32)>,
-    y_lim: Option<(f32, f32)>,
+    x_lim: Option<(f64, f64)>,
+    y_lim: Option<(f64, f64)>,
     series: Vec<Series>,
 }
 
 impl PlotWidgetBuilder {
+    /// Create a new PlotWidgetBuilder.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Set the x-axis label for the plot.
     pub fn with_x_label(mut self, label: impl Into<String>) -> Self {
         let l = label.into();
         if !l.is_empty() {
@@ -33,6 +35,7 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Set the y-axis label for the plot.
     pub fn with_y_label(mut self, label: impl Into<String>) -> Self {
         let l = label.into();
         if !l.is_empty() {
@@ -41,16 +44,19 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Enable or disable tooltips for the plot. Tooltips are enabled by default.
     pub fn with_tooltips(mut self, enabled: bool) -> Self {
         self.tooltips = Some(enabled);
         self
     }
 
+    /// Enable or disable autoscaling of the plot when new data is added.
     pub fn with_autoscale_on_updates(mut self, enabled: bool) -> Self {
         self.autoscale_on_updates = Some(enabled);
         self
     }
 
+    /// Set the hover radius in pixels for detecting nearby points for tooltips.
     pub fn with_hover_radius_px(mut self, radius: f32) -> Self {
         self.hover_radius_px = Some(radius.max(0.0));
         self
@@ -76,7 +82,7 @@ impl PlotWidgetBuilder {
     /// (x, y) world coordinates and should return the formatted string.
     pub fn with_cursor_provider<F>(mut self, provider: F) -> Self
     where
-        F: Fn(f32, f32) -> String + Send + Sync + 'static,
+        F: Fn(f64, f64) -> String + Send + Sync + 'static,
     {
         self.cursor_provider = Some(Arc::new(provider));
         self
@@ -84,14 +90,14 @@ impl PlotWidgetBuilder {
 
     /// Set the x-axis limits (min, max) for the plot.
     /// If set, these will override autoscaling for the x-axis.
-    pub fn with_x_lim(mut self, min: f32, max: f32) -> Self {
+    pub fn with_x_lim(mut self, min: f64, max: f64) -> Self {
         self.x_lim = Some((min, max));
         self
     }
 
     /// Set the y-axis limits (min, max) for the plot.
     /// If set, these will override autoscaling for the y-axis.
-    pub fn with_y_lim(mut self, min: f32, max: f32) -> Self {
+    pub fn with_y_lim(mut self, min: f64, max: f64) -> Self {
         self.y_lim = Some((min, max));
         self
     }
@@ -103,10 +109,10 @@ impl PlotWidgetBuilder {
 
     /// Build the PlotWidget; validates series and duplicate labels via PlotWidget::add_series.
     pub fn build(self) -> Result<PlotWidget, SeriesError> {
-        if let (Some((x_min, x_max)), Some((y_min, y_max))) = (self.x_lim, self.y_lim) {
-            if x_min >= x_max || y_min >= y_max {
-                return Err(SeriesError::InvalidAxisLimits);
-            }
+        if let (Some((x_min, x_max)), Some((y_min, y_max))) = (self.x_lim, self.y_lim)
+            && (x_min >= x_max || y_min >= y_max)
+        {
+            return Err(SeriesError::InvalidAxisLimits);
         }
         let mut w = PlotWidget::new();
 

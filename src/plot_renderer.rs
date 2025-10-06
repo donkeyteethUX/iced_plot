@@ -1,4 +1,5 @@
-//! GPU renderer for PlotWidget. Owns wgpu resources and encodes draw calls into a provided encoder.
+//! GPU renderer for PlotWidget.
+use crate::LineStyle;
 use crate::picking::PickingPass;
 use crate::{camera::CameraUniform, grid::Grid, widget::PlotState};
 use iced::widget::shader::Viewport;
@@ -7,7 +8,6 @@ use iced::{Rectangle, wgpu::*};
 pub struct RenderParams<'a> {
     pub encoder: &'a mut CommandEncoder,
     pub target: &'a TextureView,
-    // pub clear: Option<Color>,
     pub bounds: Rectangle<u32>,
 }
 
@@ -91,9 +91,8 @@ impl PlotRenderer {
             selection_vertex_count: 0,
             hover_vertex_buffer: None,
             hover_vertex_count: 0,
-            grid: Grid::new(),
+            grid: Grid::default(),
             picking: PickingPass::default(),
-
             bounds_w: 0,
             bounds_h: 0,
             scale_factor: 1.0,
@@ -152,16 +151,13 @@ impl PlotRenderer {
         bounds: &Rectangle,
         state: &PlotState,
     ) {
-        // Derive scale factor from the viewport
-        let _physical = viewport.physical_size();
         let scale_factor = viewport.scale_factor();
-
-        // Use bounds dimensions instead of full viewport
         let bounds_width = (bounds.width * scale_factor) as u32;
         let bounds_height = (bounds.height * scale_factor) as u32;
 
         self.set_bounds(bounds_width, bounds_height);
         self.set_scale_factor(scale_factor);
+
         // Sync picking viewport
         self.picking
             .set_view(bounds_width, bounds_height, scale_factor);
@@ -170,7 +166,7 @@ impl PlotRenderer {
         self.ensure_pipelines_and_update_grid(device, queue, state);
 
         // Upload camera uniform based on current camera and bounds dimensions
-        let mut cam_u = CameraUniform::new();
+        let mut cam_u = CameraUniform::default();
         cam_u.update(&state.camera, bounds_width, bounds_height);
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&cam_u));
         self.sync(device, queue, state);
@@ -443,8 +439,13 @@ impl PlotRenderer {
                 continue;
             }
             for (local_i, p) in state.points[s.start..end].iter().enumerate() {
-                raw.extend_from_slice(&p.position[0].to_le_bytes());
-                raw.extend_from_slice(&p.position[1].to_le_bytes());
+                // Subtract render_offset for high-precision rendering near zero
+                let render_pos = [
+                    (p.position[0] - state.camera.render_offset.x) as f32,
+                    (p.position[1] - state.camera.render_offset.y) as f32,
+                ];
+                raw.extend_from_slice(&render_pos[0].to_le_bytes());
+                raw.extend_from_slice(&render_pos[1].to_le_bytes());
                 // color is stored on the SeriesSpan (four f32 components)
                 raw.extend_from_slice(&s.color.r.to_le_bytes());
                 raw.extend_from_slice(&s.color.g.to_le_bytes());
@@ -494,9 +495,9 @@ impl PlotRenderer {
             }
             let first = (raw.len() / 36) as u32; // 36 bytes per vertex
             let (line_style_u32, style_param) = match s.line_style.unwrap() {
-                crate::LineStyle::Solid => (0u32, 0.0f32),
-                crate::LineStyle::Dotted { spacing } => (1u32, spacing),
-                crate::LineStyle::Dashed { length } => (2u32, length),
+                LineStyle::Solid => (0u32, 0.0f32),
+                LineStyle::Dotted { spacing } => (1u32, spacing),
+                LineStyle::Dashed { length } => (2u32, length),
             };
 
             let points_slice = &state.points[s.start..s.start + s.len];
@@ -507,12 +508,16 @@ impl PlotRenderer {
                     let prev = &points_slice[i - 1];
                     let dx = p.position[0] - prev.position[0];
                     let dy = p.position[1] - prev.position[1];
-                    cumulative_distance += (dx * dx + dy * dy).sqrt();
+                    cumulative_distance += (dx * dx + dy * dy).sqrt() as f32;
                 }
 
                 // position: vec2<f32>
-                raw.extend_from_slice(&p.position[0].to_le_bytes());
-                raw.extend_from_slice(&p.position[1].to_le_bytes());
+                let render_pos = [
+                    (p.position[0] - state.camera.render_offset.x) as f32,
+                    (p.position[1] - state.camera.render_offset.y) as f32,
+                ];
+                raw.extend_from_slice(&render_pos[0].to_le_bytes());
+                raw.extend_from_slice(&render_pos[1].to_le_bytes());
                 // color: vec4<f32>
                 raw.extend_from_slice(&s.color.r.to_le_bytes());
                 raw.extend_from_slice(&s.color.g.to_le_bytes());
@@ -603,11 +608,17 @@ impl PlotRenderer {
         if w <= 1.0 || h <= 1.0 {
             return;
         }
-        let world_v = glam::vec2(world[0], world[1]);
+        // Convert world coordinates to render coordinates (subtract offset)
+        let render_pos = [
+            world[0] - state.camera.render_offset.x,
+            world[1] - state.camera.render_offset.y,
+        ];
         // Project to clip using camera uniform math compatible with selection path
         let cam = &state.camera;
-        let ndc_x = (world_v.x - cam.position.x) / cam.half_extents.x;
-        let ndc_y = (world_v.y - cam.position.y) / cam.half_extents.y;
+        let ndc_x =
+            (render_pos[0] as f32 - cam.effective_position().x as f32) / cam.half_extents.x as f32;
+        let ndc_y =
+            (render_pos[1] as f32 - cam.effective_position().y as f32) / cam.half_extents.y as f32;
         // Convert size in px to clip delta
         let px_to_clip_x = 2.0 / w;
         let px_to_clip_y = 2.0 / h;
@@ -656,7 +667,6 @@ impl PlotRenderer {
                     view: params.target,
                     resolve_target: None,
                     ops: Operations {
-                        // Use Load instead of Clear to avoid clearing the entire render target
                         load: LoadOp::Load,
                         store: StoreOp::Store,
                     },

@@ -2,8 +2,7 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{Container, button, column, container, row, text};
 use iced::{Border, Element, Length, color};
 
-use crate::message::PlotUiMessage;
-use crate::widget::PlotData;
+use crate::{message::PlotUiMessage, widget::PlotData};
 
 const LEGEND_PADDING: f32 = 8.0;
 const ENTRY_SPACING: f32 = 6.0;

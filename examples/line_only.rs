@@ -22,7 +22,7 @@ fn new() -> PlotWidget {
     // Line-only series (no markers)
     let mut positions = Vec::new();
     for i in 0..100 {
-        let x = i as f32 * 0.1;
+        let x = i as f64 * 0.1;
         let y = (x * 0.5).sin();
         positions.push([x, y]);
     }
@@ -31,7 +31,7 @@ fn new() -> PlotWidget {
     // Marker-only series (no lines)
     let mut positions = Vec::new();
     for i in 0..50 {
-        let x = i as f32 * 0.2;
+        let x = i as f64 * 0.2;
         let y = (x * 0.3).cos() + 0.5;
         positions.push([x, y]);
     }
@@ -48,7 +48,7 @@ fn new() -> PlotWidget {
     // Both markers and lines
     let mut positions = Vec::new();
     for i in 0..30 {
-        let x = i as f32 * 0.3;
+        let x = i as f64 * 0.3;
         let y = (x * 0.8).sin() - 0.5;
         positions.push([x, y]);
     }

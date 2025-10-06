@@ -42,7 +42,7 @@ fn new_scatter() -> PlotWidget {
 
     // Generate 5 million points from 2D Gaussian
     let mut rng = rand::rng();
-    let normal = Normal::new(0.0f32, 1.0f32).unwrap();
+    let normal = Normal::new(0.0f64, 1.0f64).unwrap();
     let mut positions = Vec::with_capacity(5_000_000);
     for _ in 0..5_000_000 {
         let x = normal.sample(&mut rng);

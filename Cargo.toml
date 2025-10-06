@@ -12,4 +12,3 @@ iced     = { git = "https://github.com/iced-rs/iced", rev = "a9091f9" }
 [dev-dependencies]
 rand       = "0.9"
 rand_distr = "0.5"
-sysinfo    = "0.32"

@@ -94,7 +94,7 @@ pub enum SeriesError {
 #[derive(Debug, Clone)]
 pub struct Series {
     /// Series point positions.
-    pub positions: Vec<[f32; 2]>,
+    pub positions: Vec<[f64; 2]>,
 
     /// Optional label for the entire series.
     pub label: Option<String>,
@@ -107,8 +107,8 @@ pub struct Series {
 }
 
 impl Series {
-    // Constructors that produce valid series shapes directly
-    pub fn line_only(positions: Vec<[f32; 2]>, line_style: LineStyle) -> Self {
+    /// Create a new line-only series.
+    pub fn line_only(positions: Vec<[f64; 2]>, line_style: LineStyle) -> Self {
         Self {
             positions,
             label: None,
@@ -117,7 +117,8 @@ impl Series {
         }
     }
 
-    pub fn markers_only(positions: Vec<[f32; 2]>, marker_style: MarkerStyle) -> Self {
+    /// Create a new marker-only series.
+    pub fn markers_only(positions: Vec<[f64; 2]>, marker_style: MarkerStyle) -> Self {
         Self {
             positions,
             label: None,
@@ -126,8 +127,9 @@ impl Series {
         }
     }
 
+    /// Create a new series with both markers and lines.
     pub fn markers_and_line(
-        positions: Vec<[f32; 2]>,
+        positions: Vec<[f64; 2]>,
         marker_style: MarkerStyle,
         line_style: LineStyle,
     ) -> Self {
@@ -139,6 +141,7 @@ impl Series {
         }
     }
 
+    /// Set an label for the series.
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         let l = label.into();
         if !l.is_empty() {
@@ -147,11 +150,13 @@ impl Series {
         self
     }
 
+    /// Set or change the marker style for the series.
     pub fn marker_style(mut self, style: MarkerStyle) -> Self {
         self.marker_style = Some(style);
         self
     }
 
+    /// Set or change the marker style for the series.
     pub fn marker(mut self, color: Color, size: f32, marker_type: MarkerType) -> Self {
         self.marker_style = Some(MarkerStyle {
             color,
@@ -161,35 +166,28 @@ impl Series {
         self
     }
 
-    pub fn no_markers(mut self) -> Self {
-        self.marker_style = None;
-        self
-    }
-
+    /// Set or change the line style for the series.
     pub fn line_style(mut self, style: LineStyle) -> Self {
         self.line_style = Some(style);
         self
     }
 
+    /// Set solid line style.
     pub fn line_solid(self) -> Self {
         self.line_style(LineStyle::Solid)
     }
 
+    /// Set dotted line style with given spacing.
     pub fn line_dotted(self, spacing: f32) -> Self {
         self.line_style(LineStyle::Dotted { spacing })
     }
 
+    /// Set dashed line style with given dash length.
     pub fn line_dashed(self, length: f32) -> Self {
         self.line_style(LineStyle::Dashed { length })
     }
 
-    pub fn no_line(mut self) -> Self {
-        self.line_style = None;
-        self
-    }
-
-    /// Validate basic invariants for a single series (does not check duplicates).
-    pub fn validate(&self) -> Result<(), SeriesError> {
+    pub(super) fn validate(&self) -> Result<(), SeriesError> {
         if self.positions.is_empty() {
             return Err(SeriesError::Empty);
         }

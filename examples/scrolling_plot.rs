@@ -22,8 +22,8 @@ enum Message {
 
 struct App {
     widget: PlotWidget,
-    positions: Vec<[f32; 2]>,
-    x: f32,
+    positions: Vec<[f64; 2]>,
+    x: f64,
 }
 
 impl App {
@@ -36,7 +36,7 @@ impl App {
                 // Add new point
                 let y = (self.x * 0.5).sin();
                 self.positions.push([self.x, y]);
-                self.x += 0.1f32;
+                self.x += 0.1f64;
 
                 // Keep only last 300 points for scrolling effect
                 if self.positions.len() > 300 {
@@ -70,7 +70,7 @@ impl App {
                 .build()
                 .unwrap(),
             positions: Vec::new(),
-            x: 0.0f32,
+            x: 0.0f64,
         }
     }
 }

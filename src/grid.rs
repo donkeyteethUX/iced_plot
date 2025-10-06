@@ -1,28 +1,18 @@
-use glam::Vec2;
+use glam::DVec2;
 use iced::wgpu::{util::DeviceExt, *};
 
 use crate::camera::Camera;
 
-pub struct Grid {
+pub(crate) struct Grid {
     pipeline: Option<RenderPipeline>,
     vertex_buffer: Option<Buffer>,
     vertex_count: u32,
-    last_center: Vec2,
-    last_extents: Vec2,
+    last_center: DVec2,
+    last_extents: DVec2,
 }
 
 impl Grid {
-    pub fn new() -> Self {
-        Self {
-            pipeline: None,
-            vertex_buffer: None,
-            vertex_count: 0,
-            last_center: Vec2::splat(f32::NAN),
-            last_extents: Vec2::splat(f32::NAN),
-        }
-    }
-
-    pub fn ensure_pipeline(
+    pub(crate) fn ensure_pipeline(
         &mut self,
         device: &Device,
         format: TextureFormat,
@@ -93,38 +83,41 @@ impl Grid {
         self.pipeline = Some(pipeline);
     }
 
-    pub fn update(&mut self, device: &Device, camera: &Camera) {
-        const GRID_TARGET_LINES: f32 = 20.0;
+    pub(crate) fn update(&mut self, device: &Device, camera: &Camera) {
+        const GRID_TARGET_LINES: f64 = 20.0;
         const GRID_MAX_LINES: u32 = 1000;
         const GRID_MAJOR_ALPHA: f32 = 0.45;
         const GRID_MINOR_ALPHA: f32 = 0.28;
         const GRID_SUB_MINOR_ALPHA: f32 = 0.10;
-        const GRID_EPSILON: f32 = 1e-6;
+        const GRID_EPSILON: f64 = 1e-6;
         const GRID_MAJOR_INTERVAL: i64 = 10;
         const GRID_MINOR_INTERVAL: i64 = 5;
+
         if camera.position == self.last_center && camera.half_extents == self.last_extents {
             return;
         }
+
         self.last_center = camera.position;
         self.last_extents = camera.half_extents;
 
-        let target = GRID_TARGET_LINES;
         let span_x = camera.half_extents.x * 2.0;
         let span_y = camera.half_extents.y * 2.0;
-        let step_x = nice_step(span_x / target);
-        let step_y = nice_step(span_y / target);
-        let min_x = camera.position.x - camera.half_extents.x;
-        let max_x = camera.position.x + camera.half_extents.x;
-        let min_y = camera.position.y - camera.half_extents.y;
-        let max_y = camera.position.y + camera.half_extents.y;
+        let step_x = nice_step(span_x / GRID_TARGET_LINES);
+        let step_y = nice_step(span_y / GRID_TARGET_LINES);
+        // Calculate bounds in render space (world - offset)
+        let render_center = camera.effective_position();
+        let min_x = render_center.x - camera.half_extents.x;
+        let max_x = render_center.x + camera.half_extents.x;
+        let min_y = render_center.y - camera.half_extents.y;
+        let max_y = render_center.y + camera.half_extents.y;
         let start_x = (min_x / step_x).floor() * step_x;
         let start_y = (min_y / step_y).floor() * step_y;
-        let mut verts: Vec<f32> = Vec::new();
+        let mut verts = Vec::with_capacity((GRID_MAX_LINES * 3) as usize);
         let mut count = 0u32;
-        let max_lines = GRID_MAX_LINES; // safety
+
         // Vertical
         let mut x = start_x;
-        while x <= max_x + GRID_EPSILON && count < max_lines {
+        while x <= max_x + GRID_EPSILON && count < GRID_MAX_LINES {
             let idx = (x / step_x).round() as i64;
             let alpha = if idx % GRID_MAJOR_INTERVAL == 0 {
                 GRID_MAJOR_ALPHA
@@ -132,15 +125,16 @@ impl Grid {
                 GRID_MINOR_ALPHA
             } else {
                 GRID_SUB_MINOR_ALPHA
-            }; // super-major > major > minor
-            verts.extend_from_slice(&[x, min_y, alpha]);
-            verts.extend_from_slice(&[x, max_y, alpha]);
+            };
+            verts.extend_from_slice(&[x as f32, min_y as f32, alpha]);
+            verts.extend_from_slice(&[x as f32, max_y as f32, alpha]);
             count += 2;
             x += step_x;
         }
+
         // Horizontal
         let mut y = start_y;
-        while y <= max_y + GRID_EPSILON && count < max_lines {
+        while y <= max_y + GRID_EPSILON && count < GRID_MAX_LINES {
             let idx = (y / step_y).round() as i64;
             let alpha = if idx % GRID_MAJOR_INTERVAL == 0 {
                 GRID_MAJOR_ALPHA
@@ -149,21 +143,21 @@ impl Grid {
             } else {
                 GRID_SUB_MINOR_ALPHA
             };
-            verts.extend_from_slice(&[min_x, y, alpha]);
-            verts.extend_from_slice(&[max_x, y, alpha]);
+            verts.extend_from_slice(&[min_x as f32, y as f32, alpha]);
+            verts.extend_from_slice(&[max_x as f32, y as f32, alpha]);
             count += 2;
             y += step_y;
         }
-        let raw = bytemuck::cast_slice(&verts);
+
+        self.vertex_count = count;
         self.vertex_buffer = Some(device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Grid VB"),
-            contents: raw,
+            contents: bytemuck::cast_slice(&verts),
             usage: BufferUsages::VERTEX,
         }));
-        self.vertex_count = count;
     }
 
-    pub fn draw<'a>(&'a self, pass: &mut RenderPass<'a>, camera_bind_group: &'a BindGroup) {
+    pub(crate) fn draw<'a>(&'a self, pass: &mut RenderPass<'a>, camera_bind_group: &'a BindGroup) {
         if let (Some(pipeline), Some(vb)) = (&self.pipeline, &self.vertex_buffer) {
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, camera_bind_group, &[]);
@@ -175,17 +169,23 @@ impl Grid {
 
 impl Default for Grid {
     fn default() -> Self {
-        Self::new()
+        Self {
+            pipeline: None,
+            vertex_buffer: None,
+            vertex_count: 0,
+            last_center: DVec2::splat(f64::NAN),
+            last_extents: DVec2::splat(f64::NAN),
+        }
     }
 }
 
-fn nice_step(raw: f32) -> f32 {
-    const NICE_STEP_BASES: [f32; 4] = [1.0, 2.0, 5.0, 10.0];
+fn nice_step(raw: f64) -> f64 {
+    const NICE_STEP_BASES: [f64; 4] = [1.0, 2.0, 5.0, 10.0];
     if !raw.is_finite() || raw <= 0.0 {
         return 1.0;
     }
     let exp = raw.log10().floor();
-    let base = 10.0_f32.powf(exp);
+    let base = 10.0_f64.powf(exp);
     for &m in &NICE_STEP_BASES {
         if raw <= m * base {
             return m * base;

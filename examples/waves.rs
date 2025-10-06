@@ -26,8 +26,8 @@ enum Message {
 struct IcedPlot {
     plot_scene: PlotWidget,
     animating: bool,
-    phase: f32,
-    cosine_xs: Vec<f32>,
+    phase: f64,
+    cosine_xs: Vec<f64>,
 }
 
 impl IcedPlot {
@@ -35,7 +35,7 @@ impl IcedPlot {
         match message {
             Message::Tick(_time) => {
                 if self.animating {
-                    self.phase += 0.02;
+                    self.phase += 0.02f64;
                     // Recompute cosine series positions with phase shift
                     let mut positions = Vec::with_capacity(self.cosine_xs.len());
                     for &x in &self.cosine_xs {
@@ -81,12 +81,12 @@ impl Default for IcedPlot {
         // Create example data
         let mut rng = rand::rng();
         let n = 500usize;
-        let x_min = -10.0f32;
-        let x_max = 10.0f32;
+        let x_min = -10.0f64;
+        let x_max = 10.0f64;
         let mut positions = Vec::with_capacity(n);
         let mut cosine_xs = Vec::with_capacity(n);
         for i in 0..n {
-            let t = i as f32 / (n - 1) as f32;
+            let t = i as f64 / (n - 1) as f64;
             let x = x_min + t * (x_max - x_min);
             let base_y = (x * 1.2).cos();
             let y = base_y;
@@ -107,12 +107,12 @@ impl Default for IcedPlot {
         // Add a scatter dataset similar to the standalone scatter example.
         // Use a moderate number of points so the iced example stays responsive.
         let n_scatter = 1_000_000usize;
-        let x_min = -20.0f32;
-        let x_max = 20.0f32;
-        let normal_sc = Normal::new(0.0f32, 0.15f32).unwrap();
-        let mut buckets: [Vec<[f32; 2]>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        let x_min = -20.0f64;
+        let x_max = 20.0f64;
+        let normal_sc = Normal::new(0.0f64, 0.15f64).unwrap();
+        let mut buckets: [Vec<[f64; 2]>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
         for i in 0..n_scatter {
-            let t = i as f32 / (n_scatter - 1) as f32;
+            let t = i as f64 / (n_scatter - 1) as f64;
             let x = x_min + t * (x_max - x_min);
             let base = (x * 0.8).sin();
             let y = base + normal_sc.sample(&mut rng);
@@ -154,7 +154,7 @@ impl Default for IcedPlot {
         Self {
             plot_scene,
             animating: true,
-            phase: 0.0,
+            phase: 0.0f64,
             cosine_xs,
         }
     }

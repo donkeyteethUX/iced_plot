@@ -48,7 +48,7 @@ impl App {
         let n = 100;
         let mut positions = Vec::with_capacity(n);
         for i in 0..n {
-            let x = i as f32 * 0.1;
+            let x = i as f64 * 0.1;
             let y = (x * 0.5).sin();
             positions.push([x, y]);
         }
@@ -65,7 +65,7 @@ impl App {
         // Marker-only series (no lines)
         let mut positions = Vec::with_capacity(50);
         for i in 0..50 {
-            let x = i as f32 * 0.2;
+            let x = i as f64 * 0.2;
             let y = (x * 0.3).cos() + 0.5;
             positions.push([x, y]);
         }
@@ -84,7 +84,7 @@ impl App {
         // Both markers and lines
         let mut positions = Vec::with_capacity(30);
         for i in 0..30 {
-            let x = i as f32 * 0.3;
+            let x = i as f64 * 0.3;
             let y = (x * 0.8).sin() - 0.5;
             positions.push([x, y]);
         }

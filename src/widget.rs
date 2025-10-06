@@ -6,7 +6,7 @@ use iced::widget::{self, container};
 use iced::{Element, Length, alignment, keyboard, mouse};
 use iced::{Padding, Rectangle, color};
 
-use glam::{Vec2, vec2};
+use glam::{DVec2, Vec2};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,27 +22,23 @@ use crate::series::SeriesError;
 use crate::{Color, LineStyle, PlotRenderer, RenderParams, Series, camera::Camera, point::Point};
 
 pub type TooltipProvider = Arc<dyn Fn(&TooltipContext) -> String + Send + Sync>;
-pub type CursorProvider = Arc<dyn Fn(f32, f32) -> String + Send + Sync>;
+pub type CursorProvider = Arc<dyn Fn(f64, f64) -> String + Send + Sync>;
 
 pub struct PlotWidget {
     instance_id: u64,
     data: PlotData,
-    // plot config
     autoscale_on_updates: bool,
-    // Legend config
     legend_collapsed: bool,
-    // Label config
     x_axis_label: String,
     y_axis_label: String,
     // Axis limits
-    x_lim: Option<(f32, f32)>,
-    y_lim: Option<(f32, f32)>,
+    x_lim: Option<(f64, f64)>,
+    y_lim: Option<(f64, f64)>,
     // Tooltip config
     tooltips_enabled: bool,
     hover_radius_px: f32,
     tooltip_provider: Option<TooltipProvider>,
     tooltip_ui: Option<TooltipUiPayload>,
-    // Cursor position widget config
     cursor_overlay: bool,
     cursor_provider: Option<CursorProvider>,
     cursor_ui: Option<CursorPositionUiPayload>,
@@ -92,17 +88,20 @@ impl PlotWidget {
     }
 
     /// Set the x-axis limits (min, max) for the plot.
+    ///
     /// If set, these will override autoscaling for the x-axis.
-    pub fn set_x_lim(&mut self, min: f32, max: f32) {
+    pub fn set_x_lim(&mut self, min: f64, max: f64) {
         self.x_lim = Some((min, max));
     }
 
     /// Set the y-axis limits (min, max) for the plot.
+    ///
     /// If set, these will override autoscaling for the y-axis.
-    pub fn set_y_lim(&mut self, min: f32, max: f32) {
+    pub fn set_y_lim(&mut self, min: f64, max: f64) {
         self.y_lim = Some((min, max));
     }
 
+    /// Handle a message sent to the plot widget.
     pub fn update(&mut self, msg: PlotUiMessage) {
         match msg {
             PlotUiMessage::ToggleLegend => {
@@ -128,6 +127,7 @@ impl PlotWidget {
         }
     }
 
+    /// View the plot widget.
     pub fn view<'a>(&'a self) -> iced::Element<'a, PlotUiMessage> {
         let plot = widget::shader(self)
             .width(Length::Fill)
@@ -194,7 +194,7 @@ impl PlotWidget {
     }
 
     /// Set the positions of an existing series.
-    pub fn set_series_positions(&mut self, label: &str, positions: &[[f32; 2]]) {
+    pub fn set_series_positions(&mut self, label: &str, positions: &[[f64; 2]]) {
         self.data.set_series_positions(label, positions);
     }
 
@@ -315,7 +315,7 @@ impl PlotData {
         false
     }
 
-    fn set_series_positions(&mut self, label: &str, positions: &[[f32; 2]]) {
+    fn set_series_positions(&mut self, label: &str, positions: &[[f64; 2]]) {
         if let Some(idx) = self
             .series
             .iter()
@@ -383,11 +383,11 @@ pub struct PlotState {
     pub(crate) points: Arc<[Point]>,      // vertex/instance data
     pub(crate) series: Arc<[SeriesSpan]>, // spans describing logical series
     pub(crate) labels: HashSet<String>,
-    pub(crate) data_min: Option<Vec2>,
-    pub(crate) data_max: Option<Vec2>,
+    pub(crate) data_min: Option<DVec2>,
+    pub(crate) data_max: Option<DVec2>,
     // Axis limits
-    pub(crate) x_lim: Option<(f32, f32)>,
-    pub(crate) y_lim: Option<(f32, f32)>,
+    pub(crate) x_lim: Option<(f64, f64)>,
+    pub(crate) y_lim: Option<(f64, f64)>,
     // UI / camera
     pub(crate) camera: Camera,
     pub(crate) bounds: Rectangle,
@@ -406,7 +406,7 @@ pub struct PlotState {
     hover_radius_px: f32,
     last_hover_cache: Option<HoverHit>,
     // For renderer: hovered marker world coords and pixel size
-    pub(crate) hovered_world: Option<[f32; 2]>,
+    pub(crate) hovered_world: Option<[f64; 2]>,
     pub(crate) hovered_size_px: f32,
     pub(crate) hover_version: u64,
 }
@@ -460,11 +460,11 @@ impl PlotState {
         let start = points.len();
         let mut local_min = self
             .data_min
-            .unwrap_or(vec2(item.positions[0][0], item.positions[0][1]));
+            .unwrap_or(DVec2::new(item.positions[0][0], item.positions[0][1]));
         let mut local_max = self.data_max.unwrap_or(local_min);
         for p in &item.positions {
-            local_min = local_min.min(vec2(p[0], p[1]));
-            local_max = local_max.max(vec2(p[0], p[1]));
+            local_min = local_min.min(DVec2::new(p[0], p[1]));
+            local_max = local_max.max(DVec2::new(p[0], p[1]));
         }
         self.data_min = Some(match self.data_min {
             Some(m) => m.min(local_min),
@@ -549,7 +549,7 @@ impl PlotState {
     }
 
     /// Update positions of an existing series. Returns true if success.
-    pub fn set_series_positions(&mut self, label: &str, positions: &[[f32; 2]]) -> bool {
+    pub fn set_series_positions(&mut self, label: &str, positions: &[[f64; 2]]) -> bool {
         let span = if let Some(s) = self.series.iter().find(|s| s.label == label) {
             s.clone()
         } else {
@@ -624,10 +624,10 @@ impl PlotState {
             self.data_max = None;
             return;
         }
-        let mut mn = vec2(f32::INFINITY, f32::INFINITY);
-        let mut mx = vec2(f32::NEG_INFINITY, f32::NEG_INFINITY);
+        let mut mn = DVec2::splat(f64::INFINITY);
+        let mut mx = DVec2::splat(f64::NEG_INFINITY);
         for p in self.points.iter() {
-            let v = vec2(p.position[0], p.position[1]);
+            let v = DVec2::new(p.position[0], p.position[1]);
             mn = mn.min(v);
             mx = mx.max(v);
         }
@@ -666,13 +666,22 @@ impl PlotState {
 
                 // Handle panning (left click drag)
                 if self.pan.active {
-                    // Convert screen delta to world delta
-                    let world_start = self.camera.screen_to_world(self.pan.start_cursor, viewport);
-                    let world_current = self.camera.screen_to_world(self.cursor_position, viewport);
-                    let world_delta = world_current - world_start;
+                    // Convert screen positions to render coordinates (without offset)
+                    let render_current = self.camera.screen_to_render(
+                        DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
+                        DVec2::new(viewport.x as f64, viewport.y as f64),
+                    );
+                    let render_start = self.camera.screen_to_render(
+                        DVec2::new(
+                            self.pan.start_cursor.x as f64,
+                            self.pan.start_cursor.y as f64,
+                        ),
+                        DVec2::new(viewport.x as f64, viewport.y as f64),
+                    );
+                    let render_delta = render_current - render_start;
 
-                    // Update camera position
-                    self.camera.position = self.pan.start_camera_center - world_delta;
+                    // Update camera position by applying the render space delta
+                    self.camera.position = self.pan.start_camera_center - render_delta;
                     needs_redraw = true;
                 }
 
@@ -760,15 +769,26 @@ impl PlotState {
                     // Perform zoom if user actually dragged a region of non-trivial size
                     if dragged {
                         // Convert screen (pixels) to world coords using camera helper
-                        let screen_size = viewport;
-                        let p1 = self
-                            .camera
-                            .screen_to_world(self.selection.start, screen_size);
-                        let p2 = self.camera.screen_to_world(self.selection.end, screen_size);
-                        let min_v = Vec2::new(p1.x.min(p2.x), p1.y.min(p2.y));
-                        let max_v = Vec2::new(p1.x.max(p2.x), p1.y.max(p2.y));
-                        // Use set_region (free aspect) then clamp to data bounds
-                        self.camera.set_bounds(min_v, max_v, SELECTION_PADDING);
+                        let screen_size = DVec2::new(viewport.x as f64, viewport.y as f64);
+                        let p1 = self.camera.screen_to_world(
+                            DVec2::new(
+                                self.selection.start.x as f64,
+                                self.selection.start.y as f64,
+                            ),
+                            screen_size,
+                        );
+                        let p2 = self.camera.screen_to_world(
+                            DVec2::new(self.selection.end.x as f64, self.selection.end.y as f64),
+                            screen_size,
+                        );
+                        let min_v = DVec2::new(p1.x.min(p2.x), p1.y.min(p2.y));
+                        let max_v = DVec2::new(p1.x.max(p2.x), p1.y.max(p2.y));
+                        // Use set_bounds_preserve_offset to avoid changing the render_offset during zoom
+                        self.camera.set_bounds_preserve_offset(
+                            min_v,
+                            max_v,
+                            SELECTION_PADDING as f64,
+                        );
                     }
                     // Clear selection overlay after release
                     self.selection.active = false;
@@ -791,20 +811,31 @@ impl PlotState {
                         // Apply zoom factor based on scroll direction
                         let zoom_factor = if y > 0.0 { 0.95 } else { 1.05 };
 
-                        // Convert cursor position to world coordinates before zoom
-                        let cursor_world_before =
-                            self.camera.screen_to_world(self.cursor_position, viewport);
+                        // Convert cursor position to render coordinates before zoom (without offset)
+                        let cursor_render_before = self.camera.screen_to_render(
+                            DVec2::new(
+                                self.cursor_position.x as f64,
+                                self.cursor_position.y as f64,
+                            ),
+                            DVec2::new(viewport.x as f64, viewport.y as f64),
+                        );
 
                         // Apply zoom by scaling half_extents
                         self.camera.half_extents *= zoom_factor;
 
-                        // Convert cursor position to world coordinates after zoom
-                        let cursor_world_after =
-                            self.camera.screen_to_world(self.cursor_position, viewport);
+                        // Convert cursor position to render coordinates after zoom
+                        let cursor_render_after = self.camera.screen_to_render(
+                            DVec2::new(
+                                self.cursor_position.x as f64,
+                                self.cursor_position.y as f64,
+                            ),
+                            DVec2::new(viewport.x as f64, viewport.y as f64),
+                        );
 
-                        // Adjust camera position to keep cursor at same world position
-                        let world_delta = cursor_world_before - cursor_world_after;
-                        self.camera.position += world_delta;
+                        // Adjust camera position (in render space) to keep cursor at same position
+                        let render_delta = cursor_render_before - cursor_render_after;
+                        // Convert render delta back to world space and adjust camera position
+                        self.camera.position += render_delta;
 
                         needs_redraw = true;
                     }
@@ -816,7 +847,7 @@ impl PlotState {
                         let y_pan_amount = 20.0 * if y > 0.0 { -1.0 } else { 1.0 };
                         // Convert pan amount from screen space to world space
                         let world_pan =
-                            y_pan_amount * (self.camera.half_extents.y / (viewport.y / 2.0));
+                            y_pan_amount * (self.camera.half_extents.y / (viewport.y as f64 / 2.0));
                         self.camera.position.y += world_pan;
                         needs_redraw = true;
                     } else if scroll_ratio.abs() < 0.5 {
@@ -824,7 +855,7 @@ impl PlotState {
                         let x_pan_amount = 20.0 * if x > 0.0 { -1.0 } else { 1.0 };
                         // Convert pan amount from screen space to world space
                         let world_pan_x =
-                            x_pan_amount * (self.camera.half_extents.x / (viewport.x / 2.0));
+                            x_pan_amount * (self.camera.half_extents.x / (viewport.x as f64 / 2.0));
                         self.camera.position.x -= world_pan_x;
                         needs_redraw = true;
                     }
@@ -939,9 +970,13 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                     // Publish cursor overlay updates when enabled
                     if self.cursor_overlay {
                         if inside {
-                            let world = state
-                                .camera
-                                .screen_to_world(state.cursor_position, viewport);
+                            let world = state.camera.screen_to_world(
+                                DVec2::new(
+                                    state.cursor_position.x as f64,
+                                    state.cursor_position.y as f64,
+                                ),
+                                DVec2::new(viewport.x as f64, viewport.y as f64),
+                            );
                             let text = if let Some(p) = &self.cursor_provider {
                                 (p)(world.x, world.y)
                             } else {
@@ -969,16 +1004,27 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                         match res.hit {
                             Some(hit) => {
                                 // Update hover cache and overlay
-                                let world_v = glam::vec2(hit.world[0], hit.world[1]);
+                                let world_v = DVec2::new(hit.world[0], hit.world[1]);
                                 state.hovered_world = Some(hit.world);
                                 state.hovered_size_px = hit.size_px;
+                                let ctx = TooltipContext {
+                                    series_label: hit.series_label.clone(),
+                                    point_index: hit.point_index,
+                                    x: hit.world[0],
+                                    y: hit.world[1],
+                                };
+                                let text = if let Some(p) = &self.tooltip_provider {
+                                    (p)(&ctx)
+                                } else {
+                                    // Default: simple coordinates with compact formatting
+                                    format!("{:.4}, {:.4}", ctx.x, ctx.y)
+                                };
                                 let hover_hit = HoverHit {
                                     series_label: hit.series_label,
                                     point_index: hit.point_index,
-                                    world: world_v,
+                                    _world: world_v,
                                     _size_px: hit.size_px,
                                 };
-                                let text = format_tooltip_text(&hover_hit, &self.tooltip_provider);
                                 state.last_hover_cache = Some(hover_hit);
                                 state.hover_version = state.hover_version.wrapping_add(1);
                                 publish_tooltip = Some(TooltipUiPayload {
@@ -1149,35 +1195,20 @@ pub struct SelectionState {
 pub struct PanState {
     pub active: bool,
     pub start_cursor: Vec2,
-    pub start_camera_center: Vec2,
+    pub start_camera_center: DVec2,
 }
 
 #[derive(Debug, Clone)]
 struct HoverHit {
     series_label: String,
     point_index: usize,
-    world: Vec2,
+    _world: DVec2,
     _size_px: f32,
 }
 
 impl HoverHit {
     fn key(&self) -> (String, usize) {
         (self.series_label.clone(), self.point_index)
-    }
-}
-
-fn format_tooltip_text(hit: &HoverHit, provider: &Option<TooltipProvider>) -> String {
-    let ctx = TooltipContext {
-        series_label: hit.series_label.clone(),
-        point_index: hit.point_index,
-        x: hit.world.x,
-        y: hit.world.y,
-    };
-    if let Some(p) = provider {
-        (p)(&ctx)
-    } else {
-        // Default: simple coordinates with compact formatting
-        format!("{:.4}, {:.4}", ctx.x, ctx.y)
     }
 }
 
