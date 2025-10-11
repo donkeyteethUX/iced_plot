@@ -566,39 +566,9 @@ impl PlotState {
         self.process_input(event)
     }
 
-    /// Whether the legend is currently collapsed
-    pub fn legend_collapsed(&self) -> bool {
-        self.legend_collapsed
-    }
-
     /// Toggle the collapsed state of the legend
     pub fn toggle_legend(&mut self) {
         self.legend_collapsed = !self.legend_collapsed;
-    }
-
-    /// Update positions of an existing series. Returns true if success.
-    pub fn set_series_positions(&mut self, label: &str, positions: &[[f64; 2]]) -> bool {
-        let span = if let Some(s) = self.series.iter().find(|s| s.label == label) {
-            s.clone()
-        } else {
-            return false;
-        };
-        if span.len != positions.len() {
-            return false;
-        }
-        let mut points = self.points.to_vec();
-        for (i, pos) in positions.iter().enumerate() {
-            let p = &mut points[span.start + i];
-            p.position = *pos;
-        }
-        self.points = points.into();
-        // Recompute bounds since data changed.
-        self.recompute_bounds();
-        self.markers_version += 1;
-        if span.line_style.is_some() {
-            self.lines_version += 1;
-        }
-        true
     }
 
     pub fn set_series_line_style(&mut self, label: &str, line_style: Option<LineStyle>) -> bool {
@@ -621,46 +591,6 @@ impl PlotState {
             return true;
         }
         false
-    }
-
-    pub fn remove_series(&mut self, label: &str) -> bool {
-        let idx = if let Some(i) = self.series.iter().position(|s| s.label == label) {
-            i
-        } else {
-            return false;
-        };
-        let mut series = self.series.to_vec();
-        let span = series.remove(idx);
-        let mut points = self.points.to_vec();
-        points.drain(span.start..span.start + span.len);
-        for s in &mut series[idx..] {
-            s.start -= span.len;
-        }
-        self.series = series.into();
-        self.points = points.into();
-        self.labels.remove(label);
-        self.recompute_bounds();
-        self.markers_version += 1;
-        self.lines_version += 1; // rebuild lines for safety
-
-        true
-    }
-
-    fn recompute_bounds(&mut self) {
-        if self.points.is_empty() {
-            self.data_min = None;
-            self.data_max = None;
-            return;
-        }
-        let mut mn = DVec2::splat(f64::INFINITY);
-        let mut mx = DVec2::splat(f64::NEG_INFINITY);
-        for p in self.points.iter() {
-            let v = DVec2::new(p.position[0], p.position[1]);
-            mn = mn.min(v);
-            mx = mx.max(v);
-        }
-        self.data_min = Some(mn);
-        self.data_max = Some(mx);
     }
 
     /// Update axis links with current camera state

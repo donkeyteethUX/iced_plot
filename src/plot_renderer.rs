@@ -44,6 +44,7 @@ pub struct PlotRenderer {
     // Cached versions
     last_markers_version: u64,
     last_lines_version: u64,
+    last_render_offset: glam::DVec2,
 }
 
 impl PlotRenderer {
@@ -98,6 +99,7 @@ impl PlotRenderer {
             scale_factor: 1.0,
             last_markers_version: 0,
             last_lines_version: 0,
+            last_render_offset: glam::DVec2::ZERO,
         }
     }
 
@@ -125,14 +127,21 @@ impl PlotRenderer {
     }
 
     fn sync(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
-        if state.markers_version != self.last_markers_version {
+        // Check if render offset changed - if so, we need to rebuild vertex buffers
+        // since positions are stored relative to render_offset
+        let offset_changed = self.last_render_offset != state.camera.render_offset;
+
+        if state.markers_version != self.last_markers_version || offset_changed {
             self.rebuild_markers(device, queue, state);
             self.last_markers_version = state.markers_version;
         }
-        if state.lines_version != self.last_lines_version {
+        if state.lines_version != self.last_lines_version || offset_changed {
             self.rebuild_lines(device, queue, state);
             self.last_lines_version = state.lines_version;
         }
+
+        // Update cached render offset
+        self.last_render_offset = state.camera.render_offset;
 
         // Selection is rebuilt whenever it's active.
         self.rebuild_selection(device, queue, state);
