@@ -1,4 +1,5 @@
 pub mod axes_labels;
+pub mod axis_link;
 pub mod camera;
 pub mod grid;
 pub mod legend;
@@ -10,6 +11,7 @@ pub mod point;
 pub mod series;
 pub mod widget;
 
+pub use axis_link::AxisLink;
 pub use iced::Color;
 pub use message::TooltipContext;
 pub use plot_renderer::PlotRenderer;

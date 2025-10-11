@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::axis_link::AxisLink;
 use crate::message::TooltipContext;
 use crate::series::{Series, SeriesError};
 use crate::widget::{CursorProvider, PlotWidget, TooltipProvider};
@@ -17,6 +18,8 @@ pub struct PlotWidgetBuilder {
     cursor_provider: Option<CursorProvider>,
     x_lim: Option<(f64, f64)>,
     y_lim: Option<(f64, f64)>,
+    x_axis_link: Option<AxisLink>,
+    y_axis_link: Option<AxisLink>,
     series: Vec<Series>,
 }
 
@@ -102,6 +105,20 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Link the x-axis to other plots. When the x-axis is panned or zoomed,
+    /// all plots sharing this link will update synchronously.
+    pub fn with_x_axis_link(mut self, link: AxisLink) -> Self {
+        self.x_axis_link = Some(link);
+        self
+    }
+
+    /// Link the y-axis to other plots. When the y-axis is panned or zoomed,
+    /// all plots sharing this link will update synchronously.
+    pub fn with_y_axis_link(mut self, link: AxisLink) -> Self {
+        self.y_axis_link = Some(link);
+        self
+    }
+
     pub fn add_series(mut self, series: Series) -> Self {
         self.series.push(series);
         self
@@ -145,6 +162,12 @@ impl PlotWidgetBuilder {
         }
         if let Some(p) = self.cursor_provider {
             w.set_cursor_provider(p.clone());
+        }
+        if let Some(link) = self.x_axis_link {
+            w.set_x_axis_link(link);
+        }
+        if let Some(link) = self.y_axis_link {
+            w.set_y_axis_link(link);
         }
 
         for s in self.series {

@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use crate::axes_labels;
+use crate::axis_link::AxisLink;
 use crate::legend;
 use crate::message::{
     CursorPositionUiPayload, PlotRenderUpdate, PlotUiMessage, TooltipContext, TooltipUiPayload,
@@ -34,6 +35,9 @@ pub struct PlotWidget {
     // Axis limits
     x_lim: Option<(f64, f64)>,
     y_lim: Option<(f64, f64)>,
+    // Axis links for synchronization
+    x_axis_link: Option<AxisLink>,
+    y_axis_link: Option<AxisLink>,
     // Tooltip config
     tooltips_enabled: bool,
     hover_radius_px: f32,
@@ -65,6 +69,8 @@ impl PlotWidget {
             y_axis_label: String::new(),
             x_lim: None,
             y_lim: None,
+            x_axis_link: None,
+            y_axis_link: None,
             legend_collapsed: false,
             data: PlotData::default(),
             tooltip_provider: None,
@@ -99,6 +105,18 @@ impl PlotWidget {
     /// If set, these will override autoscaling for the y-axis.
     pub fn set_y_lim(&mut self, min: f64, max: f64) {
         self.y_lim = Some((min, max));
+    }
+
+    /// Link the x-axis to other plots. When the x-axis is panned or zoomed,
+    /// all plots sharing this link will update synchronously.
+    pub fn set_x_axis_link(&mut self, link: AxisLink) {
+        self.x_axis_link = Some(link);
+    }
+
+    /// Link the y-axis to other plots. When the y-axis is panned or zoomed,
+    /// all plots sharing this link will update synchronously.
+    pub fn set_y_axis_link(&mut self, link: AxisLink) {
+        self.y_axis_link = Some(link);
     }
 
     /// Handle a message sent to the plot widget.
@@ -388,6 +406,11 @@ pub struct PlotState {
     // Axis limits
     pub(crate) x_lim: Option<(f64, f64)>,
     pub(crate) y_lim: Option<(f64, f64)>,
+    // Axis links for synchronization
+    x_axis_link: Option<AxisLink>,
+    y_axis_link: Option<AxisLink>,
+    x_link_version: u64,
+    y_link_version: u64,
     // UI / camera
     pub(crate) camera: Camera,
     pub(crate) bounds: Rectangle,
@@ -429,6 +452,10 @@ impl PlotState {
             data_max: None,
             x_lim: None,
             y_lim: None,
+            x_axis_link: None,
+            y_axis_link: None,
+            x_link_version: 0,
+            y_link_version: 0,
             camera: Camera::new(1000, 600),
             bounds: Rectangle::default(),
             cursor_position: Vec2::ZERO,
@@ -531,6 +558,7 @@ impl PlotState {
             }
 
             self.camera.set_bounds(min_v, max_v, 0.05);
+            self.update_axis_links();
         }
     }
 
@@ -635,6 +663,18 @@ impl PlotState {
         self.data_max = Some(mx);
     }
 
+    /// Update axis links with current camera state
+    fn update_axis_links(&mut self) {
+        if let Some(ref link) = self.x_axis_link {
+            link.set(self.camera.position.x, self.camera.half_extents.x);
+            self.x_link_version = link.version();
+        }
+        if let Some(ref link) = self.y_axis_link {
+            link.set(self.camera.position.y, self.camera.half_extents.y);
+            self.y_link_version = link.version();
+        }
+    }
+
     pub fn process_input(&mut self, ev: Event) -> bool {
         const SELECTION_DELTA_THRESHOLD: f32 = 4.0; // pixels
         const SELECTION_PADDING: f32 = 0.02; // fractional padding in world units relative to selection size
@@ -682,6 +722,7 @@ impl PlotState {
 
                     // Update camera position by applying the render space delta
                     self.camera.position = self.pan.start_camera_center - render_delta;
+                    self.update_axis_links();
                     needs_redraw = true;
                 }
 
@@ -789,6 +830,7 @@ impl PlotState {
                             max_v,
                             SELECTION_PADDING as f64,
                         );
+                        self.update_axis_links();
                     }
                     // Clear selection overlay after release
                     self.selection.active = false;
@@ -837,6 +879,7 @@ impl PlotState {
                         // Convert render delta back to world space and adjust camera position
                         self.camera.position += render_delta;
 
+                        self.update_axis_links();
                         needs_redraw = true;
                     }
                 } else if let iced::mouse::ScrollDelta::Pixels { y, x } = delta {
@@ -849,6 +892,7 @@ impl PlotState {
                         let world_pan =
                             y_pan_amount * (self.camera.half_extents.y / (viewport.y as f64 / 2.0));
                         self.camera.position.y += world_pan;
+                        self.update_axis_links();
                         needs_redraw = true;
                     } else if scroll_ratio.abs() < 0.5 {
                         // Mostly horizontal scroll
@@ -857,6 +901,7 @@ impl PlotState {
                         let world_pan_x =
                             x_pan_amount * (self.camera.half_extents.x / (viewport.x as f64 / 2.0));
                         self.camera.position.x -= world_pan_x;
+                        self.update_axis_links();
                         needs_redraw = true;
                     }
                 }
@@ -927,7 +972,31 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             state.legend_collapsed = self.legend_collapsed;
             state.x_lim = self.x_lim;
             state.y_lim = self.y_lim;
+            state.x_axis_link = self.x_axis_link.clone();
+            state.y_axis_link = self.y_axis_link.clone();
             needs_redraw = true;
+        }
+
+        // Check if axis links have been updated by other plots
+        if let Some(ref link) = state.x_axis_link {
+            let link_version = link.version();
+            if link_version != state.x_link_version {
+                let (position, half_extent, version) = link.get();
+                state.camera.position.x = position;
+                state.camera.half_extents.x = half_extent;
+                state.x_link_version = version;
+                needs_redraw = true;
+            }
+        }
+        if let Some(ref link) = state.y_axis_link {
+            let link_version = link.version();
+            if link_version != state.y_link_version {
+                let (position, half_extent, version) = link.get();
+                state.camera.position.y = position;
+                state.camera.half_extents.y = half_extent;
+                state.y_link_version = version;
+                needs_redraw = true;
+            }
         }
 
         state.bounds = bounds;

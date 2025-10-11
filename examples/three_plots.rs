@@ -1,9 +1,11 @@
 //! Show multiple plot widgets in a single application.
 //! The first plot demonstrates axis limits using with_x_lim() and with_y_lim().
+//! All three plots have their x-axes linked, so panning or zooming the x-axis
+//! on one plot will synchronize the others.
 use fastplot::PlotWidgetBuilder;
 use fastplot::message::PlotUiMessage;
 use fastplot::widget::PlotWidget;
-use fastplot::{Color, LineStyle, MarkerStyle, Series};
+use fastplot::{AxisLink, Color, LineStyle, MarkerStyle, Series};
 
 use iced::Element;
 use iced::widget::column;
@@ -44,6 +46,9 @@ impl App {
     }
 
     fn new() -> Self {
+        // Create a shared x-axis link so all three plots pan/zoom together on the x-axis
+        let x_link = AxisLink::new(0.0, 5.0);
+
         // Line-only series (no markers)
         let n = 100;
         let mut positions = Vec::with_capacity(n);
@@ -58,6 +63,7 @@ impl App {
             .with_tooltips(true)
             .with_x_lim(-1.0, 10.0) // Set x-axis limits
             .with_y_lim(-2.0, 2.0) // Set y-axis limits
+            .with_x_axis_link(x_link.clone()) // Link the x-axis
             .add_series(s1)
             .build()
             .unwrap();
@@ -77,6 +83,7 @@ impl App {
 
         let w2 = PlotWidgetBuilder::new()
             .with_tooltips(true)
+            .with_x_axis_link(x_link.clone()) // Link the x-axis
             .add_series(s2)
             .build()
             .unwrap();
@@ -97,6 +104,7 @@ impl App {
 
         let w3 = PlotWidgetBuilder::new()
             .with_tooltips(true)
+            .with_x_axis_link(x_link.clone()) // Link the x-axis
             .add_series(s3)
             .build()
             .unwrap();
