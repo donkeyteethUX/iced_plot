@@ -46,6 +46,7 @@ pub struct PlotWidget {
     cursor_overlay: bool,
     cursor_provider: Option<CursorProvider>,
     cursor_ui: Option<CursorPositionUiPayload>,
+    crosshairs_enabled: bool,
 }
 
 impl Default for PlotWidget {
@@ -74,6 +75,7 @@ impl PlotWidget {
             legend_collapsed: false,
             data: PlotData::default(),
             tooltip_provider: None,
+            crosshairs_enabled: true,
         }
     }
 
@@ -209,6 +211,11 @@ impl PlotWidget {
     /// (x, y) world coordinates and should return the formatted string.
     pub fn set_cursor_provider(&mut self, provider: CursorProvider) {
         self.cursor_provider = Some(provider);
+    }
+
+    /// Enable or disable crosshairs that follow the cursor position.
+    pub fn set_crosshairs(&mut self, enabled: bool) {
+        self.crosshairs_enabled = enabled;
     }
 
     /// Set the positions of an existing series.
@@ -432,6 +439,9 @@ pub struct PlotState {
     pub(crate) hovered_world: Option<[f64; 2]>,
     pub(crate) hovered_size_px: f32,
     pub(crate) hover_version: u64,
+    // Crosshairs
+    pub(crate) crosshairs_enabled: bool,
+    pub(crate) crosshairs_position: Vec2,
 }
 
 impl Default for PlotState {
@@ -472,6 +482,8 @@ impl PlotState {
             hovered_world: None,
             hovered_size_px: 0.0,
             hover_version: 0,
+            crosshairs_enabled: false,
+            crosshairs_position: Vec2::ZERO,
         }
     }
 
@@ -626,6 +638,8 @@ impl PlotState {
                 // Store cursor in local coordinates (relative to bounds)
                 self.cursor_position =
                     Vec2::new(position.x - self.bounds.x, position.y - self.bounds.y);
+                // Update crosshairs position when enabled
+                self.crosshairs_position = self.cursor_position;
 
                 // Handle selection (right click drag)
                 if self.selection.active {
@@ -933,6 +947,8 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         // Sync hover configuration from widget to internal state
         state.hover_enabled = self.tooltips_enabled;
         state.hover_radius_px = self.hover_radius_px;
+        // Sync crosshairs configuration
+        state.crosshairs_enabled = self.crosshairs_enabled;
         let mut clear_tooltip = false;
         let mut clear_cursor_position = false;
         let mut publish_tooltip: Option<TooltipUiPayload> = None;

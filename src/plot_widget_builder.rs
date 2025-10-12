@@ -16,6 +16,7 @@ pub struct PlotWidgetBuilder {
     tooltip_provider: Option<TooltipProvider>,
     cursor_overlay: Option<bool>,
     cursor_provider: Option<CursorProvider>,
+    crosshairs: Option<bool>,
     x_lim: Option<(f64, f64)>,
     y_lim: Option<(f64, f64)>,
     x_axis_link: Option<AxisLink>,
@@ -91,6 +92,12 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Enable or disable crosshairs that follow the cursor position.
+    pub fn with_crosshairs(mut self, enabled: bool) -> Self {
+        self.crosshairs = Some(enabled);
+        self
+    }
+
     /// Set the x-axis limits (min, max) for the plot.
     /// If set, these will override autoscaling for the x-axis.
     pub fn with_x_lim(mut self, min: f64, max: f64) -> Self {
@@ -162,6 +169,9 @@ impl PlotWidgetBuilder {
         }
         if let Some(p) = self.cursor_provider {
             w.set_cursor_provider(p.clone());
+        }
+        if let Some(enabled) = self.crosshairs {
+            w.set_crosshairs(enabled);
         }
         if let Some(link) = self.x_axis_link {
             w.set_x_axis_link(link);

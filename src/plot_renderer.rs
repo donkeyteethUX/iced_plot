@@ -26,6 +26,7 @@ pub struct PlotRenderer {
     marker_pipeline: Option<RenderPipeline>,
     line_pipeline: Option<RenderPipeline>,
     overlay_pipeline: Option<RenderPipeline>,
+    line_overlay_pipeline: Option<RenderPipeline>,
     // Buffers
     marker_vertex_buffer: Option<Buffer>,
     marker_instances: u32,
@@ -35,6 +36,8 @@ pub struct PlotRenderer {
     selection_vertex_count: u32,
     hover_vertex_buffer: Option<Buffer>,
     hover_vertex_count: u32,
+    crosshairs_vertex_buffer: Option<Buffer>,
+    crosshairs_vertex_count: u32,
     // Support objects
     grid: Grid,
     picking: PickingPass,
@@ -84,6 +87,7 @@ impl PlotRenderer {
             marker_pipeline: None,
             line_pipeline: None,
             overlay_pipeline: None,
+            line_overlay_pipeline: None,
             marker_vertex_buffer: None,
             marker_instances: 0,
             line_vertex_buffer: None,
@@ -92,6 +96,8 @@ impl PlotRenderer {
             selection_vertex_count: 0,
             hover_vertex_buffer: None,
             hover_vertex_count: 0,
+            crosshairs_vertex_buffer: None,
+            crosshairs_vertex_count: 0,
             grid: Grid::default(),
             picking: PickingPass::default(),
             bounds_w: 0,
@@ -117,6 +123,7 @@ impl PlotRenderer {
             self.ensure_line_pipeline(device);
         }
         self.ensure_overlay_pipeline(device);
+        self.ensure_line_overlay_pipeline(device);
     }
     fn set_bounds(&mut self, w: u32, h: u32) {
         self.bounds_w = w;
@@ -148,6 +155,9 @@ impl PlotRenderer {
 
         // Hover halo is rebuilt every frame from state.hovered_world when present.
         self.rebuild_hover(device, queue, state);
+
+        // Crosshairs are rebuilt every frame when enabled.
+        self.rebuild_crosshairs(device, queue, state);
     }
 
     /// Prepare the renderer for a new frame given the viewport and current plot state.
@@ -412,6 +422,67 @@ impl PlotRenderer {
         self.overlay_pipeline = Some(pipeline);
     }
 
+    pub fn ensure_line_overlay_pipeline(&mut self, device: &Device) {
+        if self.line_overlay_pipeline.is_some() {
+            return;
+        }
+        let shader = device.create_shader_module(include_wgsl!("shaders/selection.wgsl"));
+        let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("line overlay layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("line overlay pipeline"),
+            layout: Some(&layout),
+            vertex: VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: PipelineCompilationOptions::default(),
+                buffers: &[VertexBufferLayout {
+                    array_stride: 24,
+                    step_mode: VertexStepMode::Vertex,
+                    attributes: &[
+                        VertexAttribute {
+                            format: VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        VertexAttribute {
+                            format: VertexFormat::Float32x4,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                    ],
+                }],
+            },
+            fragment: Some(FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: PipelineCompilationOptions::default(),
+                targets: &[Some(ColorTargetState {
+                    format: self.format,
+                    blend: Some(BlendState::ALPHA_BLENDING),
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::LineList,
+                strip_index_format: None,
+                front_face: FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        self.line_overlay_pipeline = Some(pipeline);
+    }
+
     fn rebuild_markers(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
         // Build a tightly-packed CPU-side buffer matching the shader's input layout:
         // position: f32, f32
@@ -661,6 +732,70 @@ impl PlotRenderer {
         self.hover_vertex_count = 4;
     }
 
+    fn rebuild_crosshairs(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
+        self.crosshairs_vertex_buffer = None;
+        self.crosshairs_vertex_count = 0;
+
+        if !state.crosshairs_enabled {
+            return;
+        }
+
+        let w = self.bounds_w.max(1) as f32;
+        let h = self.bounds_h.max(1) as f32;
+        if w <= 1.0 || h <= 1.0 {
+            return;
+        }
+
+        // Check if cursor is within bounds
+        let pos = state.crosshairs_position * self.scale_factor;
+        if pos.x < 0.0 || pos.y < 0.0 || pos.x > w || pos.y > h {
+            return;
+        }
+
+        // Convert cursor position to clip coordinates
+        let to_clip =
+            |sx: f32, sy: f32| -> [f32; 2] { [(sx / w) * 2.0 - 1.0, 1.0 - (sy / h) * 2.0] };
+
+        let cursor_clip = to_clip(pos.x, pos.y);
+
+        // Thin gray line color (semi-transparent)
+        let color = [0.5, 0.5, 0.5, 0.5];
+
+        let mut data: Vec<f32> = Vec::new();
+
+        // Horizontal line (left to right through cursor)
+        let left = [-1.0, cursor_clip[1]];
+        let right = [1.0, cursor_clip[1]];
+
+        // Vertical line (top to bottom through cursor)
+        let top = [cursor_clip[0], 1.0];
+        let bottom = [cursor_clip[0], -1.0];
+
+        // Add horizontal line vertices
+        data.extend_from_slice(&left);
+        data.extend_from_slice(&color);
+        data.extend_from_slice(&right);
+        data.extend_from_slice(&color);
+
+        // Add vertical line vertices
+        data.extend_from_slice(&top);
+        data.extend_from_slice(&color);
+        data.extend_from_slice(&bottom);
+        data.extend_from_slice(&color);
+
+        let raw = bytemuck::cast_slice(&data);
+        self.crosshairs_vertex_buffer = Some(device.create_buffer(&BufferDescriptor {
+            label: Some("crosshairs vb"),
+            size: raw.len() as u64,
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        if let Some(buf) = &self.crosshairs_vertex_buffer {
+            queue.write_buffer(buf, 0, raw);
+        }
+        self.crosshairs_vertex_count = 4;
+    }
+
     pub fn encode(&self, params: RenderParams) {
         // Convert bounds to viewport coordinates
         let x = params.bounds.x as f32;
@@ -757,6 +892,41 @@ impl PlotRenderer {
                 pass.set_vertex_buffer(0, vb.slice(..));
                 pass.draw(0..self.hover_vertex_count, 0..1);
             }
+        }
+
+        // Crosshairs overlay (using line list topology)
+        if let (Some(pipeline), Some(vb)) = (
+            self.line_overlay_pipeline.as_ref(),
+            &self.crosshairs_vertex_buffer,
+        ) {
+            let mut pass = params.encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("crosshairs overlay"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: params.target,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+
+            // Set viewport and scissor for crosshairs overlay
+            pass.set_viewport(x, y, width, height, 0.0, 1.0);
+            pass.set_scissor_rect(
+                params.bounds.x,
+                params.bounds.y,
+                params.bounds.width,
+                params.bounds.height,
+            );
+
+            pass.set_pipeline(pipeline);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.draw(0..self.crosshairs_vertex_count, 0..1);
         }
     }
 }
