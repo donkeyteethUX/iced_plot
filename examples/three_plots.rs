@@ -47,7 +47,7 @@ impl App {
 
     fn new() -> Self {
         // Create a shared x-axis link so all three plots pan/zoom together on the x-axis
-        let x_link = AxisLink::new(0.0, 5.0);
+        let x_link = AxisLink::new();
 
         // Line-only series (no markers)
         let n = 100;

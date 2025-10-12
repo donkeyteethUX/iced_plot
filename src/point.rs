@@ -12,7 +12,6 @@ pub enum MarkerType {
 #[derive(Copy, Clone, Debug)]
 pub struct Point {
     pub position: [f64; 2],
-    /// Marker size interpreted as PIXEL RADIUS (screen-space, invariant to zoom)
     pub size: f32,
 }
 

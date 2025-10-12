@@ -2,12 +2,12 @@ use std::sync::{Arc, RwLock};
 
 /// Represents a shared axis link that can synchronize camera positions
 /// across multiple plot widgets.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct AxisLink {
     inner: Arc<RwLock<AxisLinkInner>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct AxisLinkInner {
     /// The shared camera position
     position: f64,
@@ -18,15 +18,9 @@ struct AxisLinkInner {
 }
 
 impl AxisLink {
-    /// Create a new axis link with initial position and half extent
-    pub fn new(position: f64, half_extent: f64) -> Self {
-        Self {
-            inner: Arc::new(RwLock::new(AxisLinkInner {
-                position,
-                half_extent,
-                version: 0,
-            })),
-        }
+    /// Create a new axis link.
+    pub fn new() -> Self {
+        Default::default()
     }
 
     /// Get the current position and half extent
@@ -46,11 +40,5 @@ impl AxisLink {
     /// Get the current version
     pub(crate) fn version(&self) -> u64 {
         self.inner.read().unwrap().version
-    }
-}
-
-impl Default for AxisLink {
-    fn default() -> Self {
-        Self::new(0.0, 1.0)
     }
 }
