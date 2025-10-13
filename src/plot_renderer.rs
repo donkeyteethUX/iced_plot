@@ -32,6 +32,8 @@ pub struct PlotRenderer {
     marker_instances: u32,
     line_vertex_buffer: Option<Buffer>,
     line_segments: Vec<LineSegment>,
+    refline_vertex_buffer: Option<Buffer>,
+    refline_segments: Vec<LineSegment>,
     selection_vertex_buffer: Option<Buffer>,
     selection_vertex_count: u32,
     hover_vertex_buffer: Option<Buffer>,
@@ -92,6 +94,8 @@ impl PlotRenderer {
             marker_instances: 0,
             line_vertex_buffer: None,
             line_segments: Vec::new(),
+            refline_vertex_buffer: None,
+            refline_segments: Vec::new(),
             selection_vertex_buffer: None,
             selection_vertex_count: 0,
             hover_vertex_buffer: None,
@@ -146,6 +150,9 @@ impl PlotRenderer {
             self.rebuild_lines(device, queue, state);
             self.last_lines_version = state.lines_version;
         }
+
+        // Rebuild reference lines whenever camera changes
+        self.rebuild_reflines(device, queue, state);
 
         // Update cached render offset
         self.last_render_offset = state.camera.render_offset;
@@ -633,6 +640,132 @@ impl PlotRenderer {
         self.line_segments = segs;
     }
 
+    fn rebuild_reflines(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
+        self.refline_vertex_buffer = None;
+        self.refline_segments.clear();
+
+        if state.vlines.is_empty() && state.hlines.is_empty() {
+            return;
+        }
+
+        let mut raw: Vec<u8> = Vec::new();
+        let mut segs: Vec<LineSegment> = Vec::new();
+
+        // Get visible viewport bounds in world coordinates
+        let cam = &state.camera;
+        let left = cam.position.x - cam.half_extents.x;
+        let right = cam.position.x + cam.half_extents.x;
+        let bottom = cam.position.y - cam.half_extents.y;
+        let top = cam.position.y + cam.half_extents.y;
+
+        // Add vertical lines
+        for vline in state.vlines.iter() {
+            // Check if vline is within viewport
+            if vline.x < left || vline.x > right {
+                continue;
+            }
+
+            let first = (raw.len() / 36) as u32;
+            let (line_style_u32, style_param) = match vline.line_style {
+                LineStyle::Solid => (0u32, 0.0f32),
+                LineStyle::Dotted { spacing } => (1u32, spacing),
+                LineStyle::Dashed { length } => (2u32, length),
+            };
+
+            // Create two vertices: bottom and top of viewport
+            for y in [bottom, top] {
+                let render_pos = [
+                    (vline.x - state.camera.render_offset.x) as f32,
+                    (y - state.camera.render_offset.y) as f32,
+                ];
+                raw.extend_from_slice(&render_pos[0].to_le_bytes());
+                raw.extend_from_slice(&render_pos[1].to_le_bytes());
+                // color: vec4<f32>
+                raw.extend_from_slice(&vline.color.r.to_le_bytes());
+                raw.extend_from_slice(&vline.color.g.to_le_bytes());
+                raw.extend_from_slice(&vline.color.b.to_le_bytes());
+                raw.extend_from_slice(&vline.color.a.to_le_bytes());
+                // line_style: u32
+                raw.extend_from_slice(&line_style_u32.to_le_bytes());
+                // distance_along_line: f32 (use absolute distance for reference lines)
+                let distance = if y == bottom {
+                    0.0
+                } else {
+                    (top - bottom) as f32
+                };
+                raw.extend_from_slice(&distance.to_le_bytes());
+                // style_param: f32
+                raw.extend_from_slice(&style_param.to_le_bytes());
+            }
+
+            segs.push(LineSegment {
+                first_vertex: first,
+                vertex_count: 2,
+            });
+        }
+
+        // Add horizontal lines
+        for hline in state.hlines.iter() {
+            // Check if hline is within viewport
+            if hline.y < bottom || hline.y > top {
+                continue;
+            }
+
+            let first = (raw.len() / 36) as u32;
+            let (line_style_u32, style_param) = match hline.line_style {
+                LineStyle::Solid => (0u32, 0.0f32),
+                LineStyle::Dotted { spacing } => (1u32, spacing),
+                LineStyle::Dashed { length } => (2u32, length),
+            };
+
+            // Create two vertices: left and right of viewport
+            for x in [left, right] {
+                let render_pos = [
+                    (x - state.camera.render_offset.x) as f32,
+                    (hline.y - state.camera.render_offset.y) as f32,
+                ];
+                raw.extend_from_slice(&render_pos[0].to_le_bytes());
+                raw.extend_from_slice(&render_pos[1].to_le_bytes());
+                // color: vec4<f32>
+                raw.extend_from_slice(&hline.color.r.to_le_bytes());
+                raw.extend_from_slice(&hline.color.g.to_le_bytes());
+                raw.extend_from_slice(&hline.color.b.to_le_bytes());
+                raw.extend_from_slice(&hline.color.a.to_le_bytes());
+                // line_style: u32
+                raw.extend_from_slice(&line_style_u32.to_le_bytes());
+                // distance_along_line: f32
+                let distance = if x == left {
+                    0.0
+                } else {
+                    (right - left) as f32
+                };
+                raw.extend_from_slice(&distance.to_le_bytes());
+                // style_param: f32
+                raw.extend_from_slice(&style_param.to_le_bytes());
+            }
+
+            segs.push(LineSegment {
+                first_vertex: first,
+                vertex_count: 2,
+            });
+        }
+
+        if raw.is_empty() {
+            return;
+        }
+
+        self.refline_vertex_buffer = Some(device.create_buffer(&BufferDescriptor {
+            label: Some("refline vb"),
+            size: raw.len() as u64,
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        if let Some(buf) = &self.refline_vertex_buffer {
+            queue.write_buffer(buf, 0, &raw);
+        }
+        self.refline_segments = segs;
+    }
+
     fn rebuild_selection(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
         let w = self.bounds_w.max(1) as f32;
         let h = self.bounds_h.max(1) as f32;
@@ -840,6 +973,17 @@ impl PlotRenderer {
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
                 pass.set_vertex_buffer(0, vb.slice(..));
                 for seg in &self.line_segments {
+                    pass.draw(seg.first_vertex..seg.first_vertex + seg.vertex_count, 0..1);
+                }
+            }
+            // reference lines (vlines and hlines)
+            if let (Some(pipeline), Some(vb)) =
+                (self.line_pipeline.as_ref(), &self.refline_vertex_buffer)
+            {
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, vb.slice(..));
+                for seg in &self.refline_segments {
                     pass.draw(seg.first_vertex..seg.first_vertex + seg.vertex_count, 0..1);
                 }
             }

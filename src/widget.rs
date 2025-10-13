@@ -19,6 +19,7 @@ use crate::message::{
     CursorPositionUiPayload, PlotRenderUpdate, PlotUiMessage, TooltipContext, TooltipUiPayload,
 };
 use crate::picking;
+use crate::reference_lines::{HLine, VLine};
 use crate::series::SeriesError;
 use crate::{Color, LineStyle, PlotRenderer, RenderParams, Series, camera::Camera, point::Point};
 
@@ -85,6 +86,16 @@ impl PlotWidget {
 
     pub fn remove_series(&mut self, label: &str) -> bool {
         self.data.remove_series(label)
+    }
+
+    /// Add a vertical reference line to the plot.
+    pub fn add_vline(&mut self, vline: VLine) -> Result<(), SeriesError> {
+        self.data.add_vline(vline)
+    }
+
+    /// Add a horizontal reference line to the plot.
+    pub fn add_hline(&mut self, hline: HLine) -> Result<(), SeriesError> {
+        self.data.add_hline(hline)
     }
 
     pub fn set_x_axis_label(&mut self, label: impl Into<String>) {
@@ -299,6 +310,8 @@ impl PlotWidget {
 #[derive(Debug, Default)]
 pub(crate) struct PlotData {
     pub(crate) series: Vec<Series>,
+    pub(crate) vlines: Vec<VLine>,
+    pub(crate) hlines: Vec<HLine>,
     pub(crate) version: u64,
     hidden_labels: HashSet<String>,
 }
@@ -351,6 +364,80 @@ impl PlotData {
         }
     }
 
+    /// Add a vertical reference line to the plot.
+    fn add_vline(&mut self, vline: VLine) -> Result<(), SeriesError> {
+        // Enforce unique non-empty labels
+        if let Some(label) = vline.label.as_deref()
+            && !label.is_empty()
+        {
+            // Check for duplicate labels in vlines
+            if self
+                .vlines
+                .iter()
+                .any(|v| v.label.as_deref() == Some(label))
+            {
+                return Err(SeriesError::DuplicateLabel(label.to_string()));
+            }
+            // Check for duplicate labels in hlines
+            if self
+                .hlines
+                .iter()
+                .any(|h| h.label.as_deref() == Some(label))
+            {
+                return Err(SeriesError::DuplicateLabel(label.to_string()));
+            }
+            // Check for duplicate labels in series
+            if self
+                .series
+                .iter()
+                .any(|s| s.label.as_deref() == Some(label))
+            {
+                return Err(SeriesError::DuplicateLabel(label.to_string()));
+            }
+        }
+
+        self.vlines.push(vline);
+        self.version += 1;
+        Ok(())
+    }
+
+    /// Add a horizontal reference line to the plot.
+    fn add_hline(&mut self, hline: HLine) -> Result<(), SeriesError> {
+        // Enforce unique non-empty labels
+        if let Some(label) = hline.label.as_deref()
+            && !label.is_empty()
+        {
+            // Check for duplicate labels in hlines
+            if self
+                .hlines
+                .iter()
+                .any(|h| h.label.as_deref() == Some(label))
+            {
+                return Err(SeriesError::DuplicateLabel(label.to_string()));
+            }
+            // Check for duplicate labels in vlines
+            if self
+                .vlines
+                .iter()
+                .any(|v| v.label.as_deref() == Some(label))
+            {
+                return Err(SeriesError::DuplicateLabel(label.to_string()));
+            }
+            // Check for duplicate labels in series
+            if self
+                .series
+                .iter()
+                .any(|s| s.label.as_deref() == Some(label))
+            {
+                return Err(SeriesError::DuplicateLabel(label.to_string()));
+            }
+        }
+
+        self.hlines.push(hline);
+        self.version += 1;
+        Ok(())
+    }
+
     pub(crate) fn legend_entries(&self) -> Vec<LegendEntry> {
         let mut out = Vec::new();
         for s in &self.series {
@@ -380,14 +467,52 @@ impl PlotData {
                 }
             }
         }
+        // Add vertical reference lines to legend
+        for vline in &self.vlines {
+            if let Some(ref label) = vline.label
+                && !label.is_empty()
+            {
+                out.push(LegendEntry {
+                    label: label.clone(),
+                    color: vline.color,
+                    marker: u32::MAX,
+                    line_style: Some(vline.line_style),
+                    hidden: self.hidden_labels.contains(label),
+                });
+            }
+        }
+        // Add horizontal reference lines to legend
+        for hline in &self.hlines {
+            if let Some(ref label) = hline.label
+                && !label.is_empty()
+            {
+                out.push(LegendEntry {
+                    label: label.clone(),
+                    color: hline.color,
+                    marker: u32::MAX,
+                    line_style: Some(hline.line_style),
+                    hidden: self.hidden_labels.contains(label),
+                });
+            }
+        }
         out
     }
 
     fn toggle_series_visibility(&mut self, label: &str) {
+        // Check if it's a series, vline, or hline
         let exists = self
             .series
             .iter()
-            .any(|s| s.label.as_deref() == Some(label));
+            .any(|s| s.label.as_deref() == Some(label))
+            || self
+                .vlines
+                .iter()
+                .any(|v| v.label.as_deref() == Some(label))
+            || self
+                .hlines
+                .iter()
+                .any(|h| h.label.as_deref() == Some(label));
+
         if !exists {
             println!("Toggle series visibility: series not found: {label}");
             return;
@@ -407,6 +532,8 @@ pub struct PlotState {
     // Shared data: cheap O(1) clone when producing a Primitive
     pub(crate) points: Arc<[Point]>,      // vertex/instance data
     pub(crate) series: Arc<[SeriesSpan]>, // spans describing logical series
+    pub(crate) vlines: Arc<[VLine]>,      // vertical reference lines
+    pub(crate) hlines: Arc<[HLine]>,      // horizontal reference lines
     pub(crate) labels: HashSet<String>,
     pub(crate) data_min: Option<DVec2>,
     pub(crate) data_max: Option<DVec2>,
@@ -457,6 +584,8 @@ impl PlotState {
             src_version: 0,
             points: Arc::new([]),
             series: Arc::new([]),
+            vlines: Arc::new([]),
+            hlines: Arc::new([]),
             labels: HashSet::new(),
             data_min: None,
             data_max: None,
@@ -902,6 +1031,35 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                     state.add_series(s.clone());
                 }
             }
+
+            // Sync reference lines (filter by hidden labels)
+            let visible_vlines: Vec<VLine> = self
+                .data
+                .vlines
+                .iter()
+                .filter(|v| {
+                    v.label
+                        .as_ref()
+                        .map(|l| !self.data.hidden_labels.contains(l.as_str()))
+                        .unwrap_or(true)
+                })
+                .cloned()
+                .collect();
+            state.vlines = Arc::from(visible_vlines);
+
+            let visible_hlines: Vec<HLine> = self
+                .data
+                .hlines
+                .iter()
+                .filter(|h| {
+                    h.label
+                        .as_ref()
+                        .map(|l| !self.data.hidden_labels.contains(l.as_str()))
+                        .unwrap_or(true)
+                })
+                .cloned()
+                .collect();
+            state.hlines = Arc::from(visible_hlines);
 
             // Force GPU buffers to rebuild for both markers and lines even when zero series remain
             state.markers_version = state.markers_version.wrapping_add(1);

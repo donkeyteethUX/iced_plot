@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::axis_link::AxisLink;
 use crate::message::TooltipContext;
+use crate::reference_lines::{HLine, VLine};
 use crate::series::{Series, SeriesError};
 use crate::widget::{CursorProvider, PlotWidget, TooltipProvider};
 
@@ -22,6 +23,8 @@ pub struct PlotWidgetBuilder {
     x_axis_link: Option<AxisLink>,
     y_axis_link: Option<AxisLink>,
     series: Vec<Series>,
+    vlines: Vec<VLine>,
+    hlines: Vec<HLine>,
 }
 
 impl PlotWidgetBuilder {
@@ -131,6 +134,18 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Add a vertical reference line to the plot.
+    pub fn add_vline(mut self, vline: VLine) -> Self {
+        self.vlines.push(vline);
+        self
+    }
+
+    /// Add a horizontal reference line to the plot.
+    pub fn add_hline(mut self, hline: HLine) -> Self {
+        self.hlines.push(hline);
+        self
+    }
+
     /// Build the PlotWidget; validates series and duplicate labels via PlotWidget::add_series.
     pub fn build(self) -> Result<PlotWidget, SeriesError> {
         if let (Some((x_min, x_max)), Some((y_min, y_max))) = (self.x_lim, self.y_lim)
@@ -182,6 +197,14 @@ impl PlotWidgetBuilder {
 
         for s in self.series {
             w.add_series(s)?;
+        }
+
+        for vline in self.vlines {
+            w.add_vline(vline)?;
+        }
+
+        for hline in self.hlines {
+            w.add_hline(hline)?;
         }
 
         Ok(w)
