@@ -1,27 +1,35 @@
-use iced::mouse::{Event, Interaction};
-use iced::wgpu::TextureFormat;
-use iced::widget::shader::{self, Viewport};
-use iced::widget::stack;
-use iced::widget::{self, container};
-use iced::{Element, Length, alignment, keyboard, mouse};
-use iced::{Padding, Rectangle, color};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Instant,
+};
 
 use glam::{DVec2, Vec2};
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
-
-use crate::axes_labels;
-use crate::axis_link::AxisLink;
-use crate::legend;
-use crate::message::{
-    CursorPositionUiPayload, PlotRenderUpdate, PlotUiMessage, TooltipContext, TooltipUiPayload,
+use iced::{
+    Element, Length, Padding, Rectangle, alignment, color, keyboard,
+    mouse::{self, Event, Interaction},
+    wgpu::TextureFormat,
+    widget::{
+        self, container,
+        shader::{self, Viewport},
+        stack,
+    },
 };
-use crate::picking;
-use crate::reference_lines::{HLine, VLine};
-use crate::series::SeriesError;
-use crate::{Color, LineStyle, PlotRenderer, RenderParams, Series, camera::Camera, point::Point};
+
+use crate::{
+    Color, HLine, LineStyle, PlotUiMessage, Series, TooltipContext, VLine, axes_labels,
+    axis_link::AxisLink,
+    camera::Camera,
+    legend,
+    message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
+    picking,
+    plot_renderer::{PlotRenderer, RenderParams},
+    point::Point,
+    series::SeriesError,
+};
 
 pub type TooltipProvider = Arc<dyn Fn(&TooltipContext) -> String + Send + Sync>;
 pub type CursorProvider = Arc<dyn Fn(f64, f64) -> String + Send + Sync>;

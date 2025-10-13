@@ -51,7 +51,7 @@ fn registry() -> &'static Mutex<HashMap<u64, InstanceEntry>> {
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub fn submit_request(instance_id: u64, req: PickRequest) {
+pub(crate) fn submit_request(instance_id: u64, req: PickRequest) {
     let mut map = registry().lock().unwrap();
     let entry = map.entry(instance_id).or_default();
     // Replace if newer
@@ -60,28 +60,22 @@ pub fn submit_request(instance_id: u64, req: PickRequest) {
     }
 }
 
-pub fn take_latest_request(instance_id: u64) -> Option<PickRequest> {
+pub(crate) fn take_result(instance_id: u64) -> Option<PickResult> {
+    let mut map = registry().lock().unwrap();
+    map.get_mut(&instance_id).and_then(|e| e.latest_res.take())
+}
+
+fn take_latest_request(instance_id: u64) -> Option<PickRequest> {
     let mut map = registry().lock().unwrap();
     map.get_mut(&instance_id).and_then(|e| e.latest_req.take())
 }
 
-pub fn publish_result(instance_id: u64, res: PickResult) {
+fn publish_result(instance_id: u64, res: PickResult) {
     let mut map = registry().lock().unwrap();
     let entry = map.entry(instance_id).or_default();
-    // Replace if newer
-    if entry
-        .latest_res
-        .as_ref()
-        .map(|r| r.seq < res.seq)
-        .unwrap_or(true)
-    {
+    if entry.latest_res.as_ref().is_none_or(|r| r.seq < res.seq) {
         entry.latest_res = Some(res);
     }
-}
-
-pub fn take_result(instance_id: u64) -> Option<PickResult> {
-    let mut map = registry().lock().unwrap();
-    map.get_mut(&instance_id).and_then(|e| e.latest_res.take())
 }
 
 // ---- GPU picking pass ----
