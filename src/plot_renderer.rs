@@ -17,39 +17,156 @@ struct LineSegment {
     vertex_count: u32,
 }
 
+/// Helper struct for managing vertex buffers
+struct VertexBuffer {
+    buffer: Buffer,
+    vertex_count: u32,
+}
+
+/// Helper struct for managing line buffers with segments
+struct LineBuffer {
+    buffer: Buffer,
+    segments: Vec<LineSegment>,
+}
+
+/// Cache for render pipelines
+struct PipelineCache {
+    marker: Option<RenderPipeline>,
+    line: Option<RenderPipeline>,
+    overlay: Option<RenderPipeline>,
+    line_overlay: Option<RenderPipeline>,
+}
+
+impl PipelineCache {
+    fn new() -> Self {
+        Self {
+            marker: None,
+            line: None,
+            overlay: None,
+            line_overlay: None,
+        }
+    }
+}
+
+/// Cache for vertex buffers
+struct BufferCache {
+    markers: Option<VertexBuffer>,
+    lines: Option<LineBuffer>,
+    reflines: Option<LineBuffer>,
+    selection: Option<VertexBuffer>,
+    hover: Option<VertexBuffer>,
+    crosshairs: Option<VertexBuffer>,
+}
+
+impl BufferCache {
+    fn new() -> Self {
+        Self {
+            markers: None,
+            lines: None,
+            reflines: None,
+            selection: None,
+            hover: None,
+            crosshairs: None,
+        }
+    }
+}
+
+/// Tracks version numbers to detect changes
+struct VersionTracker {
+    markers: u64,
+    lines: u64,
+    render_offset: glam::DVec2,
+}
+
+impl VersionTracker {
+    fn new() -> Self {
+        Self {
+            markers: 0,
+            lines: 0,
+            render_offset: glam::DVec2::ZERO,
+        }
+    }
+}
+
+/// Helper for writing vertex data
+struct VertexWriter {
+    data: Vec<u8>,
+}
+
+impl VertexWriter {
+    fn new() -> Self {
+        Self { data: Vec::new() }
+    }
+
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(capacity),
+        }
+    }
+
+    fn write_f32(&mut self, value: f32) {
+        self.data.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.data.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_position(&mut self, pos: [f32; 2]) {
+        self.write_f32(pos[0]);
+        self.write_f32(pos[1]);
+    }
+
+    fn write_color(&mut self, color: &iced::Color) {
+        self.write_f32(color.r);
+        self.write_f32(color.g);
+        self.write_f32(color.b);
+        self.write_f32(color.a);
+    }
+
+    fn write_line_vertex(
+        &mut self,
+        pos: [f32; 2],
+        color: &iced::Color,
+        style: u32,
+        distance: f32,
+        param: f32,
+    ) {
+        self.write_position(pos);
+        self.write_color(color);
+        self.write_u32(style);
+        self.write_f32(distance);
+        self.write_f32(param);
+    }
+
+    fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.data
+    }
+}
+
 pub struct PlotRenderer {
     format: TextureFormat,
     camera_buffer: Buffer,
     camera_bind_group: BindGroup,
     camera_bgl: BindGroupLayout,
-    // Pipelines
-    marker_pipeline: Option<RenderPipeline>,
-    line_pipeline: Option<RenderPipeline>,
-    overlay_pipeline: Option<RenderPipeline>,
-    line_overlay_pipeline: Option<RenderPipeline>,
-    // Buffers
-    marker_vertex_buffer: Option<Buffer>,
-    marker_instances: u32,
-    line_vertex_buffer: Option<Buffer>,
-    line_segments: Vec<LineSegment>,
-    refline_vertex_buffer: Option<Buffer>,
-    refline_segments: Vec<LineSegment>,
-    selection_vertex_buffer: Option<Buffer>,
-    selection_vertex_count: u32,
-    hover_vertex_buffer: Option<Buffer>,
-    hover_vertex_count: u32,
-    crosshairs_vertex_buffer: Option<Buffer>,
-    crosshairs_vertex_count: u32,
+    // Caches
+    pipelines: PipelineCache,
+    buffers: BufferCache,
+    versions: VersionTracker,
     // Support objects
     grid: Grid,
     picking: PickingPass,
     scale_factor: f32,
     bounds_w: u32,
     bounds_h: u32,
-    // Cached versions
-    last_markers_version: u64,
-    last_lines_version: u64,
-    last_render_offset: glam::DVec2,
 }
 
 impl PlotRenderer {
@@ -86,31 +203,48 @@ impl PlotRenderer {
             camera_buffer,
             camera_bind_group,
             camera_bgl,
-            marker_pipeline: None,
-            line_pipeline: None,
-            overlay_pipeline: None,
-            line_overlay_pipeline: None,
-            marker_vertex_buffer: None,
-            marker_instances: 0,
-            line_vertex_buffer: None,
-            line_segments: Vec::new(),
-            refline_vertex_buffer: None,
-            refline_segments: Vec::new(),
-            selection_vertex_buffer: None,
-            selection_vertex_count: 0,
-            hover_vertex_buffer: None,
-            hover_vertex_count: 0,
-            crosshairs_vertex_buffer: None,
-            crosshairs_vertex_count: 0,
+            pipelines: PipelineCache::new(),
+            buffers: BufferCache::new(),
+            versions: VersionTracker::new(),
             grid: Grid::default(),
             picking: PickingPass::default(),
             bounds_w: 0,
             bounds_h: 0,
             scale_factor: 1.0,
-            last_markers_version: 0,
-            last_lines_version: 0,
-            last_render_offset: glam::DVec2::ZERO,
         }
+    }
+
+    // Coordinate conversion helpers
+    fn screen_to_clip(&self, x: f32, y: f32) -> [f32; 2] {
+        let w = self.bounds_w.max(1) as f32;
+        let h = self.bounds_h.max(1) as f32;
+        [(x / w) * 2.0 - 1.0, 1.0 - (y / h) * 2.0]
+    }
+
+    fn world_to_ndc(&self, world: [f64; 2], camera: &crate::camera::Camera) -> [f32; 2] {
+        let render_pos = [
+            (world[0] - camera.render_offset.x) as f32,
+            (world[1] - camera.render_offset.y) as f32,
+        ];
+        let ndc_x =
+            (render_pos[0] - camera.effective_position().x as f32) / camera.half_extents.x as f32;
+        let ndc_y =
+            (render_pos[1] - camera.effective_position().y as f32) / camera.half_extents.y as f32;
+        [ndc_x, ndc_y]
+    }
+
+    fn pixels_to_clip_delta(&self, pixels: f32) -> (f32, f32) {
+        let w = self.bounds_w.max(1) as f32;
+        let h = self.bounds_h.max(1) as f32;
+        (2.0 * pixels / w, 2.0 * pixels / h)
+    }
+
+    // Helper to convert world position to render position (subtract offset)
+    fn world_to_render_pos(&self, world: [f64; 2], camera: &crate::camera::Camera) -> [f32; 2] {
+        [
+            (world[0] - camera.render_offset.x) as f32,
+            (world[1] - camera.render_offset.y) as f32,
+        ]
     }
 
     fn ensure_pipelines_and_update_grid(
@@ -140,22 +274,22 @@ impl PlotRenderer {
     fn sync(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
         // Check if render offset changed - if so, we need to rebuild vertex buffers
         // since positions are stored relative to render_offset
-        let offset_changed = self.last_render_offset != state.camera.render_offset;
+        let offset_changed = self.versions.render_offset != state.camera.render_offset;
 
-        if state.markers_version != self.last_markers_version || offset_changed {
+        if state.markers_version != self.versions.markers || offset_changed {
             self.rebuild_markers(device, queue, state);
-            self.last_markers_version = state.markers_version;
+            self.versions.markers = state.markers_version;
         }
-        if state.lines_version != self.last_lines_version || offset_changed {
+        if state.lines_version != self.versions.lines || offset_changed {
             self.rebuild_lines(device, queue, state);
-            self.last_lines_version = state.lines_version;
+            self.versions.lines = state.lines_version;
         }
 
         // Rebuild reference lines whenever camera changes
         self.rebuild_reflines(device, queue, state);
 
         // Update cached render offset
-        self.last_render_offset = state.camera.render_offset;
+        self.versions.render_offset = state.camera.render_offset;
 
         // Selection is rebuilt whenever it's active.
         self.rebuild_selection(device, queue, state);
@@ -205,20 +339,28 @@ impl PlotRenderer {
         queue: &Queue,
         state: &PlotState,
     ) {
+        let marker_buffer = self.buffers.markers.as_ref().map(|vb| &vb.buffer);
+        let marker_instances = self
+            .buffers
+            .markers
+            .as_ref()
+            .map(|vb| vb.vertex_count)
+            .unwrap_or(0);
+
         self.picking.service(
             instance_id,
             device,
             queue,
             &self.camera_bind_group,
             &self.camera_bgl,
-            self.marker_vertex_buffer.as_ref(),
-            self.marker_instances,
+            marker_buffer,
+            marker_instances,
             state,
         );
     }
 
     pub fn ensure_marker_pipeline(&mut self, device: &Device) {
-        if self.marker_pipeline.is_some() {
+        if self.pipelines.marker.is_some() {
             return;
         }
         let shader = device.create_shader_module(include_wgsl!("shaders/markers.wgsl"));
@@ -288,11 +430,11 @@ impl PlotRenderer {
             multiview: None,
             cache: None,
         });
-        self.marker_pipeline = Some(pipeline);
+        self.pipelines.marker = Some(pipeline);
     }
 
     pub fn ensure_line_pipeline(&mut self, device: &Device) {
-        if self.line_pipeline.is_some() {
+        if self.pipelines.line.is_some() {
             return;
         }
         let shader = device.create_shader_module(include_wgsl!("shaders/line.wgsl"));
@@ -364,11 +506,11 @@ impl PlotRenderer {
             multiview: None,
             cache: None,
         });
-        self.line_pipeline = Some(pipeline);
+        self.pipelines.line = Some(pipeline);
     }
 
     pub fn ensure_overlay_pipeline(&mut self, device: &Device) {
-        if self.overlay_pipeline.is_some() {
+        if self.pipelines.overlay.is_some() {
             return;
         }
         let shader = device.create_shader_module(include_wgsl!("shaders/selection.wgsl"));
@@ -426,11 +568,11 @@ impl PlotRenderer {
             multiview: None,
             cache: None,
         });
-        self.overlay_pipeline = Some(pipeline);
+        self.pipelines.overlay = Some(pipeline);
     }
 
     pub fn ensure_line_overlay_pipeline(&mut self, device: &Device) {
-        if self.line_overlay_pipeline.is_some() {
+        if self.pipelines.line_overlay.is_some() {
             return;
         }
         let shader = device.create_shader_module(include_wgsl!("shaders/selection.wgsl"));
@@ -487,16 +629,10 @@ impl PlotRenderer {
             multiview: None,
             cache: None,
         });
-        self.line_overlay_pipeline = Some(pipeline);
+        self.pipelines.line_overlay = Some(pipeline);
     }
 
     fn rebuild_markers(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
-        // Build a tightly-packed CPU-side buffer matching the shader's input layout:
-        // position: f32, f32
-        // color: f32 x4 (from series)
-        // marker: u32 (from series)
-        // size: f32
-
         // Only include series that have markers (marker != u32::MAX)
         let marker_series_count: usize = state
             .series
@@ -506,13 +642,13 @@ impl PlotRenderer {
             .sum();
 
         if marker_series_count == 0 {
-            self.marker_vertex_buffer = None;
-            self.marker_instances = 0;
+            self.buffers.markers = None;
             return;
         }
 
-        let mut raw: Vec<u8> = Vec::with_capacity(marker_series_count * 32);
+        let mut writer = VertexWriter::with_capacity(marker_series_count * 32);
         let mut id_map: Vec<(u32, u32)> = Vec::with_capacity(marker_series_count);
+
         // Iterate series so we can pick series-level color/marker for each point.
         for (span_idx, s) in state.series.iter().enumerate() {
             // Skip series without markers
@@ -525,67 +661,62 @@ impl PlotRenderer {
             if s.len == 0 || end > state.points.len() {
                 continue;
             }
+
             for (local_i, p) in state.points[s.start..end].iter().enumerate() {
                 // Subtract render_offset for high-precision rendering near zero
-                let render_pos = [
-                    (p.position[0] - state.camera.render_offset.x) as f32,
-                    (p.position[1] - state.camera.render_offset.y) as f32,
-                ];
-                raw.extend_from_slice(&render_pos[0].to_le_bytes());
-                raw.extend_from_slice(&render_pos[1].to_le_bytes());
-                // color is stored on the SeriesSpan (four f32 components)
-                raw.extend_from_slice(&s.color.r.to_le_bytes());
-                raw.extend_from_slice(&s.color.g.to_le_bytes());
-                raw.extend_from_slice(&s.color.b.to_le_bytes());
-                raw.extend_from_slice(&s.color.a.to_le_bytes());
-                // marker is a u32 on the SeriesSpan
-                raw.extend_from_slice(&s.marker.to_le_bytes());
-                // size is per-point
-                raw.extend_from_slice(&p.size.to_le_bytes());
+                let render_pos = self.world_to_render_pos(p.position, &state.camera);
+                writer.write_position(render_pos);
+                writer.write_color(&s.color);
+                writer.write_u32(s.marker);
+                writer.write_f32(p.size);
 
                 id_map.push((span_idx as u32, local_i as u32));
             }
         }
 
-        let needed = raw.len() as u64;
-        let recreate = match &self.marker_vertex_buffer {
-            Some(buf) => buf.size() < needed,
+        let data = writer.as_slice();
+        let needed = data.len() as u64;
+
+        let recreate = match &self.buffers.markers {
+            Some(vb) => vb.buffer.size() < needed,
             None => true,
         };
+
         if recreate {
-            self.marker_vertex_buffer = Some(device.create_buffer(&BufferDescriptor {
-                label: Some("marker vb"),
-                size: needed.max(1024),
-                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
+            self.buffers.markers = Some(VertexBuffer {
+                buffer: device.create_buffer(&BufferDescriptor {
+                    label: Some("marker vb"),
+                    size: needed.max(1024),
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                vertex_count: marker_series_count as u32,
+            });
         }
-        if let Some(buf) = &self.marker_vertex_buffer {
-            queue.write_buffer(buf, 0, &raw);
+
+        if let Some(vb) = &self.buffers.markers {
+            queue.write_buffer(&vb.buffer, 0, data);
         }
-        self.marker_instances = marker_series_count as u32;
+
         // Update picking id map
         self.picking.set_id_map(id_map);
     }
 
     fn rebuild_lines(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
-        self.line_vertex_buffer = None;
-        self.line_segments.clear();
+        self.buffers.lines = None;
         if state.series.iter().all(|s| s.line_style.is_none()) {
             return;
         }
-        let mut raw: Vec<u8> = Vec::new();
+
+        let mut writer = VertexWriter::new();
         let mut segs: Vec<LineSegment> = Vec::new();
+
         for s in state.series.iter() {
             if s.line_style.is_none() || s.len < 2 {
                 continue;
             }
-            let first = (raw.len() / 36) as u32; // 36 bytes per vertex
-            let (line_style_u32, style_param) = match s.line_style.unwrap() {
-                LineStyle::Solid => (0u32, 0.0f32),
-                LineStyle::Dotted { spacing } => (1u32, spacing),
-                LineStyle::Dashed { length } => (2u32, length),
-            };
+            let first = (writer.len() / 36) as u32; // 36 bytes per vertex
+            let (line_style_u32, style_param) = line_style_params(s.line_style.unwrap());
 
             let points_slice = &state.points[s.start..s.start + s.len];
             let mut cumulative_distance = 0.0f32;
@@ -598,26 +729,17 @@ impl PlotRenderer {
                     cumulative_distance += (dx * dx + dy * dy).sqrt() as f32;
                 }
 
-                // position: vec2<f32>
-                let render_pos = [
-                    (p.position[0] - state.camera.render_offset.x) as f32,
-                    (p.position[1] - state.camera.render_offset.y) as f32,
-                ];
-                raw.extend_from_slice(&render_pos[0].to_le_bytes());
-                raw.extend_from_slice(&render_pos[1].to_le_bytes());
-                // color: vec4<f32>
-                raw.extend_from_slice(&s.color.r.to_le_bytes());
-                raw.extend_from_slice(&s.color.g.to_le_bytes());
-                raw.extend_from_slice(&s.color.b.to_le_bytes());
-                raw.extend_from_slice(&s.color.a.to_le_bytes());
-                // line_style: u32
-                raw.extend_from_slice(&line_style_u32.to_le_bytes());
-                // distance_along_line: f32
-                raw.extend_from_slice(&cumulative_distance.to_le_bytes());
-                // style_param: f32
-                raw.extend_from_slice(&style_param.to_le_bytes());
+                let render_pos = self.world_to_render_pos(p.position, &state.camera);
+                writer.write_line_vertex(
+                    render_pos,
+                    &s.color,
+                    line_style_u32,
+                    cumulative_distance,
+                    style_param,
+                );
             }
-            let count = (raw.len() / 36) as u32 - first;
+
+            let count = (writer.len() / 36) as u32 - first;
             if count >= 2 {
                 segs.push(LineSegment {
                     first_vertex: first,
@@ -625,30 +747,35 @@ impl PlotRenderer {
                 });
             }
         }
-        if raw.is_empty() {
+
+        if writer.is_empty() {
             return;
         }
-        self.line_vertex_buffer = Some(device.create_buffer(&BufferDescriptor {
-            label: Some("line vb"),
-            size: raw.len() as u64,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
-        if let Some(buf) = &self.line_vertex_buffer {
-            queue.write_buffer(buf, 0, &raw);
+
+        let data = writer.as_slice();
+        self.buffers.lines = Some(LineBuffer {
+            buffer: device.create_buffer(&BufferDescriptor {
+                label: Some("line vb"),
+                size: data.len() as u64,
+                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            segments: segs,
+        });
+
+        if let Some(lb) = &self.buffers.lines {
+            queue.write_buffer(&lb.buffer, 0, data);
         }
-        self.line_segments = segs;
     }
 
     fn rebuild_reflines(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
-        self.refline_vertex_buffer = None;
-        self.refline_segments.clear();
+        self.buffers.reflines = None;
 
         if state.vlines.is_empty() && state.hlines.is_empty() {
             return;
         }
 
-        let mut raw: Vec<u8> = Vec::new();
+        let mut writer = VertexWriter::new();
         let mut segs: Vec<LineSegment> = Vec::new();
 
         // Get visible viewport bounds in world coordinates
@@ -665,37 +792,20 @@ impl PlotRenderer {
                 continue;
             }
 
-            let first = (raw.len() / 36) as u32;
-            let (line_style_u32, style_param) = match vline.line_style {
-                LineStyle::Solid => (0u32, 0.0f32),
-                LineStyle::Dotted { spacing } => (1u32, spacing),
-                LineStyle::Dashed { length } => (2u32, length),
-            };
+            let first = (writer.len() / 36) as u32;
+            let (line_style_u32, style_param) = line_style_params(vline.line_style);
 
             // Create two vertices: bottom and top of viewport
-            for y in [bottom, top] {
-                let render_pos = [
-                    (vline.x - state.camera.render_offset.x) as f32,
-                    (y - state.camera.render_offset.y) as f32,
-                ];
-                raw.extend_from_slice(&render_pos[0].to_le_bytes());
-                raw.extend_from_slice(&render_pos[1].to_le_bytes());
-                // color: vec4<f32>
-                raw.extend_from_slice(&vline.color.r.to_le_bytes());
-                raw.extend_from_slice(&vline.color.g.to_le_bytes());
-                raw.extend_from_slice(&vline.color.b.to_le_bytes());
-                raw.extend_from_slice(&vline.color.a.to_le_bytes());
-                // line_style: u32
-                raw.extend_from_slice(&line_style_u32.to_le_bytes());
-                // distance_along_line: f32 (use absolute distance for reference lines)
-                let distance = if y == bottom {
-                    0.0
-                } else {
-                    (top - bottom) as f32
-                };
-                raw.extend_from_slice(&distance.to_le_bytes());
-                // style_param: f32
-                raw.extend_from_slice(&style_param.to_le_bytes());
+            for (idx, y) in [bottom, top].iter().enumerate() {
+                let render_pos = self.world_to_render_pos([vline.x, *y], &state.camera);
+                let distance = if idx == 0 { 0.0 } else { (top - bottom) as f32 };
+                writer.write_line_vertex(
+                    render_pos,
+                    &vline.color,
+                    line_style_u32,
+                    distance,
+                    style_param,
+                );
             }
 
             segs.push(LineSegment {
@@ -711,37 +821,20 @@ impl PlotRenderer {
                 continue;
             }
 
-            let first = (raw.len() / 36) as u32;
-            let (line_style_u32, style_param) = match hline.line_style {
-                LineStyle::Solid => (0u32, 0.0f32),
-                LineStyle::Dotted { spacing } => (1u32, spacing),
-                LineStyle::Dashed { length } => (2u32, length),
-            };
+            let first = (writer.len() / 36) as u32;
+            let (line_style_u32, style_param) = line_style_params(hline.line_style);
 
             // Create two vertices: left and right of viewport
-            for x in [left, right] {
-                let render_pos = [
-                    (x - state.camera.render_offset.x) as f32,
-                    (hline.y - state.camera.render_offset.y) as f32,
-                ];
-                raw.extend_from_slice(&render_pos[0].to_le_bytes());
-                raw.extend_from_slice(&render_pos[1].to_le_bytes());
-                // color: vec4<f32>
-                raw.extend_from_slice(&hline.color.r.to_le_bytes());
-                raw.extend_from_slice(&hline.color.g.to_le_bytes());
-                raw.extend_from_slice(&hline.color.b.to_le_bytes());
-                raw.extend_from_slice(&hline.color.a.to_le_bytes());
-                // line_style: u32
-                raw.extend_from_slice(&line_style_u32.to_le_bytes());
-                // distance_along_line: f32
-                let distance = if x == left {
-                    0.0
-                } else {
-                    (right - left) as f32
-                };
-                raw.extend_from_slice(&distance.to_le_bytes());
-                // style_param: f32
-                raw.extend_from_slice(&style_param.to_le_bytes());
+            for (idx, x) in [left, right].iter().enumerate() {
+                let render_pos = self.world_to_render_pos([*x, hline.y], &state.camera);
+                let distance = if idx == 0 { 0.0 } else { (right - left) as f32 };
+                writer.write_line_vertex(
+                    render_pos,
+                    &hline.color,
+                    line_style_u32,
+                    distance,
+                    style_param,
+                );
             }
 
             segs.push(LineSegment {
@@ -750,20 +843,24 @@ impl PlotRenderer {
             });
         }
 
-        if raw.is_empty() {
+        if writer.is_empty() {
             return;
         }
 
-        self.refline_vertex_buffer = Some(device.create_buffer(&BufferDescriptor {
-            label: Some("refline vb"),
-            size: raw.len() as u64,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
-        if let Some(buf) = &self.refline_vertex_buffer {
-            queue.write_buffer(buf, 0, &raw);
+        let data = writer.as_slice();
+        self.buffers.reflines = Some(LineBuffer {
+            buffer: device.create_buffer(&BufferDescriptor {
+                label: Some("refline vb"),
+                size: data.len() as u64,
+                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            segments: segs,
+        });
+
+        if let Some(lb) = &self.buffers.reflines {
+            queue.write_buffer(&lb.buffer, 0, data);
         }
-        self.refline_segments = segs;
     }
 
     fn rebuild_selection(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
@@ -780,10 +877,8 @@ impl PlotRenderer {
             let max_x = p0.x.max(p1.x);
             let min_y = p0.y.min(p1.y);
             let max_y = p0.y.max(p1.y);
-            let to_clip =
-                |sx: f32, sy: f32| -> [f32; 2] { [(sx / w) * 2.0 - 1.0, 1.0 - (sy / h) * 2.0] };
-            let tl = to_clip(min_x, min_y);
-            let br = to_clip(max_x, max_y);
+            let tl = self.screen_to_clip(min_x, min_y);
+            let br = self.screen_to_clip(max_x, max_y);
             let tr = [br[0], tl[1]];
             let bl = [tl[0], br[1]];
             let mut data: Vec<f32> = Vec::new();
@@ -792,25 +887,25 @@ impl PlotRenderer {
                 data.extend_from_slice(&FILL);
             }
             let raw = bytemuck::cast_slice(&data);
-            self.selection_vertex_buffer = Some(device.create_buffer(&BufferDescriptor {
-                label: Some("selection vb"),
-                size: raw.len() as u64,
-                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
-            if let Some(buf) = &self.selection_vertex_buffer {
-                queue.write_buffer(buf, 0, raw);
+            self.buffers.selection = Some(VertexBuffer {
+                buffer: device.create_buffer(&BufferDescriptor {
+                    label: Some("selection vb"),
+                    size: raw.len() as u64,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                vertex_count: 4,
+            });
+            if let Some(vb) = &self.buffers.selection {
+                queue.write_buffer(&vb.buffer, 0, raw);
             }
-            self.selection_vertex_count = 4;
         } else {
-            self.selection_vertex_buffer = None;
-            self.selection_vertex_count = 0;
+            self.buffers.selection = None;
         }
     }
 
     fn rebuild_hover(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
-        self.hover_vertex_buffer = None;
-        self.hover_vertex_count = 0;
+        self.buffers.hover = None;
         let Some(world) = state.hovered_world else {
             return;
         };
@@ -821,31 +916,17 @@ impl PlotRenderer {
         if w <= 1.0 || h <= 1.0 {
             return;
         }
-        // Convert world coordinates to render coordinates (subtract offset)
-        let render_pos = [
-            world[0] - state.camera.render_offset.x,
-            world[1] - state.camera.render_offset.y,
-        ];
-        // Project to clip using camera uniform math compatible with selection path
-        let cam = &state.camera;
-        let ndc_x =
-            (render_pos[0] as f32 - cam.effective_position().x as f32) / cam.half_extents.x as f32;
-        let ndc_y =
-            (render_pos[1] as f32 - cam.effective_position().y as f32) / cam.half_extents.y as f32;
+        // Convert world coordinates to NDC
+        let ndc = self.world_to_ndc(world, &state.camera);
+
         // Convert size in px to clip delta
-        let px_to_clip_x = 2.0 / w;
-        let px_to_clip_y = 2.0 / h;
-        let radius_px = state.hovered_size_px.max(1.0) + 3.0; // halo is marker radius + padding
-        let dx = radius_px * px_to_clip_x;
-        let dy = radius_px * px_to_clip_y;
-        // Center in clip from NDC
-        let cx = ndc_x;
-        let cy = ndc_y;
+        let (dx, dy) = self.pixels_to_clip_delta(state.hovered_size_px.max(1.0) + 3.0);
+
         // Build a quad around (cx, cy) in clip coords
-        let tl = [cx - dx, cy + dy];
-        let tr = [cx + dx, cy + dy];
-        let bl = [cx - dx, cy - dy];
-        let br = [cx + dx, cy - dy];
+        let tl = [ndc[0] - dx, ndc[1] + dy];
+        let tr = [ndc[0] + dx, ndc[1] + dy];
+        let bl = [ndc[0] - dx, ndc[1] - dy];
+        let br = [ndc[0] + dx, ndc[1] - dy];
         let color = [1.0, 1.0, 1.0, 0.25];
         let mut data: Vec<f32> = Vec::new();
         for v in [tl, tr, bl, br] {
@@ -853,21 +934,22 @@ impl PlotRenderer {
             data.extend_from_slice(&color);
         }
         let raw = bytemuck::cast_slice(&data);
-        self.hover_vertex_buffer = Some(device.create_buffer(&BufferDescriptor {
-            label: Some("hover halo vb"),
-            size: raw.len() as u64,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
-        if let Some(buf) = &self.hover_vertex_buffer {
-            queue.write_buffer(buf, 0, raw);
+        self.buffers.hover = Some(VertexBuffer {
+            buffer: device.create_buffer(&BufferDescriptor {
+                label: Some("hover halo vb"),
+                size: raw.len() as u64,
+                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            vertex_count: 4,
+        });
+        if let Some(vb) = &self.buffers.hover {
+            queue.write_buffer(&vb.buffer, 0, raw);
         }
-        self.hover_vertex_count = 4;
     }
 
     fn rebuild_crosshairs(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
-        self.crosshairs_vertex_buffer = None;
-        self.crosshairs_vertex_count = 0;
+        self.buffers.crosshairs = None;
 
         if !state.crosshairs_enabled {
             return;
@@ -886,10 +968,7 @@ impl PlotRenderer {
         }
 
         // Convert cursor position to clip coordinates
-        let to_clip =
-            |sx: f32, sy: f32| -> [f32; 2] { [(sx / w) * 2.0 - 1.0, 1.0 - (sy / h) * 2.0] };
-
-        let cursor_clip = to_clip(pos.x, pos.y);
+        let cursor_clip = self.screen_to_clip(pos.x, pos.y);
 
         // Thin gray line color (semi-transparent)
         let color = [0.5, 0.5, 0.5, 0.5];
@@ -917,16 +996,18 @@ impl PlotRenderer {
         data.extend_from_slice(&color);
 
         let raw = bytemuck::cast_slice(&data);
-        self.crosshairs_vertex_buffer = Some(device.create_buffer(&BufferDescriptor {
-            label: Some("crosshairs vb"),
-            size: raw.len() as u64,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
-        if let Some(buf) = &self.crosshairs_vertex_buffer {
-            queue.write_buffer(buf, 0, raw);
+        self.buffers.crosshairs = Some(VertexBuffer {
+            buffer: device.create_buffer(&BufferDescriptor {
+                label: Some("crosshairs vb"),
+                size: raw.len() as u64,
+                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            vertex_count: 4,
+        });
+        if let Some(vb) = &self.buffers.crosshairs {
+            queue.write_buffer(&vb.buffer, 0, raw);
         }
-        self.crosshairs_vertex_count = 4;
     }
 
     pub fn encode(&self, params: RenderParams) {
@@ -966,40 +1047,39 @@ impl PlotRenderer {
             // grid
             self.grid.draw(&mut pass, &self.camera_bind_group);
             // lines
-            if let (Some(pipeline), Some(vb)) =
-                (self.line_pipeline.as_ref(), &self.line_vertex_buffer)
+            if let (Some(pipeline), Some(lb)) = (self.pipelines.line.as_ref(), &self.buffers.lines)
             {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_vertex_buffer(0, vb.slice(..));
-                for seg in &self.line_segments {
+                pass.set_vertex_buffer(0, lb.buffer.slice(..));
+                for seg in &lb.segments {
                     pass.draw(seg.first_vertex..seg.first_vertex + seg.vertex_count, 0..1);
                 }
             }
             // reference lines (vlines and hlines)
-            if let (Some(pipeline), Some(vb)) =
-                (self.line_pipeline.as_ref(), &self.refline_vertex_buffer)
+            if let (Some(pipeline), Some(lb)) =
+                (self.pipelines.line.as_ref(), &self.buffers.reflines)
             {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_vertex_buffer(0, vb.slice(..));
-                for seg in &self.refline_segments {
+                pass.set_vertex_buffer(0, lb.buffer.slice(..));
+                for seg in &lb.segments {
                     pass.draw(seg.first_vertex..seg.first_vertex + seg.vertex_count, 0..1);
                 }
             }
             // markers
             if let (Some(pipeline), Some(vb)) =
-                (self.marker_pipeline.as_ref(), &self.marker_vertex_buffer)
+                (self.pipelines.marker.as_ref(), &self.buffers.markers)
             {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_vertex_buffer(0, vb.slice(..));
-                pass.draw(0..4, 0..self.marker_instances);
+                pass.set_vertex_buffer(0, vb.buffer.slice(..));
+                pass.draw(0..4, 0..vb.vertex_count);
             }
         }
 
         // Selection overlay
-        if let Some(pipeline) = self.overlay_pipeline.as_ref() {
+        if let Some(pipeline) = self.pipelines.overlay.as_ref() {
             let mut pass = params.encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("selection overlay"),
                 color_attachments: &[Some(RenderPassColorAttachment {
@@ -1027,21 +1107,21 @@ impl PlotRenderer {
 
             pass.set_pipeline(pipeline);
             // Draw selection if present
-            if let Some(vb) = &self.selection_vertex_buffer {
-                pass.set_vertex_buffer(0, vb.slice(..));
-                pass.draw(0..self.selection_vertex_count, 0..1);
+            if let Some(vb) = &self.buffers.selection {
+                pass.set_vertex_buffer(0, vb.buffer.slice(..));
+                pass.draw(0..vb.vertex_count, 0..1);
             }
             // Draw hover halo if present
-            if let Some(vb) = &self.hover_vertex_buffer {
-                pass.set_vertex_buffer(0, vb.slice(..));
-                pass.draw(0..self.hover_vertex_count, 0..1);
+            if let Some(vb) = &self.buffers.hover {
+                pass.set_vertex_buffer(0, vb.buffer.slice(..));
+                pass.draw(0..vb.vertex_count, 0..1);
             }
         }
 
         // Crosshairs overlay (using line list topology)
         if let (Some(pipeline), Some(vb)) = (
-            self.line_overlay_pipeline.as_ref(),
-            &self.crosshairs_vertex_buffer,
+            self.pipelines.line_overlay.as_ref(),
+            &self.buffers.crosshairs,
         ) {
             let mut pass = params.encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("crosshairs overlay"),
@@ -1069,8 +1149,17 @@ impl PlotRenderer {
             );
 
             pass.set_pipeline(pipeline);
-            pass.set_vertex_buffer(0, vb.slice(..));
-            pass.draw(0..self.crosshairs_vertex_count, 0..1);
+            pass.set_vertex_buffer(0, vb.buffer.slice(..));
+            pass.draw(0..vb.vertex_count, 0..1);
         }
+    }
+}
+
+// Helper to extract line style parameters
+fn line_style_params(style: LineStyle) -> (u32, f32) {
+    match style {
+        LineStyle::Solid => (0u32, 0.0f32),
+        LineStyle::Dotted { spacing } => (1u32, spacing),
+        LineStyle::Dashed { length } => (2u32, length),
     }
 }
