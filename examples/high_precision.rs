@@ -40,7 +40,7 @@ fn new() -> PlotWidget {
         })
         .with_cursor_provider(|x, y| format!("Cursor:\nt = {:.9} s\nvalue = {:.6}", x, y))
         .add_series(
-            Series::markers_and_line(
+            Series::new(
                 positions,
                 MarkerStyle::square(4.0),
                 LineStyle::Dashed { length: 10.0 },

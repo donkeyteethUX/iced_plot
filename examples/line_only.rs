@@ -49,7 +49,7 @@ fn new() -> PlotWidget {
             [x, y]
         })
         .collect();
-    let s3 = Series::markers_and_line(
+    let s3 = Series::new(
         positions,
         MarkerStyle::square(4.0),
         LineStyle::Dashed { length: 10.0 },

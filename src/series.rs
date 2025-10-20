@@ -110,6 +110,17 @@ pub struct Series {
 }
 
 impl Series {
+    /// Create a new series with both markers and lines.
+    pub fn new(positions: Vec<[f64; 2]>, marker_style: MarkerStyle, line_style: LineStyle) -> Self {
+        Self {
+            positions,
+            label: None,
+            color: Color::from_rgb(0.3, 0.3, 0.9),
+            marker_style: Some(marker_style),
+            line_style: Some(line_style),
+        }
+    }
+
     /// Create a new line-only series.
     pub fn line_only(positions: Vec<[f64; 2]>, line_style: LineStyle) -> Self {
         Self {
@@ -132,19 +143,24 @@ impl Series {
         }
     }
 
-    /// Create a new series with both markers and lines.
-    pub fn markers_and_line(
-        positions: Vec<[f64; 2]>,
-        marker_style: MarkerStyle,
-        line_style: LineStyle,
-    ) -> Self {
-        Self {
-            positions,
-            label: None,
-            color: Color::from_rgb(0.3, 0.3, 0.9),
-            marker_style: Some(marker_style),
-            line_style: Some(line_style),
-        }
+    /// Create a new series with circle markers.
+    pub fn circles(positions: Vec<[f64; 2]>, size: f32) -> Self {
+        Self::markers_only(positions, MarkerStyle::circle(size))
+    }
+
+    /// Create a new series with square markers.
+    pub fn squares(positions: Vec<[f64; 2]>, size: f32) -> Self {
+        Self::markers_only(positions, MarkerStyle::square(size))
+    }
+
+    /// Create a new series with star markers.
+    pub fn stars(positions: Vec<[f64; 2]>, size: f32) -> Self {
+        Self::markers_only(positions, MarkerStyle::star(size))
+    }
+
+    /// Create a new series with triangle markers.
+    pub fn triangles(positions: Vec<[f64; 2]>, size: f32) -> Self {
+        Self::markers_only(positions, MarkerStyle::triangle(size))
     }
 
     /// Set an label for the series.
@@ -156,8 +172,8 @@ impl Series {
         self
     }
 
-    /// Set or change the marker style for the series.
-    pub fn marker_style(mut self, style: MarkerStyle) -> Self {
+    /// Set the marker style for the series.
+    pub fn with_marker_style(mut self, style: MarkerStyle) -> Self {
         self.marker_style = Some(style);
         self
     }
@@ -165,13 +181,6 @@ impl Series {
     /// Set the color of the series (affects both markers and lines).
     pub fn with_color(mut self, color: Color) -> Self {
         self.color = color;
-        self
-    }
-
-    /// Set or change the marker style for the series.
-    pub fn marker(mut self, color: Color, size: f32, marker_type: MarkerType) -> Self {
-        self.color = color;
-        self.marker_style = Some(MarkerStyle { size, marker_type });
         self
     }
 
