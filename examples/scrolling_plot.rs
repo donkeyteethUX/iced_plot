@@ -45,11 +45,9 @@ impl App {
 
                 // Update the series
                 self.widget.remove_series("scrolling");
-                let series = Series::markers_only(
-                    self.positions.clone(),
-                    MarkerStyle::ring(Color::WHITE, 10.0),
-                )
-                .with_label("scrolling");
+                let series = Series::markers_only(self.positions.clone(), MarkerStyle::ring(10.0))
+                    .with_label("scrolling")
+                    .with_color(Color::WHITE);
                 self.widget.add_series(series).unwrap();
             }
         }

@@ -75,11 +75,9 @@ impl App {
             let y = (x * 0.3).cos() + 0.5;
             positions.push([x, y]);
         }
-        let s2 = Series::markers_only(
-            positions,
-            MarkerStyle::circle(Color::from_rgb(0.9, 0.3, 0.3), 6.0),
-        )
-        .with_label("cosine_markers_only");
+        let s2 = Series::markers_only(positions, MarkerStyle::circle(6.0))
+            .with_label("cosine_markers_only")
+            .with_color(Color::from_rgb(0.9, 0.3, 0.3));
 
         let w2 = PlotWidgetBuilder::new()
             .with_tooltips(true)
@@ -97,10 +95,11 @@ impl App {
         }
         let s3 = Series::markers_and_line(
             positions,
-            MarkerStyle::square(Color::from_rgb(0.3, 0.9, 0.3), 4.0),
+            MarkerStyle::square(4.0),
             LineStyle::Dashed { length: 10.0 },
         )
-        .with_label("both_markers_and_lines");
+        .with_label("both_markers_and_lines")
+        .with_color(Color::from_rgb(0.3, 0.9, 0.3));
 
         let w3 = PlotWidgetBuilder::new()
             .with_tooltips(true)

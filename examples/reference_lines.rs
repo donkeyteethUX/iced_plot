@@ -26,12 +26,9 @@ fn new() -> PlotWidget {
         let y = (x * 0.5).sin();
         positions.push([x, y]);
     }
-    let s1 = Series::markers_and_line(
-        positions,
-        MarkerStyle::circle(Color::from_rgb(0.3, 0.6, 0.9), 3.0),
-        LineStyle::Solid,
-    )
-    .with_label("sine wave");
+    let s1 = Series::markers_and_line(positions, MarkerStyle::circle(3.0), LineStyle::Solid)
+        .with_label("sine wave")
+        .with_color(Color::from_rgb(0.3, 0.6, 0.9));
 
     // Add vertical reference lines at specific x-values
     let vline1 = VLine::new(PI)

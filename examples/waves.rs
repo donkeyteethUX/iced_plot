@@ -96,8 +96,8 @@ impl Default for IcedPlot {
         let _ = plot_scene.add_series(Series {
             label: Some("cosine".to_string()),
             positions,
+            color: Color::from_rgb(0.3, 0.8, 0.9),
             marker_style: Some(MarkerStyle {
-                color: Color::from_rgb(0.3, 0.8, 0.9),
                 size: 8.0,
                 marker_type: MarkerType::Star,
             }),
@@ -142,8 +142,8 @@ impl Default for IcedPlot {
             let _ = plot_scene.add_series(Series {
                 label: Some((*label).to_string()),
                 positions: buckets[i].clone(),
+                color: *color,
                 marker_style: Some(MarkerStyle {
-                    color: *color,
                     size: 6.0,
                     marker_type: *marker,
                 }),

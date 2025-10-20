@@ -42,10 +42,11 @@ fn new() -> PlotWidget {
         .add_series(
             Series::markers_and_line(
                 positions,
-                MarkerStyle::square(Color::from_rgb(0.3, 0.9, 0.3), 4.0),
+                MarkerStyle::square(4.0),
                 LineStyle::Dashed { length: 10.0 },
             )
-            .with_label("both_markers_and_lines"),
+            .with_label("both_markers_and_lines")
+            .with_color(Color::from_rgb(0.3, 0.9, 0.3)),
         )
         .with_cursor_overlay(true)
         .with_y_label("cool data")

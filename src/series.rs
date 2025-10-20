@@ -19,8 +19,6 @@ pub enum LineStyle {
 ///
 /// Defines how individual data points are rendered.
 pub struct MarkerStyle {
-    /// Color of the marker.
-    pub color: Color,
     /// Size of the marker in pixels.
     pub size: f32,
     /// Shape of the marker.
@@ -30,7 +28,6 @@ pub struct MarkerStyle {
 impl Default for MarkerStyle {
     fn default() -> Self {
         Self {
-            color: Color::from_rgb(0.3, 0.3, 0.9),
             size: 5.0,
             marker_type: MarkerType::FilledCircle,
         }
@@ -38,49 +35,40 @@ impl Default for MarkerStyle {
 }
 
 impl MarkerStyle {
-    pub fn new(color: Color, size: f32, marker_type: MarkerType) -> Self {
-        Self {
-            color,
-            size,
-            marker_type,
-        }
+    pub fn new(size: f32, marker_type: MarkerType) -> Self {
+        Self { size, marker_type }
     }
 
-    pub fn circle(color: Color, size: f32) -> Self {
+    pub fn circle(size: f32) -> Self {
         Self {
-            color,
             size,
             marker_type: MarkerType::FilledCircle,
         }
     }
 
-    pub fn ring(color: Color, size: f32) -> Self {
+    pub fn ring(size: f32) -> Self {
         Self {
-            color,
             size,
             marker_type: MarkerType::EmptyCircle,
         }
     }
 
-    pub fn square(color: Color, size: f32) -> Self {
+    pub fn square(size: f32) -> Self {
         Self {
-            color,
             size,
             marker_type: MarkerType::Square,
         }
     }
 
-    pub fn star(color: Color, size: f32) -> Self {
+    pub fn star(size: f32) -> Self {
         Self {
-            color,
             size,
             marker_type: MarkerType::Star,
         }
     }
 
-    pub fn triangle(color: Color, size: f32) -> Self {
+    pub fn triangle(size: f32) -> Self {
         Self {
-            color,
             size,
             marker_type: MarkerType::Triangle,
         }
@@ -112,6 +100,9 @@ pub struct Series {
     /// Optional label for the entire series.
     pub label: Option<String>,
 
+    /// Color of the series (used for both markers and lines).
+    pub color: Color,
+
     /// Optional marker style for the series. If none, no markers are drawn.
     pub marker_style: Option<MarkerStyle>,
 
@@ -125,6 +116,7 @@ impl Series {
         Self {
             positions,
             label: None,
+            color: Color::from_rgb(0.5, 0.5, 0.5),
             marker_style: None,
             line_style: Some(line_style),
         }
@@ -135,6 +127,7 @@ impl Series {
         Self {
             positions,
             label: None,
+            color: Color::from_rgb(0.3, 0.3, 0.9),
             marker_style: Some(marker_style),
             line_style: None,
         }
@@ -149,6 +142,7 @@ impl Series {
         Self {
             positions,
             label: None,
+            color: Color::from_rgb(0.3, 0.3, 0.9),
             marker_style: Some(marker_style),
             line_style: Some(line_style),
         }
@@ -169,13 +163,16 @@ impl Series {
         self
     }
 
+    /// Set the color of the series (affects both markers and lines).
+    pub fn with_color(mut self, color: Color) -> Self {
+        self.color = color;
+        self
+    }
+
     /// Set or change the marker style for the series.
     pub fn marker(mut self, color: Color, size: f32, marker_type: MarkerType) -> Self {
-        self.marker_style = Some(MarkerStyle {
-            color,
-            size,
-            marker_type,
-        });
+        self.color = color;
+        self.marker_style = Some(MarkerStyle { size, marker_type });
         self
     }
 

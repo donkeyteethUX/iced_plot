@@ -410,16 +410,14 @@ impl PlotWidget {
                 }
                 // Include series that have either markers or lines
                 if s.marker_style.is_some() || s.line_style.is_some() {
-                    let (color, marker) = if let Some(ref marker_style) = s.marker_style {
-                        (marker_style.color, marker_style.marker_type as u32)
+                    let marker = if let Some(ref marker_style) = s.marker_style {
+                        marker_style.marker_type as u32
                     } else {
-                        // For line-only series, use a default color (could come from line style in future)
-                        // and a marker type that indicates no marker should be shown
-                        (Color::from_rgb(0.5, 0.5, 0.5), u32::MAX)
+                        u32::MAX
                     };
                     out.push(LegendEntry {
                         label: label.clone(),
-                        color,
+                        color: s.color,
                         _marker: marker,
                         _line_style: s.line_style,
                         hidden: self.hidden_labels.contains(label),
@@ -669,8 +667,9 @@ impl PlotState {
             let (color, marker) = series
                 .marker_style
                 .as_ref()
-                .map(|m| (m.color, m.marker_type as u32))
-                .unwrap_or((Color::WHITE, u32::MAX));
+                .map(|m| (m.marker_type as u32,))
+                .map(|(marker,)| (series.color, marker))
+                .unwrap_or((series.color, u32::MAX));
 
             series_spans.push(SeriesSpan {
                 label: series.label.clone().unwrap_or_default(),

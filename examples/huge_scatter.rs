@@ -53,12 +53,12 @@ fn new_scatter() -> PlotWidget {
     let series = Series::markers_only(
         positions,
         MarkerStyle {
-            color: Color::from_rgb(0.2, 0.6, 1.0),
             size: 1.0,
             marker_type: MarkerType::FilledCircle,
         },
     )
-    .with_label("2d Gaussian scatter - 5M points");
+    .with_label("2d Gaussian scatter - 5M points")
+    .with_color(Color::from_rgb(0.2, 0.6, 1.0));
 
     widget.add_series(series).unwrap();
     widget

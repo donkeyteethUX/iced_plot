@@ -2,7 +2,7 @@
 use fastplot::PlotWidgetBuilder;
 use fastplot::message::PlotUiMessage;
 use fastplot::widget::PlotWidget;
-use fastplot::{Color, LineStyle, MarkerStyle, MarkerType, Series, TooltipContext};
+use fastplot::{Color, LineStyle, MarkerStyle, Series, TooltipContext};
 
 use iced::Element;
 
@@ -26,7 +26,9 @@ fn new() -> PlotWidget {
         let y = (x * 0.5).sin();
         positions.push([x, y]);
     }
-    let s1 = Series::line_only(positions, LineStyle::Solid).with_label("sine_line_only");
+    let s1 = Series::line_only(positions, LineStyle::Solid)
+        .with_label("sine_line_only")
+        .with_color(Color::from_rgb(0.3, 0.3, 0.9));
 
     // Marker-only series (no lines)
     let mut positions = Vec::new();
@@ -35,15 +37,9 @@ fn new() -> PlotWidget {
         let y = (x * 0.3).cos() + 0.5;
         positions.push([x, y]);
     }
-    let s2 = Series::markers_only(
-        positions,
-        MarkerStyle::new(
-            Color::from_rgb(0.9, 0.3, 0.3),
-            6.0,
-            MarkerType::FilledCircle,
-        ),
-    )
-    .with_label("cosine_markers_only");
+    let s2 = Series::markers_only(positions, MarkerStyle::circle(6.0))
+        .with_label("cosine_markers_only")
+        .with_color(Color::from_rgb(0.9, 0.3, 0.3));
 
     // Both markers and lines
     let mut positions = Vec::new();
@@ -54,10 +50,11 @@ fn new() -> PlotWidget {
     }
     let s3 = Series::markers_and_line(
         positions,
-        MarkerStyle::square(Color::from_rgb(0.3, 0.9, 0.3), 4.0),
+        MarkerStyle::square(4.0),
         LineStyle::Dashed { length: 10.0 },
     )
-    .with_label("both_markers_and_lines");
+    .with_label("both_markers_and_lines")
+    .with_color(Color::from_rgb(0.3, 0.9, 0.3));
 
     PlotWidgetBuilder::new()
         .with_tooltips(true)
