@@ -7,6 +7,23 @@ use crate::series::{Series, SeriesError};
 use crate::widget::{CursorProvider, PlotWidget, TooltipProvider};
 
 /// Builder for configuring and constructing a PlotWidget.
+///
+/// Provides a fluent API for setting up a plot with all its configuration options
+/// before creating the widget. All settings have sensible defaults.
+///
+/// # Example
+///
+/// ```ignore
+/// let plot = PlotWidgetBuilder::new()
+///     .with_x_label("Time (s)")
+///     .with_y_label("Value (V)")
+///     .with_tooltips(true)
+///     .with_autoscale_on_updates(false)
+///     .with_x_lim(0.0, 10.0)
+///     .with_y_lim(-1.0, 1.0)
+///     .add_series(series)
+///     .build()?;
+/// ```
 #[derive(Default)]
 pub struct PlotWidgetBuilder {
     x_label: Option<String>,

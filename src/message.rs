@@ -1,11 +1,20 @@
 #[derive(Debug, Clone)]
+/// Messages sent by the plot widget to the application.
+///
+/// These messages are generated in response to user interactions with the plot,
+/// such as toggling series visibility or requesting re-rendering.
 pub enum PlotUiMessage {
+    /// Toggle the legend visibility.
     ToggleLegend,
+    /// Toggle visibility of a series or reference line by label.
     ToggleSeriesVisibility(String),
+    /// Internal render update message.
     RenderUpdate(PlotRenderUpdate),
 }
 
 /// Context passed to a tooltip formatting callback.
+///
+/// Contains information about the point being hovered over.
 #[derive(Debug, Clone)]
 pub struct TooltipContext {
     /// Label of the series, if any (empty string means none)
@@ -14,10 +23,12 @@ pub struct TooltipContext {
     pub point_index: usize,
     /// Data-space coordinates
     pub x: f64,
+    /// Data-space coordinates
     pub y: f64,
 }
 
 #[derive(Debug, Clone)]
+#[doc(hidden)]
 pub struct TooltipUiPayload {
     pub x: f32,
     pub y: f32,
@@ -26,6 +37,7 @@ pub struct TooltipUiPayload {
 
 /// Payload for the small cursor-position overlay shown in the corner.
 #[derive(Debug, Clone)]
+#[doc(hidden)]
 pub struct CursorPositionUiPayload {
     /// World/data-space coordinates for the cursor
     pub x: f64,
@@ -35,6 +47,7 @@ pub struct CursorPositionUiPayload {
 }
 
 #[derive(Debug, Clone)]
+#[doc(hidden)]
 pub struct PlotRenderUpdate {
     pub clear_tooltip: bool,
     pub tooltip_ui: Option<TooltipUiPayload>,

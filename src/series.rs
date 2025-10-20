@@ -2,18 +2,28 @@ use crate::Color;
 use crate::point::MarkerType;
 
 /// Line styling options for series connections.
+///
+/// Determines how points in a series are connected.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LineStyle {
+    /// Solid continuous line.
     Solid,
+    /// Dotted line with configurable spacing.
     Dotted { spacing: f32 },
+    /// Dashed line with configurable dash length.
     Dashed { length: f32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 /// Marker styling options for series points.
+///
+/// Defines how individual data points are rendered.
 pub struct MarkerStyle {
+    /// Color of the marker.
     pub color: Color,
+    /// Size of the marker in pixels.
     pub size: f32,
+    /// Shape of the marker.
     pub marker_type: MarkerType,
 }
 
@@ -80,17 +90,20 @@ impl MarkerStyle {
 /// Errors that can occur when constructing or adding a series.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SeriesError {
-    /// No points provided
+    /// No points provided to the series.
     Empty,
-    /// Series has neither markers nor lines enabled
+    /// Series has neither markers nor lines enabled.
     NoMarkersAndNoLines,
-    /// A series with the same non-empty label already exists
+    /// A series with the same non-empty label already exists.
     DuplicateLabel(String),
-    /// Axis limits are not properly set
+    /// Axis limits are not properly set (min >= max).
     InvalidAxisLimits,
 }
 
 /// A collection of per-point styled data to be plotted.
+///
+/// Represents a single series of data points, which may be rendered with markers,
+/// lines, or both. The same series can contain any number of points.
 #[derive(Debug, Clone)]
 pub struct Series {
     /// Series point positions.

@@ -34,6 +34,32 @@ use crate::{
 pub type TooltipProvider = Arc<dyn Fn(&TooltipContext) -> String + Send + Sync>;
 pub type CursorProvider = Arc<dyn Fn(f64, f64) -> String + Send + Sync>;
 
+/// A plot widget that renders data series with interactive features.
+///
+/// This is the main widget for creating and rendering plots. Use [`PlotWidgetBuilder`]
+/// for a convenient builder pattern, or construct directly with [`PlotWidget::new`].
+///
+/// Features include:
+/// - Multiple data series with customizable markers and line styles
+/// - Reference lines (horizontal and vertical)
+/// - Interactive panning and zooming
+/// - Hover tooltips with custom formatting
+/// - Series visibility toggling via legend
+/// - Crosshair overlay
+/// - Cursor position display
+/// - Axis linking for synchronized views
+///
+/// # Example
+///
+/// ```ignore
+/// let mut plot = PlotWidget::new();
+/// let series = Series::markers_and_line(
+///     vec![[0.0, 0.0], [1.0, 1.0], [2.0, 0.5]],
+///     MarkerStyle::circle(Color::from_rgb(0.3, 0.3, 0.9), 5.0),
+///     LineStyle::Solid,
+/// ).with_label("Data");
+/// plot.add_series(series)?;
+/// ```
 pub struct PlotWidget {
     instance_id: u64,
     // Data
@@ -69,6 +95,7 @@ impl Default for PlotWidget {
 }
 
 impl PlotWidget {
+    /// Create a new plot widget with default settings.
     pub fn new() -> Self {
         Self {
             instance_id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
@@ -393,8 +420,8 @@ impl PlotWidget {
                     out.push(LegendEntry {
                         label: label.clone(),
                         color,
-                        marker,
-                        line_style: s.line_style,
+                        _marker: marker,
+                        _line_style: s.line_style,
                         hidden: self.hidden_labels.contains(label),
                     });
                 }
@@ -408,8 +435,8 @@ impl PlotWidget {
                 out.push(LegendEntry {
                     label: label.clone(),
                     color: vline.color,
-                    marker: u32::MAX,
-                    line_style: Some(vline.line_style),
+                    _marker: u32::MAX,
+                    _line_style: Some(vline.line_style),
                     hidden: self.hidden_labels.contains(label),
                 });
             }
@@ -422,8 +449,8 @@ impl PlotWidget {
                 out.push(LegendEntry {
                     label: label.clone(),
                     color: hline.color,
-                    marker: u32::MAX,
-                    line_style: Some(hline.line_style),
+                    _marker: u32::MAX,
+                    _line_style: Some(hline.line_style),
                     hidden: self.hidden_labels.contains(label),
                 });
             }
@@ -1232,6 +1259,7 @@ pub struct PlotRendererState {
 }
 
 #[derive(Debug)]
+#[doc(hidden)]
 pub struct Primitive {
     instance_id: u64,
     plot_widget: PlotState,
@@ -1297,11 +1325,17 @@ impl shader::Primitive for Primitive {
 }
 
 #[derive(Debug, Clone)]
-pub struct LegendEntry {
+/// An entry in the plot legend.
+pub(crate) struct LegendEntry {
+    /// Label of the series or line.
     pub label: String,
+    /// Color of the series or line.
     pub color: Color,
-    pub marker: u32,
-    pub line_style: Option<LineStyle>,
+    /// Marker type ID (u32::MAX if no marker).
+    pub _marker: u32,
+    /// Line style if present.
+    pub _line_style: Option<LineStyle>,
+    /// Whether this entry is currently hidden.
     pub hidden: bool,
 }
 

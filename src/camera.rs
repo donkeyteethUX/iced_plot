@@ -13,7 +13,7 @@ pub(crate) struct CameraUniform {
 }
 
 impl CameraUniform {
-    pub fn update(&mut self, camera: &Camera, viewport_width: u32, viewport_height: u32) {
+    pub(crate) fn update(&mut self, camera: &Camera, viewport_width: u32, viewport_height: u32) {
         self.view_proj = camera.build_view_projection_matrix().to_cols_array_2d();
 
         // For screen-space sizing (markers): convert pixels to clip space
@@ -44,7 +44,11 @@ impl Default for CameraUniform {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Camera {
+/// Camera for viewing the plot in world-space.
+///
+/// Manages the viewport transformation between world coordinates (data space),
+/// render coordinates, and screen coordinates. Supports panning and zooming.
+pub(crate) struct Camera {
     /// Center position (world units)
     pub position: DVec2,
     /// Half extents in world units.
@@ -97,24 +101,9 @@ impl Camera {
         render_pos + self.render_offset
     }
 
-    /// Set the render offset manually. This is subtracted from coordinates before rendering.
-    pub fn set_render_offset(&mut self, offset: DVec2) {
-        self.render_offset = offset;
-    }
-
     /// Get the effective camera position relative to the render offset
     pub fn effective_position(&self) -> DVec2 {
         self.position - self.render_offset
-    }
-
-    /// Convert world coordinates to render coordinates (subtract offset)
-    pub fn world_to_render(&self, world_pos: DVec2) -> DVec2 {
-        world_pos - self.render_offset
-    }
-
-    /// Convert render coordinates to world coordinates (add offset)
-    pub fn render_to_world(&self, render_pos: DVec2) -> DVec2 {
-        render_pos + self.render_offset
     }
 
     /// Convert screen coordinates to render coordinates (without offset)
@@ -141,9 +130,7 @@ impl Camera {
         self.position = center;
         // Keep the existing render_offset
     }
-}
 
-impl Camera {
     pub(crate) fn set_bounds(&mut self, bounds_min: DVec2, bounds_max: DVec2, padding_frac: f64) {
         let size = (bounds_max - bounds_min).max(DVec2::splat(EPSILON_SMALL));
         let size_padded = size + size * padding_frac;
