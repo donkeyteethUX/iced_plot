@@ -2,7 +2,7 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{Container, button, column, container, row, text};
 use iced::{Border, Element, Length, color};
 
-use crate::{message::PlotUiMessage, widget::PlotData};
+use crate::{message::PlotUiMessage, widget::PlotWidget};
 
 const LEGEND_PADDING: f32 = 8.0;
 const ENTRY_SPACING: f32 = 6.0;
@@ -10,8 +10,8 @@ const COLUMN_SPACING: f32 = 4.0;
 const LABEL_TEXT_SIZE: f32 = 14.0;
 const SWATCH_SIZE: f32 = 14.0;
 
-pub(crate) fn legend(data: &PlotData, collapsed: bool) -> Element<'_, PlotUiMessage> {
-    let entries = data.legend_entries();
+pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Element<'_, PlotUiMessage> {
+    let entries = widget.legend_entries();
 
     if entries.is_empty() {
         return legend_container(label_button("Legend")).into();

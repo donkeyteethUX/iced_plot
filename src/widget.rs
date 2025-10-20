@@ -36,26 +36,30 @@ pub type CursorProvider = Arc<dyn Fn(f64, f64) -> String + Send + Sync>;
 
 pub struct PlotWidget {
     instance_id: u64,
-    data: PlotData,
+    // Data
+    series: Vec<Series>,
+    vlines: Vec<VLine>,
+    hlines: Vec<HLine>,
+    hidden_labels: HashSet<String>,
+    data_version: u64,
+    // Configuration
     autoscale_on_updates: bool,
     legend_collapsed: bool,
     x_axis_label: String,
     y_axis_label: String,
-    // Axis limits
     x_lim: Option<(f64, f64)>,
     y_lim: Option<(f64, f64)>,
-    // Axis links for synchronization
     x_axis_link: Option<AxisLink>,
     y_axis_link: Option<AxisLink>,
-    // Tooltip config
     tooltips_enabled: bool,
     hover_radius_px: f32,
     tooltip_provider: Option<TooltipProvider>,
-    tooltip_ui: Option<TooltipUiPayload>,
     cursor_overlay: bool,
     cursor_provider: Option<CursorProvider>,
-    cursor_ui: Option<CursorPositionUiPayload>,
     crosshairs_enabled: bool,
+    // UI state
+    tooltip_ui: Option<TooltipUiPayload>,
+    cursor_ui: Option<CursorPositionUiPayload>,
 }
 
 impl Default for PlotWidget {
@@ -68,42 +72,136 @@ impl PlotWidget {
     pub fn new() -> Self {
         Self {
             instance_id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-            tooltips_enabled: true,
-            hover_radius_px: 8.0,
-            tooltip_ui: None,
-            cursor_overlay: true,
-            cursor_provider: None,
-            cursor_ui: None,
+            series: Vec::new(),
+            vlines: Vec::new(),
+            hlines: Vec::new(),
+            hidden_labels: HashSet::new(),
+            data_version: 0,
             autoscale_on_updates: false,
+            legend_collapsed: false,
             x_axis_label: String::new(),
             y_axis_label: String::new(),
             x_lim: None,
             y_lim: None,
             x_axis_link: None,
             y_axis_link: None,
-            legend_collapsed: false,
-            data: PlotData::default(),
+            tooltips_enabled: true,
+            hover_radius_px: 8.0,
             tooltip_provider: None,
+            cursor_overlay: true,
+            cursor_provider: None,
             crosshairs_enabled: true,
+            tooltip_ui: None,
+            cursor_ui: None,
         }
     }
 
     pub fn add_series(&mut self, item: Series) -> Result<(), SeriesError> {
-        self.data.add_series(item)
+        // Validate series invariants
+        item.validate()?;
+
+        // Enforce unique non-empty labels
+        if let Some(label) = item.label.as_deref()
+            && !label.is_empty()
+            && self
+                .series
+                .iter()
+                .any(|s| s.label.as_deref() == Some(label))
+        {
+            return Err(SeriesError::DuplicateLabel(label.to_string()));
+        }
+
+        self.series.push(item);
+        self.data_version += 1;
+        Ok(())
     }
 
     pub fn remove_series(&mut self, label: &str) -> bool {
-        self.data.remove_series(label)
+        if let Some(idx) = self
+            .series
+            .iter()
+            .position(|s| s.label.as_deref() == Some(label))
+        {
+            self.series.remove(idx);
+            self.hidden_labels.remove(label);
+            self.data_version += 1;
+            return true;
+        }
+        false
     }
 
     /// Add a vertical reference line to the plot.
     pub fn add_vline(&mut self, vline: VLine) -> Result<(), SeriesError> {
-        self.data.add_vline(vline)
+        // Enforce unique non-empty labels
+        if let Some(label) = vline.label.as_deref()
+            && !label.is_empty()
+        {
+            // Check for duplicate labels in vlines
+            if self
+                .vlines
+                .iter()
+                .any(|v| v.label.as_deref() == Some(label))
+            {
+                return Err(SeriesError::DuplicateLabel(label.to_string()));
+            }
+            // Check for duplicate labels in hlines
+            if self
+                .hlines
+                .iter()
+                .any(|h| h.label.as_deref() == Some(label))
+            {
+                return Err(SeriesError::DuplicateLabel(label.to_string()));
+            }
+            // Check for duplicate labels in series
+            if self
+                .series
+                .iter()
+                .any(|s| s.label.as_deref() == Some(label))
+            {
+                return Err(SeriesError::DuplicateLabel(label.to_string()));
+            }
+        }
+
+        self.vlines.push(vline);
+        self.data_version += 1;
+        Ok(())
     }
 
     /// Add a horizontal reference line to the plot.
     pub fn add_hline(&mut self, hline: HLine) -> Result<(), SeriesError> {
-        self.data.add_hline(hline)
+        // Enforce unique non-empty labels
+        if let Some(label) = hline.label.as_deref()
+            && !label.is_empty()
+        {
+            // Check for duplicate labels in hlines
+            if self
+                .hlines
+                .iter()
+                .any(|h| h.label.as_deref() == Some(label))
+            {
+                return Err(SeriesError::DuplicateLabel(label.to_string()));
+            }
+            // Check for duplicate labels in vlines
+            if self
+                .vlines
+                .iter()
+                .any(|v| v.label.as_deref() == Some(label))
+            {
+                return Err(SeriesError::DuplicateLabel(label.to_string()));
+            }
+            // Check for duplicate labels in series
+            if self
+                .series
+                .iter()
+                .any(|s| s.label.as_deref() == Some(label))
+            {
+                return Err(SeriesError::DuplicateLabel(label.to_string()));
+            }
+        }
+
+        self.hlines.push(hline);
+        self.data_version += 1;
+        Ok(())
     }
 
     pub fn set_x_axis_label(&mut self, label: impl Into<String>) {
@@ -147,7 +245,7 @@ impl PlotWidget {
                 self.legend_collapsed = !self.legend_collapsed;
             }
             PlotUiMessage::ToggleSeriesVisibility(label) => {
-                self.data.toggle_series_visibility(&label);
+                self.toggle_series_visibility(&label);
             }
             PlotUiMessage::RenderUpdate(payload) => {
                 if payload.clear_tooltip {
@@ -166,6 +264,33 @@ impl PlotWidget {
         }
     }
 
+    fn toggle_series_visibility(&mut self, label: &str) {
+        // Check if it's a series, vline, or hline
+        let exists = self
+            .series
+            .iter()
+            .any(|s| s.label.as_deref() == Some(label))
+            || self
+                .vlines
+                .iter()
+                .any(|v| v.label.as_deref() == Some(label))
+            || self
+                .hlines
+                .iter()
+                .any(|h| h.label.as_deref() == Some(label));
+
+        if !exists {
+            println!("Toggle series visibility: series not found: {label}");
+            return;
+        }
+        if self.hidden_labels.contains(label) {
+            self.hidden_labels.remove(label);
+        } else {
+            self.hidden_labels.insert(label.to_string());
+        }
+        self.data_version += 1;
+    }
+
     /// View the plot widget.
     pub fn view<'a>(&'a self) -> iced::Element<'a, PlotUiMessage> {
         let plot = widget::shader(self)
@@ -176,10 +301,7 @@ impl PlotWidget {
             .padding(2.0)
             .style(|_| container::background(color!(20, 20, 20)));
 
-        let mut elements = stack![
-            inner_container,
-            legend::legend(&self.data, self.legend_collapsed),
-        ];
+        let mut elements = stack![inner_container, legend::legend(self, self.legend_collapsed),];
 
         if let Some(tooltip_overlay) = self.view_tooltip_overlay() {
             elements = elements.push(tooltip_overlay);
@@ -239,7 +361,74 @@ impl PlotWidget {
 
     /// Set the positions of an existing series.
     pub fn set_series_positions(&mut self, label: &str, positions: &[[f64; 2]]) {
-        self.data.set_series_positions(label, positions);
+        if let Some(idx) = self
+            .series
+            .iter()
+            .position(|s| s.label.as_deref() == Some(label))
+        {
+            self.series[idx].positions = positions.to_vec();
+            self.data_version += 1;
+        }
+    }
+
+    pub(crate) fn legend_entries(&self) -> Vec<LegendEntry> {
+        let mut out = Vec::new();
+        for s in &self.series {
+            if let Some(ref label) = s.label {
+                if label.is_empty() {
+                    continue;
+                }
+                if s.positions.is_empty() {
+                    continue;
+                }
+                // Include series that have either markers or lines
+                if s.marker_style.is_some() || s.line_style.is_some() {
+                    let (color, marker) = if let Some(ref marker_style) = s.marker_style {
+                        (marker_style.color, marker_style.marker_type as u32)
+                    } else {
+                        // For line-only series, use a default color (could come from line style in future)
+                        // and a marker type that indicates no marker should be shown
+                        (Color::from_rgb(0.5, 0.5, 0.5), u32::MAX)
+                    };
+                    out.push(LegendEntry {
+                        label: label.clone(),
+                        color,
+                        marker,
+                        line_style: s.line_style,
+                        hidden: self.hidden_labels.contains(label),
+                    });
+                }
+            }
+        }
+        // Add vertical reference lines to legend
+        for vline in &self.vlines {
+            if let Some(ref label) = vline.label
+                && !label.is_empty()
+            {
+                out.push(LegendEntry {
+                    label: label.clone(),
+                    color: vline.color,
+                    marker: u32::MAX,
+                    line_style: Some(vline.line_style),
+                    hidden: self.hidden_labels.contains(label),
+                });
+            }
+        }
+        // Add horizontal reference lines to legend
+        for hline in &self.hlines {
+            if let Some(ref label) = hline.label
+                && !label.is_empty()
+            {
+                out.push(LegendEntry {
+                    label: label.clone(),
+                    color: hline.color,
+                    marker: u32::MAX,
+                    line_style: Some(hline.line_style),
+                    hidden: self.hidden_labels.contains(label),
+                });
+            }
+        }
+        out
     }
 
     fn view_tooltip_overlay(&self) -> Option<Element<'_, PlotUiMessage>> {
@@ -315,226 +504,12 @@ impl PlotWidget {
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct PlotData {
-    pub(crate) series: Vec<Series>,
-    pub(crate) vlines: Vec<VLine>,
-    pub(crate) hlines: Vec<HLine>,
-    pub(crate) version: u64,
-    hidden_labels: HashSet<String>,
-}
-
-impl PlotData {
-    /// Adds a series to the plot
-    fn add_series(&mut self, item: Series) -> Result<(), SeriesError> {
-        // Validate series invariants
-        item.validate()?;
-
-        // Enforce unique non-empty labels
-        if let Some(label) = item.label.as_deref()
-            && !label.is_empty()
-            && self
-                .series
-                .iter()
-                .any(|s| s.label.as_deref() == Some(label))
-        {
-            return Err(SeriesError::DuplicateLabel(label.to_string()));
-        }
-
-        self.series.push(item);
-        self.version += 1;
-        Ok(())
-    }
-
-    /// Removes a series by label. Returns true if found and removed.
-    fn remove_series(&mut self, label: &str) -> bool {
-        if let Some(idx) = self
-            .series
-            .iter()
-            .position(|s| s.label.as_deref() == Some(label))
-        {
-            self.series.remove(idx);
-            self.version += 1;
-            self.hidden_labels.remove(label);
-            return true;
-        }
-        false
-    }
-
-    fn set_series_positions(&mut self, label: &str, positions: &[[f64; 2]]) {
-        if let Some(idx) = self
-            .series
-            .iter()
-            .position(|s| s.label.as_deref() == Some(label))
-        {
-            self.series[idx].positions = positions.to_vec();
-            self.version += 1;
-        }
-    }
-
-    /// Add a vertical reference line to the plot.
-    fn add_vline(&mut self, vline: VLine) -> Result<(), SeriesError> {
-        // Enforce unique non-empty labels
-        if let Some(label) = vline.label.as_deref()
-            && !label.is_empty()
-        {
-            // Check for duplicate labels in vlines
-            if self
-                .vlines
-                .iter()
-                .any(|v| v.label.as_deref() == Some(label))
-            {
-                return Err(SeriesError::DuplicateLabel(label.to_string()));
-            }
-            // Check for duplicate labels in hlines
-            if self
-                .hlines
-                .iter()
-                .any(|h| h.label.as_deref() == Some(label))
-            {
-                return Err(SeriesError::DuplicateLabel(label.to_string()));
-            }
-            // Check for duplicate labels in series
-            if self
-                .series
-                .iter()
-                .any(|s| s.label.as_deref() == Some(label))
-            {
-                return Err(SeriesError::DuplicateLabel(label.to_string()));
-            }
-        }
-
-        self.vlines.push(vline);
-        self.version += 1;
-        Ok(())
-    }
-
-    /// Add a horizontal reference line to the plot.
-    fn add_hline(&mut self, hline: HLine) -> Result<(), SeriesError> {
-        // Enforce unique non-empty labels
-        if let Some(label) = hline.label.as_deref()
-            && !label.is_empty()
-        {
-            // Check for duplicate labels in hlines
-            if self
-                .hlines
-                .iter()
-                .any(|h| h.label.as_deref() == Some(label))
-            {
-                return Err(SeriesError::DuplicateLabel(label.to_string()));
-            }
-            // Check for duplicate labels in vlines
-            if self
-                .vlines
-                .iter()
-                .any(|v| v.label.as_deref() == Some(label))
-            {
-                return Err(SeriesError::DuplicateLabel(label.to_string()));
-            }
-            // Check for duplicate labels in series
-            if self
-                .series
-                .iter()
-                .any(|s| s.label.as_deref() == Some(label))
-            {
-                return Err(SeriesError::DuplicateLabel(label.to_string()));
-            }
-        }
-
-        self.hlines.push(hline);
-        self.version += 1;
-        Ok(())
-    }
-
-    pub(crate) fn legend_entries(&self) -> Vec<LegendEntry> {
-        let mut out = Vec::new();
-        for s in &self.series {
-            if let Some(ref label) = s.label {
-                if label.is_empty() {
-                    continue;
-                }
-                if s.positions.is_empty() {
-                    continue;
-                }
-                // Include series that have either markers or lines
-                if s.marker_style.is_some() || s.line_style.is_some() {
-                    let (color, marker) = if let Some(ref marker_style) = s.marker_style {
-                        (marker_style.color, marker_style.marker_type as u32)
-                    } else {
-                        // For line-only series, use a default color (could come from line style in future)
-                        // and a marker type that indicates no marker should be shown
-                        (Color::from_rgb(0.5, 0.5, 0.5), u32::MAX)
-                    };
-                    out.push(LegendEntry {
-                        label: label.clone(),
-                        color,
-                        marker,
-                        line_style: s.line_style,
-                        hidden: self.hidden_labels.contains(label),
-                    });
-                }
-            }
-        }
-        // Add vertical reference lines to legend
-        for vline in &self.vlines {
-            if let Some(ref label) = vline.label
-                && !label.is_empty()
-            {
-                out.push(LegendEntry {
-                    label: label.clone(),
-                    color: vline.color,
-                    marker: u32::MAX,
-                    line_style: Some(vline.line_style),
-                    hidden: self.hidden_labels.contains(label),
-                });
-            }
-        }
-        // Add horizontal reference lines to legend
-        for hline in &self.hlines {
-            if let Some(ref label) = hline.label
-                && !label.is_empty()
-            {
-                out.push(LegendEntry {
-                    label: label.clone(),
-                    color: hline.color,
-                    marker: u32::MAX,
-                    line_style: Some(hline.line_style),
-                    hidden: self.hidden_labels.contains(label),
-                });
-            }
-        }
-        out
-    }
-
-    fn toggle_series_visibility(&mut self, label: &str) {
-        // Check if it's a series, vline, or hline
-        let exists = self
-            .series
-            .iter()
-            .any(|s| s.label.as_deref() == Some(label))
-            || self
-                .vlines
-                .iter()
-                .any(|v| v.label.as_deref() == Some(label))
-            || self
-                .hlines
-                .iter()
-                .any(|h| h.label.as_deref() == Some(label));
-
-        if !exists {
-            println!("Toggle series visibility: series not found: {label}");
-            return;
-        }
-        if self.hidden_labels.contains(label) {
-            self.hidden_labels.remove(label);
-        } else {
-            self.hidden_labels.insert(label.to_string());
-        }
-        self.version += 1;
-    }
-}
-
 #[derive(Debug, Clone)]
+#[doc(hidden)]
+/// PlotState is a projection of the widget configuration, data, and interaction state.
+/// It holds the GPU-ready data needed for rendering the plot.
+///
+/// Not part of the public API, but pub visibility is required for the shader implementation.
 pub struct PlotState {
     pub(crate) src_version: u64, // version of PlotData last synced
     // Shared data: cheap O(1) clone when producing a Primitive
@@ -542,12 +517,11 @@ pub struct PlotState {
     pub(crate) series: Arc<[SeriesSpan]>, // spans describing logical series
     pub(crate) vlines: Arc<[VLine]>,      // vertical reference lines
     pub(crate) hlines: Arc<[HLine]>,      // horizontal reference lines
-    pub(crate) labels: HashSet<String>,
-    pub(crate) data_min: Option<DVec2>,
-    pub(crate) data_max: Option<DVec2>,
+    data_min: Option<DVec2>,
+    data_max: Option<DVec2>,
     // Axis limits
-    pub(crate) x_lim: Option<(f64, f64)>,
-    pub(crate) y_lim: Option<(f64, f64)>,
+    x_lim: Option<(f64, f64)>,
+    y_lim: Option<(f64, f64)>,
     // Axis links for synchronization
     x_axis_link: Option<AxisLink>,
     y_axis_link: Option<AxisLink>,
@@ -555,14 +529,14 @@ pub struct PlotState {
     y_link_version: u64,
     // UI / camera
     pub(crate) camera: Camera,
-    pub(crate) bounds: Rectangle,
+    bounds: Rectangle,
     // Interaction state
     cursor_position: Vec2,
     last_click_time: Option<Instant>,
     legend_collapsed: bool,
     modifiers: keyboard::Modifiers,
     pub(crate) selection: SelectionState,
-    pub(crate) pan: PanState,
+    pan: PanState,
     // Version counters
     pub(crate) markers_version: u64,
     pub(crate) lines_version: u64,
@@ -573,7 +547,7 @@ pub struct PlotState {
     // For renderer: hovered marker world coords and pixel size
     pub(crate) hovered_world: Option<[f64; 2]>,
     pub(crate) hovered_size_px: f32,
-    pub(crate) hover_version: u64,
+    hover_version: u64,
     // Crosshairs
     pub(crate) crosshairs_enabled: bool,
     pub(crate) crosshairs_position: Vec2,
@@ -594,7 +568,6 @@ impl PlotState {
             series: Arc::new([]),
             vlines: Arc::new([]),
             hlines: Arc::new([]),
-            labels: HashSet::new(),
             data_min: None,
             data_max: None,
             x_lim: None,
@@ -624,78 +597,100 @@ impl PlotState {
         }
     }
 
-    /// Adds a series to the plot
-    pub fn add_series(&mut self, item: Series) {
-        assert!(!item.positions.is_empty());
-        assert!(item.line_style.is_some() || item.marker_style.is_some());
-        assert!(item.label.as_ref().is_none_or(|l| !self.labels.contains(l)));
+    /// Rebuild GPU data from widget configuration
+    fn rebuild_from_widget(&mut self, widget: &PlotWidget) {
+        let mut points = Vec::new();
+        let mut series_spans = Vec::new();
+        let mut data_min: Option<DVec2> = None;
+        let mut data_max: Option<DVec2> = None;
 
-        // Clone-on-write
-        let mut points = self.points.to_vec();
-        let mut series = self.series.to_vec();
-        let start = points.len();
-        let mut local_min = self
-            .data_min
-            .unwrap_or(DVec2::new(item.positions[0][0], item.positions[0][1]));
-        let mut local_max = self.data_max.unwrap_or(local_min);
-        for p in &item.positions {
-            local_min = local_min.min(DVec2::new(p[0], p[1]));
-            local_max = local_max.max(DVec2::new(p[0], p[1]));
-        }
-        self.data_min = Some(match self.data_min {
-            Some(m) => m.min(local_min),
-            None => local_min,
-        });
-        self.data_max = Some(match self.data_max {
-            Some(m) => m.max(local_max),
-            None => local_max,
-        });
-        let label_string = item.label.unwrap_or_default();
-        let line_style = item.line_style;
-
-        // Determine color and marker info
-        let (color, marker) = if let Some(ref marker_style) = item.marker_style {
-            (marker_style.color, marker_style.marker_type as u32)
-        } else {
-            (Color::WHITE, u32::MAX) // u32::MAX indicates no marker.
-        };
-
-        // Only create points if we have markers OR lines (lines need points for geometry)
-        if item.marker_style.is_some() || line_style.is_some() {
-            let size = item.marker_style.as_ref().map(|ms| ms.size).unwrap_or(1.0);
-            for pos in item.positions {
-                points.push(Point {
-                    position: pos,
-                    size,
-                });
+        // Process each series
+        for series in &widget.series {
+            // Skip hidden series
+            if let Some(label) = &series.label
+                && widget.hidden_labels.contains(label)
+            {
+                continue;
             }
+
+            if series.positions.is_empty() {
+                continue;
+            }
+
+            let start = points.len();
+
+            // Add points and track bounds
+            for &pos in &series.positions {
+                let p = DVec2::new(pos[0], pos[1]);
+                data_min = Some(data_min.map_or(p, |m| m.min(p)));
+                data_max = Some(data_max.map_or(p, |m| m.max(p)));
+
+                // Only create points if we have markers OR lines (lines need points for geometry)
+                if series.marker_style.is_some() || series.line_style.is_some() {
+                    let size = series
+                        .marker_style
+                        .as_ref()
+                        .map(|ms| ms.size)
+                        .unwrap_or(1.0);
+                    points.push(Point {
+                        position: pos,
+                        size,
+                    });
+                }
+            }
+
+            let (color, marker) = series
+                .marker_style
+                .as_ref()
+                .map(|m| (m.color, m.marker_type as u32))
+                .unwrap_or((Color::WHITE, u32::MAX));
+
+            series_spans.push(SeriesSpan {
+                label: series.label.clone().unwrap_or_default(),
+                start,
+                len: points.len() - start,
+                line_style: series.line_style,
+                color,
+                marker,
+            });
         }
 
-        let len = points.len() - start;
-        series.push(SeriesSpan {
-            label: label_string.clone(),
-            start,
-            len,
-            line_style,
-            color,
-            marker,
-        });
-        if !label_string.is_empty() {
-            self.labels.insert(label_string);
-        }
+        // Filter visible reference lines
+        let vlines: Vec<_> = widget
+            .vlines
+            .iter()
+            .filter(|v| {
+                !v.label
+                    .as_ref()
+                    .is_some_and(|l| widget.hidden_labels.contains(l))
+            })
+            .cloned()
+            .collect();
+
+        let hlines: Vec<_> = widget
+            .hlines
+            .iter()
+            .filter(|h| {
+                !h.label
+                    .as_ref()
+                    .is_some_and(|l| widget.hidden_labels.contains(l))
+            })
+            .cloned()
+            .collect();
+
         self.points = points.into();
-        self.series = series.into();
-        self.markers_version += 1;
-        if line_style.is_some() {
-            self.lines_version += 1;
-        }
-        // Invalidate hover cache when data changes so tooltips update
-        self.last_hover_cache = None;
-        self.hovered_world = None;
-        self.hover_version = self.hover_version.wrapping_add(1);
+        self.series = series_spans.into();
+        self.vlines = vlines.into();
+        self.hlines = hlines.into();
+        self.data_min = data_min;
+        self.data_max = data_max;
+
+        // Force GPU buffers to rebuild
+        self.markers_version = self.markers_version.wrapping_add(1);
+        self.lines_version = self.lines_version.wrapping_add(1);
     }
 
-    pub fn autoscale(&mut self) {
+    fn autoscale(&mut self) {
         if let (Some(data_min), Some(data_max)) = (self.data_min, self.data_max) {
             // Use user-specified limits if available, otherwise use data bounds
             let mut min_v = data_min;
@@ -717,33 +712,6 @@ impl PlotState {
 
     pub fn handle_mouse_event(&mut self, event: Event) -> bool {
         self.process_input(event)
-    }
-
-    /// Toggle the collapsed state of the legend
-    pub fn toggle_legend(&mut self) {
-        self.legend_collapsed = !self.legend_collapsed;
-    }
-
-    pub fn set_series_line_style(&mut self, label: &str, line_style: Option<LineStyle>) -> bool {
-        if self
-            .series
-            .iter()
-            .any(|s| s.label == label && s.line_style != line_style)
-        {
-            let mut series = self.series.to_vec();
-            for s in &mut series {
-                if s.label == label {
-                    if s.line_style != line_style {
-                        s.line_style = line_style;
-                        self.lines_version += 1;
-                    }
-                    break;
-                }
-            }
-            self.series = series.into();
-            return true;
-        }
-        false
     }
 
     /// Update axis links with current camera state
@@ -1029,54 +997,9 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         let mut needs_redraw = false;
         let mut clear_tooltip = false;
 
-        if self.data.version != state.src_version {
-            // todo: something less dumb
-            state.series = Arc::new([]);
-            state.points = Arc::new([]);
-            state.labels.clear();
-            state.data_min = None;
-            state.data_max = None;
-            for s in &self.data.series {
-                if s.label
-                    .as_ref()
-                    .is_some_and(|l| !self.data.hidden_labels.contains(l.as_str()))
-                {
-                    state.add_series(s.clone());
-                }
-            }
-
-            // Sync reference lines (filter by hidden labels)
-            let visible_vlines: Vec<VLine> = self
-                .data
-                .vlines
-                .iter()
-                .filter(|v| {
-                    v.label
-                        .as_ref()
-                        .map(|l| !self.data.hidden_labels.contains(l.as_str()))
-                        .unwrap_or(true)
-                })
-                .cloned()
-                .collect();
-            state.vlines = Arc::from(visible_vlines);
-
-            let visible_hlines: Vec<HLine> = self
-                .data
-                .hlines
-                .iter()
-                .filter(|h| {
-                    h.label
-                        .as_ref()
-                        .map(|l| !self.data.hidden_labels.contains(l.as_str()))
-                        .unwrap_or(true)
-                })
-                .cloned()
-                .collect();
-            state.hlines = Arc::from(visible_hlines);
-
-            // Force GPU buffers to rebuild for both markers and lines even when zero series remain
-            state.markers_version = state.markers_version.wrapping_add(1);
-            state.lines_version = state.lines_version.wrapping_add(1);
+        if self.data_version != state.src_version {
+            // Rebuild derived state from widget data
+            state.rebuild_from_widget(self);
 
             // Invalidate hover cache when data changes so tooltips update
             state.last_hover_cache = None;
@@ -1108,7 +1031,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                 state.autoscale();
             }
 
-            state.src_version = self.data.version;
+            state.src_version = self.data_version;
             state.legend_collapsed = self.legend_collapsed;
             state.x_lim = self.x_lim;
             state.y_lim = self.y_lim;

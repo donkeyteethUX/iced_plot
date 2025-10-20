@@ -19,4 +19,4 @@ pub use plot_widget_builder::PlotWidgetBuilder;
 pub use point::{MarkerType, Point};
 pub use reference_lines::{HLine, VLine};
 pub use series::{LineStyle, MarkerStyle, Series};
-pub use widget::{LegendEntry, PlotState};
+pub use widget::LegendEntry;
