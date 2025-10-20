@@ -689,6 +689,10 @@ impl PlotState {
         if line_style.is_some() {
             self.lines_version += 1;
         }
+        // Invalidate hover cache when data changes so tooltips update
+        self.last_hover_cache = None;
+        self.hovered_world = None;
+        self.hover_version = self.hover_version.wrapping_add(1);
     }
 
     pub fn autoscale(&mut self) {
@@ -1023,6 +1027,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         _cursor: mouse::Cursor,
     ) -> Option<shader::Action<PlotUiMessage>> {
         let mut needs_redraw = false;
+        let mut clear_tooltip = false;
 
         if self.data.version != state.src_version {
             // todo: something less dumb
@@ -1073,6 +1078,31 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             state.markers_version = state.markers_version.wrapping_add(1);
             state.lines_version = state.lines_version.wrapping_add(1);
 
+            // Invalidate hover cache when data changes so tooltips update
+            state.last_hover_cache = None;
+            state.hovered_world = None;
+            state.hover_version = state.hover_version.wrapping_add(1);
+            clear_tooltip = true;
+
+            // Submit a picking request if we have a cursor position and hover is enabled
+            if state.hover_enabled && !state.pan.active && !state.selection.active {
+                let inside = state.cursor_position.x >= 0.0
+                    && state.cursor_position.y >= 0.0
+                    && state.cursor_position.x <= state.bounds.width
+                    && state.cursor_position.y <= state.bounds.height;
+                if inside {
+                    picking::submit_request(
+                        self.instance_id,
+                        crate::picking::PickRequest {
+                            cursor_x: state.cursor_position.x,
+                            cursor_y: state.cursor_position.y,
+                            radius_px: state.hover_radius_px,
+                            seq: state.hover_version.wrapping_add(1),
+                        },
+                    );
+                }
+            }
+
             // Autoscale on first update or always if autoscale_on_updates is enabled.
             if state.src_version == 0 || self.autoscale_on_updates {
                 state.autoscale();
@@ -1115,7 +1145,6 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         state.hover_radius_px = self.hover_radius_px;
         // Sync crosshairs configuration
         state.crosshairs_enabled = self.crosshairs_enabled;
-        let mut clear_tooltip = false;
         let mut clear_cursor_position = false;
         let mut publish_tooltip: Option<TooltipUiPayload> = None;
         let mut publish_cursor: Option<CursorPositionUiPayload> = None;
@@ -1178,63 +1207,62 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                 if before.is_some() && state.last_hover_cache.is_none() {
                     clear_tooltip = true;
                 }
-                // If hovered point changed, compute formatted text and fire callback
-                if state.hover_enabled {
-                    // Try to consume a GPU pick result for this instance
-                    if let Some(res) = picking::take_result(self.instance_id) {
-                        match res.hit {
-                            Some(hit) => {
-                                // Update hover cache and overlay
-                                let world_v = DVec2::new(hit.world[0], hit.world[1]);
-                                state.hovered_world = Some(hit.world);
-                                state.hovered_size_px = hit.size_px;
-                                let ctx = TooltipContext {
-                                    series_label: hit.series_label.clone(),
-                                    point_index: hit.point_index,
-                                    x: hit.world[0],
-                                    y: hit.world[1],
-                                };
-                                let text = if let Some(p) = &self.tooltip_provider {
-                                    (p)(&ctx)
-                                } else {
-                                    // Default: simple coordinates with compact formatting
-                                    format!("{:.4}, {:.4}", ctx.x, ctx.y)
-                                };
-                                let hover_hit = HoverHit {
-                                    series_label: hit.series_label,
-                                    point_index: hit.point_index,
-                                    _world: world_v,
-                                    _size_px: hit.size_px,
-                                };
-                                state.last_hover_cache = Some(hover_hit);
-                                state.hover_version = state.hover_version.wrapping_add(1);
-                                publish_tooltip = Some(TooltipUiPayload {
-                                    x: state.cursor_position.x,
-                                    y: state.cursor_position.y,
-                                    text,
-                                });
-                                needs_redraw = true;
-                            }
-                            None => {
-                                if before.is_some() {
-                                    state.hovered_world = None;
-                                    state.last_hover_cache = None;
-                                    state.hover_version = state.hover_version.wrapping_add(1);
-                                    clear_tooltip = true;
-                                    needs_redraw = true;
-                                }
-                            }
-                        }
-                    }
-                } else if before.is_some() {
-                    clear_tooltip = true;
-                }
             }
             // CursorLeft is handled inside the Mouse(...) branch above via state.handle_mouse_event
             iced::Event::Keyboard(keyboard_event) => {
                 needs_redraw |= state.handle_keyboard_event(keyboard_event.clone());
             }
             _ => {}
+        }
+
+        // Process picking results after event handling (works for both mouse events and data updates)
+        if state.hover_enabled {
+            // Try to consume a GPU pick result for this instance
+            if let Some(res) = picking::take_result(self.instance_id) {
+                match res.hit {
+                    Some(hit) => {
+                        // Update hover cache and overlay
+                        let world_v = DVec2::new(hit.world[0], hit.world[1]);
+                        state.hovered_world = Some(hit.world);
+                        state.hovered_size_px = hit.size_px;
+                        let ctx = TooltipContext {
+                            series_label: hit.series_label.clone(),
+                            point_index: hit.point_index,
+                            x: hit.world[0],
+                            y: hit.world[1],
+                        };
+                        let text = if let Some(p) = &self.tooltip_provider {
+                            (p)(&ctx)
+                        } else {
+                            // Default: simple coordinates with compact formatting
+                            format!("{:.4}, {:.4}", ctx.x, ctx.y)
+                        };
+                        let hover_hit = HoverHit {
+                            series_label: hit.series_label,
+                            point_index: hit.point_index,
+                            _world: world_v,
+                            _size_px: hit.size_px,
+                        };
+                        state.last_hover_cache = Some(hover_hit);
+                        state.hover_version = state.hover_version.wrapping_add(1);
+                        publish_tooltip = Some(TooltipUiPayload {
+                            x: state.cursor_position.x,
+                            y: state.cursor_position.y,
+                            text,
+                        });
+                        needs_redraw = true;
+                    }
+                    None => {
+                        if state.last_hover_cache.is_some() {
+                            state.hovered_world = None;
+                            state.last_hover_cache = None;
+                            state.hover_version = state.hover_version.wrapping_add(1);
+                            clear_tooltip = true;
+                            needs_redraw = true;
+                        }
+                    }
+                }
+            }
         }
 
         let needs_publish = publish_tooltip.is_some()
