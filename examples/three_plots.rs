@@ -1,11 +1,10 @@
 //! Show multiple plot widgets in a single application.
-//! The first plot demonstrates axis limits using with_x_lim() and with_y_lim().
 //! All three plots have their x-axes linked, so panning or zooming the x-axis
 //! on one plot will synchronize the others.
-use fastplot::PlotWidgetBuilder;
-use fastplot::message::PlotUiMessage;
-use fastplot::widget::PlotWidget;
-use fastplot::{AxisLink, Color, LineStyle, MarkerStyle, Series};
+use iced_plot::PlotWidgetBuilder;
+use iced_plot::message::PlotUiMessage;
+use iced_plot::plot_widget::PlotWidget;
+use iced_plot::{AxisLink, Color, LineStyle, MarkerStyle, Series};
 
 use iced::Element;
 use iced::widget::column;
@@ -49,14 +48,13 @@ impl App {
         // Create a shared x-axis link so all three plots pan/zoom together on the x-axis
         let x_link = AxisLink::new();
 
-        // Line-only series (no markers)
-        let n = 100;
-        let mut positions = Vec::with_capacity(n);
-        for i in 0..n {
-            let x = i as f64 * 0.1;
-            let y = (x * 0.5).sin();
-            positions.push([x, y]);
-        }
+        let positions = (0..100)
+            .map(|i| {
+                let x = i as f64 * 0.1;
+                let y = (x * 0.5).sin();
+                [x, y]
+            })
+            .collect();
         let s1 = Series::line_only(positions, LineStyle::Solid).with_label("sine_line_only");
 
         let w1 = PlotWidgetBuilder::new()
@@ -68,13 +66,13 @@ impl App {
             .build()
             .unwrap();
 
-        // Marker-only series (no lines)
-        let mut positions = Vec::with_capacity(50);
-        for i in 0..50 {
-            let x = i as f64 * 0.2;
-            let y = (x * 0.3).cos() + 0.5;
-            positions.push([x, y]);
-        }
+        let positions = (0..50)
+            .map(|i| {
+                let x = i as f64 * 0.2;
+                let y = (x * 0.3).cos() + 0.5;
+                [x, y]
+            })
+            .collect();
         let s2 = Series::markers_only(positions, MarkerStyle::circle(6.0))
             .with_label("cosine_markers_only")
             .with_color(Color::from_rgb(0.9, 0.3, 0.3));
@@ -86,13 +84,13 @@ impl App {
             .build()
             .unwrap();
 
-        // Both markers and lines
-        let mut positions = Vec::with_capacity(30);
-        for i in 0..30 {
-            let x = i as f64 * 0.3;
-            let y = (x * 0.8).sin() - 0.5;
-            positions.push([x, y]);
-        }
+        let positions = (0..30)
+            .map(|i| {
+                let x = i as f64 * 0.3;
+                let y = (x * 0.8).sin() - 0.5;
+                [x, y]
+            })
+            .collect();
         let s3 = Series::markers_and_line(
             positions,
             MarkerStyle::square(4.0),

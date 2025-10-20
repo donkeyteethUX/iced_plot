@@ -1,5 +1,4 @@
-use crate::Color;
-use crate::point::MarkerType;
+use crate::{Color, point::MarkerType};
 
 /// Line styling options for series connections.
 ///

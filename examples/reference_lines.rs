@@ -1,7 +1,7 @@
 //! Example demonstrating vertical and horizontal reference lines.
-use fastplot::message::PlotUiMessage;
-use fastplot::widget::PlotWidget;
-use fastplot::{Color, HLine, LineStyle, MarkerStyle, PlotWidgetBuilder, Series, VLine};
+use iced_plot::message::PlotUiMessage;
+use iced_plot::plot_widget::PlotWidget;
+use iced_plot::{Color, HLine, LineStyle, MarkerStyle, PlotWidgetBuilder, Series, VLine};
 
 use iced::Element;
 use std::f64::consts::{PI, TAU};
@@ -50,7 +50,7 @@ fn new() -> PlotWidget {
         .with_width(2.5)
         .with_style(LineStyle::Dotted { spacing: 5.0 });
 
-    let hline2 = HLine::new(1.0)
+    let hline2 = HLine::new(-1.0)
         .with_label("y=-1.0")
         .with_color(Color::from_rgb(0.3, 0.9, 0.5))
         .with_width(2.5)

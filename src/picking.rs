@@ -7,13 +7,14 @@
 //!   copy a tiny region around the cursor into a staging buffer, map and scan it,
 //!   then publish a PickResult.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::{
+    collections::HashMap,
+    sync::{Mutex, OnceLock},
+};
 
-use iced::wgpu::PollType;
 use iced::wgpu::*;
 
-use crate::widget::{PlotState, SeriesSpan};
+use crate::{Point, plot_state::SeriesSpan};
 
 // ---- Public API to the widget ----
 
@@ -128,7 +129,8 @@ impl PickingPass {
         camera_bgl: &BindGroupLayout,
         marker_vb: Option<&Buffer>,
         marker_instances: u32,
-        state: &PlotState,
+        points: &[Point],
+        series: &[SeriesSpan],
     ) {
         // Take the latest request, if any
         let req = match take_latest_request(instance_id) {
@@ -284,7 +286,7 @@ impl PickingPass {
         buf.unmap();
 
         // Decode and publish
-        let hit = best.and_then(|(id, _)| self.decode_id_to_hit(id, state));
+        let hit = best.and_then(|(id, _)| self.decode_id_to_hit(id, points, series));
         publish_result(instance_id, PickResult { seq: req.seq, hit });
     }
 
@@ -419,7 +421,7 @@ impl PickingPass {
         self.pipeline = Some(pipeline);
     }
 
-    fn decode_id_to_hit(&self, id: u32, state: &PlotState) -> Option<Hit> {
+    fn decode_id_to_hit(&self, id: u32, points: &[Point], series: &[SeriesSpan]) -> Option<Hit> {
         // IDs are 1-based instance index
         let idx = (id as usize).saturating_sub(1);
 
@@ -431,18 +433,18 @@ impl PickingPass {
         let span_idx = span_idx_u32 as usize;
         let local_idx = local_idx_u32 as usize;
 
-        if span_idx >= state.series.len() {
+        if span_idx >= series.len() {
             return None;
         }
 
-        let span: &SeriesSpan = &state.series[span_idx];
+        let span: &SeriesSpan = &series[span_idx];
         let point_idx = span.start + local_idx;
 
-        if point_idx >= state.points.len() {
+        if point_idx >= points.len() {
             return None;
         }
 
-        let pt = &state.points[point_idx];
+        let pt = &points[point_idx];
         let world = [pt.position[0], pt.position[1]];
 
         Some(Hit {

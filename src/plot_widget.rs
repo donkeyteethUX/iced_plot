@@ -4,13 +4,12 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
 };
 
 use glam::{DVec2, Vec2};
 use iced::{
-    Element, Length, Padding, Rectangle, alignment, color, keyboard,
-    mouse::{self, Event, Interaction},
+    Element, Length, Padding, Rectangle, alignment, color,
+    mouse::{self, Interaction},
     wgpu::TextureFormat,
     widget::{
         self, container,
@@ -20,14 +19,13 @@ use iced::{
 };
 
 use crate::{
-    Color, HLine, LineStyle, PlotUiMessage, Series, TooltipContext, VLine, axes_labels,
+    HLine, PlotUiMessage, Series, TooltipContext, VLine, axes_labels,
     axis_link::AxisLink,
-    camera::Camera,
-    legend,
+    legend::{self, LegendEntry},
     message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
     picking,
     plot_renderer::{PlotRenderer, RenderParams},
-    point::Point,
+    plot_state::{HoverHit, PlotState},
     series::SeriesError,
 };
 
@@ -35,57 +33,32 @@ pub type TooltipProvider = Arc<dyn Fn(&TooltipContext) -> String + Send + Sync>;
 pub type CursorProvider = Arc<dyn Fn(f64, f64) -> String + Send + Sync>;
 
 /// A plot widget that renders data series with interactive features.
-///
-/// This is the main widget for creating and rendering plots. Use [`PlotWidgetBuilder`]
-/// for a convenient builder pattern, or construct directly with [`PlotWidget::new`].
-///
-/// Features include:
-/// - Multiple data series with customizable markers and line styles
-/// - Reference lines (horizontal and vertical)
-/// - Interactive panning and zooming
-/// - Hover tooltips with custom formatting
-/// - Series visibility toggling via legend
-/// - Crosshair overlay
-/// - Cursor position display
-/// - Axis linking for synchronized views
-///
-/// # Example
-///
-/// ```ignore
-/// let mut plot = PlotWidget::new();
-/// let series = Series::markers_and_line(
-///     vec![[0.0, 0.0], [1.0, 1.0], [2.0, 0.5]],
-///     MarkerStyle::circle(Color::from_rgb(0.3, 0.3, 0.9), 5.0),
-///     LineStyle::Solid,
-/// ).with_label("Data");
-/// plot.add_series(series)?;
-/// ```
 pub struct PlotWidget {
-    instance_id: u64,
+    pub(crate) instance_id: u64,
     // Data
-    series: Vec<Series>,
-    vlines: Vec<VLine>,
-    hlines: Vec<HLine>,
-    hidden_labels: HashSet<String>,
-    data_version: u64,
+    pub(crate) series: Vec<Series>,
+    pub(crate) vlines: Vec<VLine>,
+    pub(crate) hlines: Vec<HLine>,
+    pub(crate) hidden_labels: HashSet<String>,
+    pub(crate) data_version: u64,
     // Configuration
-    autoscale_on_updates: bool,
-    legend_collapsed: bool,
-    x_axis_label: String,
-    y_axis_label: String,
-    x_lim: Option<(f64, f64)>,
-    y_lim: Option<(f64, f64)>,
-    x_axis_link: Option<AxisLink>,
-    y_axis_link: Option<AxisLink>,
-    tooltips_enabled: bool,
-    hover_radius_px: f32,
-    tooltip_provider: Option<TooltipProvider>,
-    cursor_overlay: bool,
-    cursor_provider: Option<CursorProvider>,
-    crosshairs_enabled: bool,
+    pub(crate) autoscale_on_updates: bool,
+    pub(crate) legend_collapsed: bool,
+    pub(crate) x_axis_label: String,
+    pub(crate) y_axis_label: String,
+    pub(crate) x_lim: Option<(f64, f64)>,
+    pub(crate) y_lim: Option<(f64, f64)>,
+    pub(crate) x_axis_link: Option<AxisLink>,
+    pub(crate) y_axis_link: Option<AxisLink>,
+    pub(crate) tooltips_enabled: bool,
+    pub(crate) hover_radius_px: f32,
+    pub(crate) tooltip_provider: Option<TooltipProvider>,
+    pub(crate) cursor_overlay: bool,
+    pub(crate) cursor_provider: Option<CursorProvider>,
+    pub(crate) crosshairs_enabled: bool,
     // UI state
-    tooltip_ui: Option<TooltipUiPayload>,
-    cursor_ui: Option<CursorPositionUiPayload>,
+    pub(crate) tooltip_ui: Option<TooltipUiPayload>,
+    pub(crate) cursor_ui: Option<CursorPositionUiPayload>,
 }
 
 impl Default for PlotWidget {
@@ -123,8 +96,8 @@ impl PlotWidget {
         }
     }
 
+    /// Add a data series to the plot.
     pub fn add_series(&mut self, item: Series) -> Result<(), SeriesError> {
-        // Validate series invariants
         item.validate()?;
 
         // Enforce unique non-empty labels
@@ -143,6 +116,7 @@ impl PlotWidget {
         Ok(())
     }
 
+    /// Remove a data series from the plot by its label.
     pub fn remove_series(&mut self, label: &str) -> bool {
         if let Some(idx) = self
             .series
@@ -159,7 +133,7 @@ impl PlotWidget {
 
     /// Add a vertical reference line to the plot.
     pub fn add_vline(&mut self, vline: VLine) -> Result<(), SeriesError> {
-        // Enforce unique non-empty labels
+        // Enforce unique (or empty) labels
         if let Some(label) = vline.label.as_deref()
             && !label.is_empty()
         {
@@ -231,10 +205,12 @@ impl PlotWidget {
         Ok(())
     }
 
+    /// Set the x-axis label.
     pub fn set_x_axis_label(&mut self, label: impl Into<String>) {
         self.x_axis_label = label.into();
     }
 
+    /// Set the y-axis label.
     pub fn set_y_axis_label(&mut self, label: impl Into<String>) {
         self.y_axis_label = label.into();
     }
@@ -272,7 +248,7 @@ impl PlotWidget {
                 self.legend_collapsed = !self.legend_collapsed;
             }
             PlotUiMessage::ToggleSeriesVisibility(label) => {
-                self.toggle_series_visibility(&label);
+                self.toggle_visibility(&label);
             }
             PlotUiMessage::RenderUpdate(payload) => {
                 if payload.clear_tooltip {
@@ -289,33 +265,6 @@ impl PlotWidget {
                 }
             }
         }
-    }
-
-    fn toggle_series_visibility(&mut self, label: &str) {
-        // Check if it's a series, vline, or hline
-        let exists = self
-            .series
-            .iter()
-            .any(|s| s.label.as_deref() == Some(label))
-            || self
-                .vlines
-                .iter()
-                .any(|v| v.label.as_deref() == Some(label))
-            || self
-                .hlines
-                .iter()
-                .any(|h| h.label.as_deref() == Some(label));
-
-        if !exists {
-            println!("Toggle series visibility: series not found: {label}");
-            return;
-        }
-        if self.hidden_labels.contains(label) {
-            self.hidden_labels.remove(label);
-        } else {
-            self.hidden_labels.insert(label.to_string());
-        }
-        self.data_version += 1;
     }
 
     /// View the plot widget.
@@ -527,477 +476,40 @@ impl PlotWidget {
                 .into(),
         )
     }
+
+    fn toggle_visibility(&mut self, label: &str) {
+        let exists = self
+            .series
+            .iter()
+            .any(|s| s.label.as_deref() == Some(label))
+            || self
+                .vlines
+                .iter()
+                .any(|v| v.label.as_deref() == Some(label))
+            || self
+                .hlines
+                .iter()
+                .any(|h| h.label.as_deref() == Some(label));
+
+        if !exists {
+            println!("Toggle visibility: series not found: {label}");
+            return;
+        }
+
+        if self.hidden_labels.contains(label) {
+            self.hidden_labels.remove(label);
+        } else {
+            self.hidden_labels.insert(label.to_string());
+        }
+        self.data_version += 1;
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[doc(hidden)]
-/// PlotState is a projection of the widget configuration, data, and interaction state.
-/// It holds the GPU-ready data needed for rendering the plot.
-///
-/// Not part of the public API, but pub visibility is required for the shader implementation.
-pub struct PlotState {
-    pub(crate) src_version: u64, // version of PlotData last synced
-    // Shared data: cheap O(1) clone when producing a Primitive
-    pub(crate) points: Arc<[Point]>,      // vertex/instance data
-    pub(crate) series: Arc<[SeriesSpan]>, // spans describing logical series
-    pub(crate) vlines: Arc<[VLine]>,      // vertical reference lines
-    pub(crate) hlines: Arc<[HLine]>,      // horizontal reference lines
-    data_min: Option<DVec2>,
-    data_max: Option<DVec2>,
-    // Axis limits
-    x_lim: Option<(f64, f64)>,
-    y_lim: Option<(f64, f64)>,
-    // Axis links for synchronization
-    x_axis_link: Option<AxisLink>,
-    y_axis_link: Option<AxisLink>,
-    x_link_version: u64,
-    y_link_version: u64,
-    // UI / camera
-    pub(crate) camera: Camera,
-    bounds: Rectangle,
-    // Interaction state
-    cursor_position: Vec2,
-    last_click_time: Option<Instant>,
-    legend_collapsed: bool,
-    modifiers: keyboard::Modifiers,
-    pub(crate) selection: SelectionState,
-    pan: PanState,
-    // Version counters
-    pub(crate) markers_version: u64,
-    pub(crate) lines_version: u64,
-    // Hover/picking internals
-    hover_enabled: bool,
-    hover_radius_px: f32,
-    last_hover_cache: Option<HoverHit>,
-    // For renderer: hovered marker world coords and pixel size
-    pub(crate) hovered_world: Option<[f64; 2]>,
-    pub(crate) hovered_size_px: f32,
-    hover_version: u64,
-    // Crosshairs
-    pub(crate) crosshairs_enabled: bool,
-    pub(crate) crosshairs_position: Vec2,
-}
-
-impl Default for PlotState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PlotState {
-    /// Creates a new empty plot widget with default viewport size
-    pub fn new() -> Self {
-        Self {
-            src_version: 0,
-            points: Arc::new([]),
-            series: Arc::new([]),
-            vlines: Arc::new([]),
-            hlines: Arc::new([]),
-            data_min: None,
-            data_max: None,
-            x_lim: None,
-            y_lim: None,
-            x_axis_link: None,
-            y_axis_link: None,
-            x_link_version: 0,
-            y_link_version: 0,
-            camera: Camera::new(1000, 600),
-            bounds: Rectangle::default(),
-            cursor_position: Vec2::ZERO,
-            last_click_time: None,
-            legend_collapsed: false,
-            modifiers: keyboard::Modifiers::default(),
-            selection: SelectionState::default(),
-            pan: PanState::default(),
-            markers_version: 1,
-            lines_version: 1,
-            hover_enabled: true,
-            hover_radius_px: 8.0,
-            last_hover_cache: None,
-            hovered_world: None,
-            hovered_size_px: 0.0,
-            hover_version: 0,
-            crosshairs_enabled: false,
-            crosshairs_position: Vec2::ZERO,
-        }
-    }
-
-    /// Rebuild GPU data from widget configuration
-    fn rebuild_from_widget(&mut self, widget: &PlotWidget) {
-        let mut points = Vec::new();
-        let mut series_spans = Vec::new();
-        let mut data_min: Option<DVec2> = None;
-        let mut data_max: Option<DVec2> = None;
-
-        // Process each series
-        for series in &widget.series {
-            // Skip hidden series
-            if let Some(label) = &series.label
-                && widget.hidden_labels.contains(label)
-            {
-                continue;
-            }
-
-            if series.positions.is_empty() {
-                continue;
-            }
-
-            let start = points.len();
-
-            // Add points and track bounds
-            for &pos in &series.positions {
-                let p = DVec2::new(pos[0], pos[1]);
-                data_min = Some(data_min.map_or(p, |m| m.min(p)));
-                data_max = Some(data_max.map_or(p, |m| m.max(p)));
-
-                // Only create points if we have markers OR lines (lines need points for geometry)
-                if series.marker_style.is_some() || series.line_style.is_some() {
-                    let size = series
-                        .marker_style
-                        .as_ref()
-                        .map(|ms| ms.size)
-                        .unwrap_or(1.0);
-                    points.push(Point {
-                        position: pos,
-                        size,
-                    });
-                }
-            }
-
-            let (color, marker) = series
-                .marker_style
-                .as_ref()
-                .map(|m| (m.marker_type as u32,))
-                .map(|(marker,)| (series.color, marker))
-                .unwrap_or((series.color, u32::MAX));
-
-            series_spans.push(SeriesSpan {
-                label: series.label.clone().unwrap_or_default(),
-                start,
-                len: points.len() - start,
-                line_style: series.line_style,
-                color,
-                marker,
-            });
-        }
-
-        // Filter visible reference lines
-        let vlines: Vec<_> = widget
-            .vlines
-            .iter()
-            .filter(|v| {
-                !v.label
-                    .as_ref()
-                    .is_some_and(|l| widget.hidden_labels.contains(l))
-            })
-            .cloned()
-            .collect();
-
-        let hlines: Vec<_> = widget
-            .hlines
-            .iter()
-            .filter(|h| {
-                !h.label
-                    .as_ref()
-                    .is_some_and(|l| widget.hidden_labels.contains(l))
-            })
-            .cloned()
-            .collect();
-
-        self.points = points.into();
-        self.series = series_spans.into();
-        self.vlines = vlines.into();
-        self.hlines = hlines.into();
-        self.data_min = data_min;
-        self.data_max = data_max;
-
-        // Force GPU buffers to rebuild
-        self.markers_version = self.markers_version.wrapping_add(1);
-        self.lines_version = self.lines_version.wrapping_add(1);
-    }
-
-    fn autoscale(&mut self) {
-        if let (Some(data_min), Some(data_max)) = (self.data_min, self.data_max) {
-            // Use user-specified limits if available, otherwise use data bounds
-            let mut min_v = data_min;
-            let mut max_v = data_max;
-
-            if let Some((x_min, x_max)) = self.x_lim {
-                min_v.x = x_min;
-                max_v.x = x_max;
-            }
-            if let Some((y_min, y_max)) = self.y_lim {
-                min_v.y = y_min;
-                max_v.y = y_max;
-            }
-
-            self.camera.set_bounds(min_v, max_v, 0.05);
-            self.update_axis_links();
-        }
-    }
-
-    pub fn handle_mouse_event(&mut self, event: Event) -> bool {
-        self.process_input(event)
-    }
-
-    /// Update axis links with current camera state
-    fn update_axis_links(&mut self) {
-        if let Some(ref link) = self.x_axis_link {
-            link.set(self.camera.position.x, self.camera.half_extents.x);
-            self.x_link_version = link.version();
-        }
-        if let Some(ref link) = self.y_axis_link {
-            link.set(self.camera.position.y, self.camera.half_extents.y);
-            self.y_link_version = link.version();
-        }
-    }
-
-    pub fn process_input(&mut self, ev: Event) -> bool {
-        const SELECTION_DELTA_THRESHOLD: f32 = 4.0; // pixels
-        const SELECTION_PADDING: f32 = 0.02; // fractional padding in world units relative to selection size
-        let mut needs_redraw = false;
-
-        // Only request redraws when something actually changes or when we need
-        // to service a picking request for a new cursor position.
-
-        let viewport = Vec2::new(self.bounds.width, self.bounds.height);
-
-        match ev {
-            Event::CursorMoved { position } => {
-                // Check if the cursor is inside this widget's bounds in window space
-                let inside = position.x >= self.bounds.x
-                    && position.x <= (self.bounds.x + self.bounds.width)
-                    && position.y >= self.bounds.y
-                    && position.y <= (self.bounds.y + self.bounds.height);
-
-                // Store cursor in local coordinates (relative to bounds)
-                self.cursor_position =
-                    Vec2::new(position.x - self.bounds.x, position.y - self.bounds.y);
-                // Update crosshairs position when enabled
-                self.crosshairs_position = self.cursor_position;
-
-                // Handle selection (right click drag)
-                if self.selection.active {
-                    self.selection.end = self.cursor_position;
-                    self.selection.moved = true;
-                    needs_redraw = true;
-                }
-
-                // Handle panning (left click drag)
-                if self.pan.active {
-                    // Convert screen positions to render coordinates (without offset)
-                    let render_current = self.camera.screen_to_render(
-                        DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
-                        DVec2::new(viewport.x as f64, viewport.y as f64),
-                    );
-                    let render_start = self.camera.screen_to_render(
-                        DVec2::new(
-                            self.pan.start_cursor.x as f64,
-                            self.pan.start_cursor.y as f64,
-                        ),
-                        DVec2::new(viewport.x as f64, viewport.y as f64),
-                    );
-                    let render_delta = render_current - render_start;
-
-                    // Update camera position by applying the render space delta
-                    self.camera.position = self.pan.start_camera_center - render_delta;
-                    self.update_axis_links();
-                    needs_redraw = true;
-                }
-
-                // Hover picking (only when not panning or selecting)
-                if !self.pan.active && !self.selection.active && self.hover_enabled {
-                    if !inside {
-                        // If cursor leaves this widget, clear hover state for this widget only
-                        if self.last_hover_cache.is_some() || self.hovered_world.is_some() {
-                            self.last_hover_cache = None;
-                            self.hovered_world = None;
-                            self.hover_version = self.hover_version.wrapping_add(1);
-                            // Redraw once to clear hover halo overlay
-                            needs_redraw = true;
-                        }
-                        return needs_redraw;
-                    } else {
-                        // Inside bounds and hover enabled: request a redraw so the renderer
-                        // can service the GPU picking request for this cursor position.
-                        needs_redraw = true;
-                    }
-                }
-            }
-            Event::CursorLeft => {
-                // Clear hover state on leave and request a redraw to clear hover halo
-                if self.last_hover_cache.is_some() || self.hovered_world.is_some() {
-                    self.last_hover_cache = None;
-                    self.hovered_world = None;
-                    self.hover_version = self.hover_version.wrapping_add(1);
-                    needs_redraw = true;
-                }
-            }
-            Event::ButtonPressed(mouse::Button::Left) => {
-                // Only start panning if the press started inside our bounds
-                // (Drags will continue even if the cursor leaves later)
-                let inside = self.cursor_position.x >= 0.0
-                    && self.cursor_position.y >= 0.0
-                    && self.cursor_position.x <= self.bounds.width
-                    && self.cursor_position.y <= self.bounds.height;
-                if !inside {
-                    return needs_redraw;
-                }
-                let now = Instant::now();
-                let double = if let Some(prev) = self.last_click_time {
-                    now.duration_since(prev).as_millis() < 350
-                } else {
-                    false
-                };
-                self.last_click_time = Some(now);
-                if double {
-                    self.autoscale();
-                    needs_redraw = true;
-                } else {
-                    // Start panning
-                    self.pan.active = true;
-                    self.pan.start_cursor = self.cursor_position;
-                    self.pan.start_camera_center = self.camera.position;
-                }
-            }
-            Event::ButtonReleased(mouse::Button::Left) => {
-                if self.pan.active {
-                    self.pan.active = false;
-                }
-            }
-            Event::ButtonPressed(mouse::Button::Right) => {
-                // Only start selection if inside our bounds
-                let inside = self.cursor_position.x >= 0.0
-                    && self.cursor_position.y >= 0.0
-                    && self.cursor_position.x <= self.bounds.width
-                    && self.cursor_position.y <= self.bounds.height;
-                if !inside {
-                    return needs_redraw;
-                }
-                // Start selection
-                self.selection.active = true;
-                self.selection.start = self.cursor_position;
-                self.selection.end = self.cursor_position;
-                self.selection.moved = false;
-                needs_redraw = true;
-            }
-            Event::ButtonReleased(mouse::Button::Right) => {
-                if self.selection.active {
-                    self.selection.end = self.cursor_position;
-                    let delta = self.selection.end - self.selection.start;
-                    let dragged = delta.length() > SELECTION_DELTA_THRESHOLD;
-                    // Perform zoom if user actually dragged a region of non-trivial size
-                    if dragged {
-                        // Convert screen (pixels) to world coords using camera helper
-                        let screen_size = DVec2::new(viewport.x as f64, viewport.y as f64);
-                        let p1 = self.camera.screen_to_world(
-                            DVec2::new(
-                                self.selection.start.x as f64,
-                                self.selection.start.y as f64,
-                            ),
-                            screen_size,
-                        );
-                        let p2 = self.camera.screen_to_world(
-                            DVec2::new(self.selection.end.x as f64, self.selection.end.y as f64),
-                            screen_size,
-                        );
-                        let min_v = DVec2::new(p1.x.min(p2.x), p1.y.min(p2.y));
-                        let max_v = DVec2::new(p1.x.max(p2.x), p1.y.max(p2.y));
-                        // Use set_bounds_preserve_offset to avoid changing the render_offset during zoom
-                        self.camera.set_bounds_preserve_offset(
-                            min_v,
-                            max_v,
-                            SELECTION_PADDING as f64,
-                        );
-                        self.update_axis_links();
-                    }
-                    // Clear selection overlay after release
-                    self.selection.active = false;
-                    self.selection.moved = false;
-                    needs_redraw = true;
-                }
-            }
-            Event::WheelScrolled { delta } => {
-                // Only respond to wheel when cursor is inside our bounds
-                let inside = self.cursor_position.x >= 0.0
-                    && self.cursor_position.y >= 0.0
-                    && self.cursor_position.x <= self.bounds.width
-                    && self.cursor_position.y <= self.bounds.height;
-                if !inside {
-                    return needs_redraw;
-                }
-                // Only zoom when Ctrl is held down
-                if self.modifiers.contains(keyboard::Modifiers::CTRL) {
-                    if let iced::mouse::ScrollDelta::Pixels { y, .. } = delta {
-                        // Apply zoom factor based on scroll direction
-                        let zoom_factor = if y > 0.0 { 0.95 } else { 1.05 };
-
-                        // Convert cursor position to render coordinates before zoom (without offset)
-                        let cursor_render_before = self.camera.screen_to_render(
-                            DVec2::new(
-                                self.cursor_position.x as f64,
-                                self.cursor_position.y as f64,
-                            ),
-                            DVec2::new(viewport.x as f64, viewport.y as f64),
-                        );
-
-                        // Apply zoom by scaling half_extents
-                        self.camera.half_extents *= zoom_factor;
-
-                        // Convert cursor position to render coordinates after zoom
-                        let cursor_render_after = self.camera.screen_to_render(
-                            DVec2::new(
-                                self.cursor_position.x as f64,
-                                self.cursor_position.y as f64,
-                            ),
-                            DVec2::new(viewport.x as f64, viewport.y as f64),
-                        );
-
-                        // Adjust camera position (in render space) to keep cursor at same position
-                        let render_delta = cursor_render_before - cursor_render_after;
-                        // Convert render delta back to world space and adjust camera position
-                        self.camera.position += render_delta;
-
-                        self.update_axis_links();
-                        needs_redraw = true;
-                    }
-                } else if let iced::mouse::ScrollDelta::Pixels { y, x } = delta {
-                    let scroll_ratio = y / x;
-
-                    if scroll_ratio.abs() > 2.0 {
-                        // Mostly vertical scroll
-                        let y_pan_amount = 20.0 * if y > 0.0 { -1.0 } else { 1.0 };
-                        // Convert pan amount from screen space to world space
-                        let world_pan =
-                            y_pan_amount * (self.camera.half_extents.y / (viewport.y as f64 / 2.0));
-                        self.camera.position.y += world_pan;
-                        self.update_axis_links();
-                        needs_redraw = true;
-                    } else if scroll_ratio.abs() < 0.5 {
-                        // Mostly horizontal scroll
-                        let x_pan_amount = 20.0 * if x > 0.0 { -1.0 } else { 1.0 };
-                        // Convert pan amount from screen space to world space
-                        let world_pan_x =
-                            x_pan_amount * (self.camera.half_extents.x / (viewport.x as f64 / 2.0));
-                        self.camera.position.x -= world_pan_x;
-                        self.update_axis_links();
-                        needs_redraw = true;
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        // camera uniform is handled in renderer per frame
-        needs_redraw
-    }
-
-    pub fn handle_keyboard_event(&mut self, event: keyboard::Event) -> bool {
-        if let keyboard::Event::ModifiersChanged(modifiers) = event {
-            self.modifiers = modifiers;
-        }
-        false // No need to redraw
-    }
+pub struct Primitive {
+    instance_id: u64,
+    plot_widget: PlotState,
 }
 
 impl shader::Program<PlotUiMessage> for PlotWidget {
@@ -1010,7 +522,10 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         _cursor: mouse::Cursor,
         _bounds: Rectangle,
     ) -> Self::Primitive {
-        Primitive::new(self.instance_id, state.clone())
+        Primitive {
+            instance_id: self.instance_id,
+            plot_widget: state.clone(),
+        }
     }
 
     fn update(
@@ -1089,14 +604,14 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         }
 
         state.bounds = bounds;
-        // Sync hover configuration from widget to internal state
         state.hover_enabled = self.tooltips_enabled;
         state.hover_radius_px = self.hover_radius_px;
-        // Sync crosshairs configuration
         state.crosshairs_enabled = self.crosshairs_enabled;
+
         let mut clear_cursor_position = false;
         let mut publish_tooltip: Option<TooltipUiPayload> = None;
         let mut publish_cursor: Option<CursorPositionUiPayload> = None;
+
         // viewport size (screen pixels for this widget)
         let viewport = Vec2::new(state.bounds.width, state.bounds.height);
 
@@ -1183,7 +698,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                         let text = if let Some(p) = &self.tooltip_provider {
                             (p)(&ctx)
                         } else {
-                            // Default: simple coordinates with compact formatting
+                            // Default: just show coordinates
                             format!("{:.4}, {:.4}", ctx.x, ctx.y)
                         };
                         let hover_hit = HoverHit {
@@ -1252,25 +767,10 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
     }
 }
 
+#[doc(hidden)]
 pub struct PlotRendererState {
     renderers: HashMap<u64, PlotRenderer>,
     format: TextureFormat,
-}
-
-#[derive(Debug)]
-#[doc(hidden)]
-pub struct Primitive {
-    instance_id: u64,
-    plot_widget: PlotState,
-}
-
-impl Primitive {
-    pub fn new(instance_id: u64, plot_widget: PlotState) -> Self {
-        Self {
-            instance_id,
-            plot_widget,
-        }
-    }
 }
 
 impl shader::Primitive for Primitive {
@@ -1296,12 +796,12 @@ impl shader::Primitive for Primitive {
         bounds: &Rectangle,
         viewport: &Viewport,
     ) {
-        // Get or create renderer for this widget instance
+        // Get or create renderer for this widget instance.
         let renderer = renderer_state
             .renderers
             .entry(self.instance_id)
             .or_insert_with(|| PlotRenderer::new(device, queue, renderer_state.format));
-        // Unified, single-call preparation of the renderer per frame
+
         renderer.prepare_frame(device, queue, viewport, bounds, &self.plot_widget);
         renderer.service_picking(self.instance_id, device, queue, &self.plot_widget);
     }
@@ -1320,60 +820,6 @@ impl shader::Primitive for Primitive {
                 bounds: *clip_bounds,
             });
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-/// An entry in the plot legend.
-pub(crate) struct LegendEntry {
-    /// Label of the series or line.
-    pub label: String,
-    /// Color of the series or line.
-    pub color: Color,
-    /// Marker type ID (u32::MAX if no marker).
-    pub _marker: u32,
-    /// Line style if present.
-    pub _line_style: Option<LineStyle>,
-    /// Whether this entry is currently hidden.
-    pub hidden: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct SeriesSpan {
-    pub label: String,
-    pub start: usize,
-    pub len: usize,
-    pub line_style: Option<LineStyle>,
-    pub color: Color,
-    pub marker: u32,
-}
-
-#[derive(Default, Debug, Clone)]
-pub struct SelectionState {
-    pub active: bool,
-    pub start: Vec2,
-    pub end: Vec2,
-    pub moved: bool,
-}
-
-#[derive(Default, Debug, Clone)]
-pub struct PanState {
-    pub active: bool,
-    pub start_cursor: Vec2,
-    pub start_camera_center: DVec2,
-}
-
-#[derive(Debug, Clone)]
-struct HoverHit {
-    series_label: String,
-    point_index: usize,
-    _world: DVec2,
-    _size_px: f32,
-}
-
-impl HoverHit {
-    fn key(&self) -> (String, usize) {
-        (self.series_label.clone(), self.point_index)
     }
 }
 

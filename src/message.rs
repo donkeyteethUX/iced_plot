@@ -1,8 +1,7 @@
 #[derive(Debug, Clone)]
 /// Messages sent by the plot widget to the application.
 ///
-/// These messages are generated in response to user interactions with the plot,
-/// such as toggling series visibility or requesting re-rendering.
+/// These messages are generated in response to user interactions with the plot.
 pub enum PlotUiMessage {
     /// Toggle the legend visibility.
     ToggleLegend,
@@ -28,7 +27,6 @@ pub struct TooltipContext {
 }
 
 #[derive(Debug, Clone)]
-#[doc(hidden)]
 pub struct TooltipUiPayload {
     pub x: f32,
     pub y: f32,
@@ -37,7 +35,6 @@ pub struct TooltipUiPayload {
 
 /// Payload for the small cursor-position overlay shown in the corner.
 #[derive(Debug, Clone)]
-#[doc(hidden)]
 pub struct CursorPositionUiPayload {
     /// World/data-space coordinates for the cursor
     pub x: f64,

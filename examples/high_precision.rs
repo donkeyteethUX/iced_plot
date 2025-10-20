@@ -2,10 +2,10 @@
 //! double-precision camera and offsetting coordinates to keep them near zero when rendering.
 use std::time::Duration;
 
-use fastplot::PlotWidgetBuilder;
-use fastplot::message::PlotUiMessage;
-use fastplot::widget::PlotWidget;
-use fastplot::{Color, LineStyle, MarkerStyle, Series, TooltipContext};
+use iced_plot::PlotWidgetBuilder;
+use iced_plot::message::PlotUiMessage;
+use iced_plot::plot_widget::PlotWidget;
+use iced_plot::{Color, LineStyle, MarkerStyle, Series, TooltipContext};
 
 use iced::Element;
 

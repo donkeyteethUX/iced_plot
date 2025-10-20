@@ -1,14 +1,25 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{Container, button, column, container, row, text};
-use iced::{Border, Element, Length, color};
+use iced::{Border, Color, Element, Length, color};
 
-use crate::{message::PlotUiMessage, widget::PlotWidget};
+use crate::LineStyle;
+use crate::{message::PlotUiMessage, plot_widget::PlotWidget};
 
 const LEGEND_PADDING: f32 = 8.0;
 const ENTRY_SPACING: f32 = 6.0;
 const COLUMN_SPACING: f32 = 4.0;
 const LABEL_TEXT_SIZE: f32 = 14.0;
 const SWATCH_SIZE: f32 = 14.0;
+
+#[derive(Debug, Clone)]
+/// An entry in the plot legend.
+pub(crate) struct LegendEntry {
+    pub(crate) label: String,
+    pub(crate) color: Color,
+    pub(crate) _marker: u32,
+    pub(crate) _line_style: Option<LineStyle>,
+    pub(crate) hidden: bool,
+}
 
 pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Element<'_, PlotUiMessage> {
     let entries = widget.legend_entries();

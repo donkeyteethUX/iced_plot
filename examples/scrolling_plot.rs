@@ -1,9 +1,8 @@
-//! Show a scrolling plot with new data points being added over time.
-//! This uses the `autoscale_on_updates` option.
-use fastplot::Series;
-use fastplot::message::PlotUiMessage;
-use fastplot::widget::PlotWidget;
-use fastplot::{MarkerStyle, PlotWidgetBuilder};
+//! Example of a scrolling plot with new data points being added over time.
+use iced_plot::Series;
+use iced_plot::message::PlotUiMessage;
+use iced_plot::plot_widget::PlotWidget;
+use iced_plot::{MarkerStyle, PlotWidgetBuilder};
 
 use iced::window;
 use iced::{Color, Element};

@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crate::axis_link::AxisLink;
 use crate::message::TooltipContext;
+use crate::plot_widget::{CursorProvider, PlotWidget, TooltipProvider};
 use crate::reference_lines::{HLine, VLine};
 use crate::series::{Series, SeriesError};
-use crate::widget::{CursorProvider, PlotWidget, TooltipProvider};
 
 /// Builder for configuring and constructing a PlotWidget.
 ///

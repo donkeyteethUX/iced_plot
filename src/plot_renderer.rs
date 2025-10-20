@@ -1,7 +1,7 @@
 //! GPU renderer for PlotWidget.
 use crate::LineStyle;
 use crate::picking::PickingPass;
-use crate::{camera::CameraUniform, grid::Grid, widget::PlotState};
+use crate::{camera::CameraUniform, grid::Grid, plot_state::PlotState};
 use iced::widget::shader::Viewport;
 use iced::{Rectangle, wgpu::*};
 
@@ -355,7 +355,8 @@ impl PlotRenderer {
             &self.camera_bgl,
             marker_buffer,
             marker_instances,
-            state,
+            &state.points,
+            &state.series,
         );
     }
 
@@ -1020,7 +1021,7 @@ impl PlotRenderer {
         // Main pass (grid, lines, markers)
         {
             let mut pass = params.encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("fastplot main"),
+                label: Some("iced_plot main"),
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: params.target,
                     resolve_target: None,

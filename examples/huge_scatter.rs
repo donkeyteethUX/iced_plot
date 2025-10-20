@@ -1,8 +1,8 @@
 //! Show rendering and fast object picking with a lot of points.
-use fastplot::Series;
-use fastplot::message::PlotUiMessage;
-use fastplot::widget::PlotWidget;
-use fastplot::{MarkerStyle, MarkerType, PlotWidgetBuilder};
+use iced_plot::Series;
+use iced_plot::message::PlotUiMessage;
+use iced_plot::plot_widget::PlotWidget;
+use iced_plot::{MarkerStyle, MarkerType, PlotWidgetBuilder};
 
 use iced::{Color, Element};
 
@@ -30,25 +30,12 @@ fn view(widget: &PlotWidget) -> Element<'_, Message> {
 }
 
 fn new_scatter() -> PlotWidget {
-    let mut widget = PlotWidgetBuilder::new()
-        .with_tooltip_provider(|ctx| {
-            format!(
-                "point: {}\nx: {:.3}, y: {:.3}",
-                ctx.point_index, ctx.x, ctx.y
-            )
-        })
-        .build()
-        .unwrap();
-
     // Generate 5 million points from 2D Gaussian
     let mut rng = rand::rng();
     let normal = Normal::new(0.0f64, 1.0f64).unwrap();
-    let mut positions = Vec::with_capacity(5_000_000);
-    for _ in 0..5_000_000 {
-        let x = normal.sample(&mut rng);
-        let y = normal.sample(&mut rng);
-        positions.push([x, y]);
-    }
+    let positions = (0..5_000_000)
+        .map(|_| [normal.sample(&mut rng), normal.sample(&mut rng)])
+        .collect::<Vec<[f64; 2]>>();
 
     let series = Series::markers_only(
         positions,
@@ -60,6 +47,14 @@ fn new_scatter() -> PlotWidget {
     .with_label("2d Gaussian scatter - 5M points")
     .with_color(Color::from_rgb(0.2, 0.6, 1.0));
 
-    widget.add_series(series).unwrap();
-    widget
+    PlotWidgetBuilder::new()
+        .with_tooltip_provider(|ctx| {
+            format!(
+                "point: {}\nx: {:.3}, y: {:.3}",
+                ctx.point_index, ctx.x, ctx.y
+            )
+        })
+        .add_series(series.clone())
+        .build()
+        .unwrap()
 }

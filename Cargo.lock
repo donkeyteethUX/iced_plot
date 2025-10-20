@@ -792,17 +792,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fastplot"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "glam 0.30.8",
- "iced",
- "rand",
- "rand_distr",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1244,6 +1233,17 @@ dependencies = [
  "rustc-hash 2.1.1",
  "thiserror 2.0.17",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "iced_plot"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "glam 0.30.8",
+ "iced",
+ "rand",
+ "rand_distr",
 ]
 
 [[package]]

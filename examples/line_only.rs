@@ -1,8 +1,8 @@
 //! Super simple plot with a few series types.
-use fastplot::PlotWidgetBuilder;
-use fastplot::message::PlotUiMessage;
-use fastplot::widget::PlotWidget;
-use fastplot::{Color, LineStyle, MarkerStyle, Series, TooltipContext};
+use iced_plot::PlotWidgetBuilder;
+use iced_plot::message::PlotUiMessage;
+use iced_plot::plot_widget::PlotWidget;
+use iced_plot::{Color, LineStyle, MarkerStyle, Series, TooltipContext};
 
 use iced::Element;
 
@@ -19,35 +19,36 @@ fn view(widget: &PlotWidget) -> Element<'_, PlotUiMessage> {
 }
 
 fn new() -> PlotWidget {
-    // Line-only series (no markers)
-    let mut positions = Vec::new();
-    for i in 0..100 {
-        let x = i as f64 * 0.1;
-        let y = (x * 0.5).sin();
-        positions.push([x, y]);
-    }
+    let positions = (0..100)
+        .map(|i| {
+            let x = i as f64 * 0.1;
+            let y = (x * 0.5).sin();
+            [x, y]
+        })
+        .collect();
+
     let s1 = Series::line_only(positions, LineStyle::Solid)
         .with_label("sine_line_only")
         .with_color(Color::from_rgb(0.3, 0.3, 0.9));
 
-    // Marker-only series (no lines)
-    let mut positions = Vec::new();
-    for i in 0..50 {
-        let x = i as f64 * 0.2;
-        let y = (x * 0.3).cos() + 0.5;
-        positions.push([x, y]);
-    }
+    let positions = (0..50)
+        .map(|i| {
+            let x = i as f64 * 0.2;
+            let y = (x * 0.3).cos() + 0.5;
+            [x, y]
+        })
+        .collect();
     let s2 = Series::markers_only(positions, MarkerStyle::circle(6.0))
         .with_label("cosine_markers_only")
         .with_color(Color::from_rgb(0.9, 0.3, 0.3));
 
-    // Both markers and lines
-    let mut positions = Vec::new();
-    for i in 0..30 {
-        let x = i as f64 * 0.3;
-        let y = (x * 0.8).sin() - 0.5;
-        positions.push([x, y]);
-    }
+    let positions = (0..30)
+        .map(|i| {
+            let x = i as f64 * 0.3;
+            let y = (x * 0.8).sin() - 0.5;
+            [x, y]
+        })
+        .collect();
     let s3 = Series::markers_and_line(
         positions,
         MarkerStyle::square(4.0),
