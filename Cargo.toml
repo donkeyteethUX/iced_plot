@@ -2,6 +2,7 @@
 name    = "iced_plot"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 bytemuck = { version = "1.24", features = ["derive"] }
