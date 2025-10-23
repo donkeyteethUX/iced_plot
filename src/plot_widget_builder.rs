@@ -5,6 +5,7 @@ use crate::message::TooltipContext;
 use crate::plot_widget::{CursorProvider, PlotWidget, TooltipProvider};
 use crate::reference_lines::{HLine, VLine};
 use crate::series::{Series, SeriesError};
+use crate::ticks::{Tick, TickFormatter, TickProducer};
 
 /// Builder for configuring and constructing a PlotWidget.
 ///
@@ -39,6 +40,12 @@ pub struct PlotWidgetBuilder {
     y_lim: Option<(f64, f64)>,
     x_axis_link: Option<AxisLink>,
     y_axis_link: Option<AxisLink>,
+    x_tick_formatter: Option<TickFormatter>,
+    y_tick_formatter: Option<TickFormatter>,
+    x_tick_producer: Option<TickProducer>,
+    y_tick_producer: Option<TickProducer>,
+    enable_x_tick_labels: Option<bool>,
+    enable_y_tick_labels: Option<bool>,
     series: Vec<Series>,
     vlines: Vec<VLine>,
     hlines: Vec<HLine>,
@@ -146,6 +153,55 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Set a custom formatter for the x-axis tick labels.
+    pub fn with_x_tick_formatter<F>(mut self, formatter: F) -> Self
+    where
+        F: Fn(Tick) -> String + Send + Sync + 'static,
+    {
+        self.x_tick_formatter = Some(Arc::new(formatter));
+        self
+    }
+
+    /// Set a custom formatter for the y-axis tick labels.
+    pub fn with_y_tick_formatter<F>(mut self, formatter: F) -> Self
+    where
+        F: Fn(Tick) -> String + Send + Sync + 'static,
+    {
+        self.y_tick_formatter = Some(Arc::new(formatter));
+        self
+    }
+
+    /// Set a custom tick producer for generating tick positions along the x-axis.
+    pub fn with_x_tick_producer<F>(mut self, producer: F) -> Self
+    where
+        F: Fn(f64, f64) -> Vec<Tick> + Send + Sync + 'static,
+    {
+        self.x_tick_producer = Some(Arc::new(producer));
+        self
+    }
+
+    /// Set a custom tick producer for generating tick positions along the y-axis.
+    pub fn with_y_tick_producer<F>(mut self, producer: F) -> Self
+    where
+        F: Fn(f64, f64) -> Vec<Tick> + Send + Sync + 'static,
+    {
+        self.y_tick_producer = Some(Arc::new(producer));
+        self
+    }
+
+    /// Set whether tick labels for the x axis will be shown.
+    pub fn with_x_tick_labels(mut self, enabled: bool) -> Self {
+        self.enable_x_tick_labels = Some(enabled);
+        self
+    }
+
+    /// Set whether tick labels for the y axis will be shown.
+    pub fn with_y_tick_labels(mut self, enabled: bool) -> Self {
+        self.enable_y_tick_labels = Some(enabled);
+        self
+    }
+
+    /// Add a [`Series`] to the plot.
     pub fn add_series(mut self, series: Series) -> Self {
         self.series.push(series);
         self
@@ -211,15 +267,30 @@ impl PlotWidgetBuilder {
         if let Some(link) = self.y_axis_link {
             w.set_y_axis_link(link);
         }
-
+        if let Some(formatter) = self.x_tick_formatter {
+            w.set_x_axis_formatter(formatter);
+        }
+        if let Some(formatter) = self.y_tick_formatter {
+            w.set_y_axis_formatter(formatter);
+        }
+        if self.enable_x_tick_labels == Some(false) {
+            w.x_axis_formatter = None;
+        }
+        if self.enable_y_tick_labels == Some(false) {
+            w.y_axis_formatter = None;
+        }
+        if let Some(producer) = self.x_tick_producer {
+            w.set_x_tick_producer(producer);
+        }
+        if let Some(producer) = self.y_tick_producer {
+            w.set_y_tick_producer(producer);
+        }
         for s in self.series {
             w.add_series(s)?;
         }
-
         for vline in self.vlines {
             w.add_vline(vline)?;
         }
-
         for hline in self.hlines {
             w.add_hline(hline)?;
         }

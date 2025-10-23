@@ -1,7 +1,7 @@
 //! Example demonstrating vertical and horizontal reference lines with
 //! functions that have asymptotes aligned to those lines.
-use iced_plot::message::PlotUiMessage;
-use iced_plot::plot_widget::PlotWidget;
+use iced_plot::PlotUiMessage;
+use iced_plot::PlotWidget;
 use iced_plot::{Color, HLine, LineStyle, MarkerStyle, PlotWidgetBuilder, Series, VLine};
 
 use iced::Element;

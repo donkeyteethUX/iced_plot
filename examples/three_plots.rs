@@ -1,9 +1,9 @@
 //! Show multiple plot widgets in a single application.
 //! All three plots have their x-axes linked, so panning or zooming the x-axis
 //! on one plot will synchronize the others.
+use iced_plot::PlotUiMessage;
+use iced_plot::PlotWidget;
 use iced_plot::PlotWidgetBuilder;
-use iced_plot::message::PlotUiMessage;
-use iced_plot::plot_widget::PlotWidget;
 use iced_plot::{AxisLink, Color, LineStyle, MarkerStyle, Series};
 
 use iced::Element;

@@ -6,9 +6,13 @@ use iced::{
     mouse::{self, Event},
 };
 
-use crate::{AxisLink, HLine, LineStyle, PlotWidget, Point, VLine, camera::Camera};
+use crate::{
+    AxisLink, HLine, LineStyle, PlotWidget, Point, VLine,
+    camera::Camera,
+    ticks::{PositionedTick, TickFormatter, TickProducer},
+};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[doc(hidden)]
 /// PlotState is a projection of the widget configuration, data, and interaction state.
 /// It holds the GPU-ready data needed for rendering the plot.
@@ -33,6 +37,8 @@ pub struct PlotState {
     // UI / camera
     pub(crate) camera: Camera,
     pub(crate) bounds: Rectangle,
+    pub(crate) x_ticks: Vec<PositionedTick>,
+    pub(crate) y_ticks: Vec<PositionedTick>,
     // Interaction state
     pub(crate) cursor_position: Vec2,
     pub(crate) last_click_time: Option<Instant>,
@@ -51,9 +57,10 @@ pub struct PlotState {
     pub(crate) hovered_world: Option<[f64; 2]>,
     pub(crate) hovered_size_px: f32,
     pub(crate) hover_version: u64,
-    // Crosshairs
     pub(crate) crosshairs_enabled: bool,
     pub(crate) crosshairs_position: Vec2,
+    pub(crate) x_axis_formatter: Option<TickFormatter>,
+    pub(crate) y_axis_formatter: Option<TickFormatter>,
 }
 
 impl Default for PlotState {
@@ -90,6 +97,10 @@ impl Default for PlotState {
             hover_version: 0,
             crosshairs_enabled: false,
             crosshairs_position: Vec2::ZERO,
+            x_axis_formatter: None,
+            y_axis_formatter: None,
+            x_ticks: Vec::new(),
+            y_ticks: Vec::new(),
         }
     }
 }
@@ -184,6 +195,10 @@ impl PlotState {
         self.data_min = data_min;
         self.data_max = data_max;
 
+        // Copy formatters
+        self.x_axis_formatter = widget.x_axis_formatter.clone();
+        self.y_axis_formatter = widget.y_axis_formatter.clone();
+
         // Force GPU buffers to rebuild
         self.markers_version = self.markers_version.wrapping_add(1);
         self.lines_version = self.lines_version.wrapping_add(1);
@@ -206,6 +221,62 @@ impl PlotState {
 
             self.camera.set_bounds(min_v, max_v, 0.05);
             self.update_axis_links();
+        }
+    }
+
+    pub(crate) fn update_ticks(
+        &mut self,
+        x_tick_producer: Option<&TickProducer>,
+        y_tick_producer: Option<&TickProducer>,
+    ) {
+        // Calculate x-axis ticks
+        let min_x = self.camera.position.x - self.camera.half_extents.x;
+        let max_x = self.camera.position.x + self.camera.half_extents.x;
+
+        let x_tick_values = match x_tick_producer {
+            Some(producer) => producer(min_x, max_x),
+            None => Vec::new(),
+        };
+
+        self.x_ticks.clear();
+        for tick in x_tick_values {
+            // Convert world position to screen position
+            let ndc_x = (tick.value - self.camera.position.x) / self.camera.half_extents.x;
+            let screen_x = (ndc_x + 1.0) * 0.5 * self.bounds.width as f64;
+
+            if screen_x < 0.0 || screen_x > self.bounds.width as f64 {
+                continue;
+            }
+
+            self.x_ticks.push(PositionedTick {
+                screen_pos: screen_x as f32,
+                tick,
+            });
+        }
+
+        // Calculate y-axis ticks
+        let min_y = self.camera.position.y - self.camera.half_extents.y;
+        let max_y = self.camera.position.y + self.camera.half_extents.y;
+
+        let y_tick_values = match y_tick_producer {
+            Some(producer) => producer(min_y, max_y),
+            None => Vec::new(),
+        };
+
+        self.y_ticks.clear();
+        for tick in y_tick_values {
+            // Convert world position to screen position
+            let ndc_y = (tick.value - self.camera.position.y) / self.camera.half_extents.y;
+            let screen_y = (1.0 - ndc_y) * 0.5 * self.bounds.height as f64;
+
+            if screen_y < 0.0 || screen_y > self.bounds.height as f64 {
+                continue;
+            }
+
+            self.y_ticks.push(PositionedTick {
+                screen_pos: screen_y as f32,
+                tick,
+            });
         }
     }
 

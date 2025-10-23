@@ -1,3 +1,5 @@
+use crate::ticks::PositionedTick;
+
 #[derive(Debug, Clone)]
 /// Messages sent by the plot widget to the application.
 ///
@@ -50,4 +52,6 @@ pub struct PlotRenderUpdate {
     pub tooltip_ui: Option<TooltipUiPayload>,
     pub clear_cursor_position: bool,
     pub cursor_position_ui: Option<CursorPositionUiPayload>,
+    pub x_ticks: Option<Vec<PositionedTick>>,
+    pub y_ticks: Option<Vec<PositionedTick>>,
 }

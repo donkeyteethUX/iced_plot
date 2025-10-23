@@ -1,7 +1,7 @@
 //! Super simple plot with a few series types.
+use iced_plot::PlotUiMessage;
+use iced_plot::PlotWidget;
 use iced_plot::PlotWidgetBuilder;
-use iced_plot::message::PlotUiMessage;
-use iced_plot::plot_widget::PlotWidget;
 use iced_plot::{Color, LineStyle, MarkerStyle, Series, TooltipContext};
 
 use iced::Element;
@@ -72,6 +72,8 @@ fn new() -> PlotWidget {
         .with_cursor_provider(|x, y| format!("Your cursor is at: X: {x:.2}, Y: {y:.2}"))
         .with_y_label("should wrap on word level if too long")
         .with_x_label("an x axis label")
+        .with_x_tick_formatter(|tick| format!("{:.1}s", tick.value))
+        .with_crosshairs(true)
         .build()
         .unwrap()
 }

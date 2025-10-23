@@ -1,7 +1,7 @@
 use glam::DVec2;
 use iced::wgpu::{util::DeviceExt, *};
 
-use crate::camera::Camera;
+use crate::plot_state::PlotState;
 
 pub(crate) struct Grid {
     pipeline: Option<RenderPipeline>,
@@ -9,6 +9,14 @@ pub(crate) struct Grid {
     vertex_count: u32,
     last_center: DVec2,
     last_extents: DVec2,
+}
+
+/// The visual weight of a tick / grid line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickWeight {
+    Major,
+    Minor,
+    SubMinor,
 }
 
 impl Grid {
@@ -83,15 +91,12 @@ impl Grid {
         self.pipeline = Some(pipeline);
     }
 
-    pub(crate) fn update(&mut self, device: &Device, camera: &Camera) {
-        const GRID_TARGET_LINES: f64 = 20.0;
-        const GRID_MAX_LINES: u32 = 1000;
+    pub(crate) fn update(&mut self, device: &Device, state: &PlotState) {
         const GRID_MAJOR_ALPHA: f32 = 0.45;
         const GRID_MINOR_ALPHA: f32 = 0.28;
         const GRID_SUB_MINOR_ALPHA: f32 = 0.10;
-        const GRID_EPSILON: f64 = 1e-6;
-        const GRID_MAJOR_INTERVAL: i64 = 10;
-        const GRID_MINOR_INTERVAL: i64 = 5;
+
+        let camera = &state.camera;
 
         if camera.position == self.last_center && camera.half_extents == self.last_extents {
             return;
@@ -100,53 +105,40 @@ impl Grid {
         self.last_center = camera.position;
         self.last_extents = camera.half_extents;
 
-        let span_x = camera.half_extents.x * 2.0;
-        let span_y = camera.half_extents.y * 2.0;
-        let step_x = nice_step(span_x / GRID_TARGET_LINES);
-        let step_y = nice_step(span_y / GRID_TARGET_LINES);
-        // Calculate bounds in render space (world - offset)
+        // Calculate bounds in render space (world - offset) for line endpoints
         let render_center = camera.effective_position();
         let min_x = render_center.x - camera.half_extents.x;
         let max_x = render_center.x + camera.half_extents.x;
         let min_y = render_center.y - camera.half_extents.y;
         let max_y = render_center.y + camera.half_extents.y;
-        let start_x = (min_x / step_x).floor() * step_x;
-        let start_y = (min_y / step_y).floor() * step_y;
-        let mut verts = Vec::with_capacity((GRID_MAX_LINES * 3) as usize);
+
+        let mut verts = Vec::new();
         let mut count = 0u32;
 
-        // Vertical
-        let mut x = start_x;
-        while x <= max_x + GRID_EPSILON && count < GRID_MAX_LINES {
-            let idx = (x / step_x).round() as i64;
-            let alpha = if idx % GRID_MAJOR_INTERVAL == 0 {
-                GRID_MAJOR_ALPHA
-            } else if idx % GRID_MINOR_INTERVAL == 0 {
-                GRID_MINOR_ALPHA
-            } else {
-                GRID_SUB_MINOR_ALPHA
+        // Build vertical lines from precomputed x ticks
+        for positioned_tick in &state.x_ticks {
+            let render_x = positioned_tick.tick.value - camera.render_offset.x;
+            let alpha = match positioned_tick.tick.line_type {
+                TickWeight::Major => GRID_MAJOR_ALPHA,
+                TickWeight::Minor => GRID_MINOR_ALPHA,
+                TickWeight::SubMinor => GRID_SUB_MINOR_ALPHA,
             };
-            verts.extend_from_slice(&[x as f32, min_y as f32, alpha]);
-            verts.extend_from_slice(&[x as f32, max_y as f32, alpha]);
+            verts.extend_from_slice(&[render_x as f32, min_y as f32, alpha]);
+            verts.extend_from_slice(&[render_x as f32, max_y as f32, alpha]);
             count += 2;
-            x += step_x;
         }
 
-        // Horizontal
-        let mut y = start_y;
-        while y <= max_y + GRID_EPSILON && count < GRID_MAX_LINES {
-            let idx = (y / step_y).round() as i64;
-            let alpha = if idx % GRID_MAJOR_INTERVAL == 0 {
-                GRID_MAJOR_ALPHA
-            } else if idx % GRID_MINOR_INTERVAL == 0 {
-                GRID_MINOR_ALPHA
-            } else {
-                GRID_SUB_MINOR_ALPHA
+        // Build horizontal lines from precomputed y ticks
+        for positioned_tick in &state.y_ticks {
+            let render_y = positioned_tick.tick.value - camera.render_offset.y;
+            let alpha = match positioned_tick.tick.line_type {
+                TickWeight::Major => GRID_MAJOR_ALPHA,
+                TickWeight::Minor => GRID_MINOR_ALPHA,
+                TickWeight::SubMinor => GRID_SUB_MINOR_ALPHA,
             };
-            verts.extend_from_slice(&[min_x as f32, y as f32, alpha]);
-            verts.extend_from_slice(&[max_x as f32, y as f32, alpha]);
+            verts.extend_from_slice(&[min_x as f32, render_y as f32, alpha]);
+            verts.extend_from_slice(&[max_x as f32, render_y as f32, alpha]);
             count += 2;
-            y += step_y;
         }
 
         self.vertex_count = count;
@@ -177,19 +169,4 @@ impl Default for Grid {
             last_extents: DVec2::splat(f64::NAN),
         }
     }
-}
-
-fn nice_step(raw: f64) -> f64 {
-    const NICE_STEP_BASES: [f64; 4] = [1.0, 2.0, 5.0, 10.0];
-    if !raw.is_finite() || raw <= 0.0 {
-        return 1.0;
-    }
-    let exp = raw.log10().floor();
-    let base = 10.0_f64.powf(exp);
-    for &m in &NICE_STEP_BASES {
-        if raw <= m * base {
-            return m * base;
-        }
-    }
-    base * 10.0
 }

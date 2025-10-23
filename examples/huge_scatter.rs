@@ -1,7 +1,7 @@
 //! Show rendering and fast object picking with a lot of points.
+use iced_plot::PlotUiMessage;
+use iced_plot::PlotWidget;
 use iced_plot::Series;
-use iced_plot::message::PlotUiMessage;
-use iced_plot::plot_widget::PlotWidget;
 use iced_plot::{MarkerStyle, MarkerType, PlotWidgetBuilder};
 
 use iced::{Color, Element};

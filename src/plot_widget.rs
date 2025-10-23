@@ -10,6 +10,7 @@ use glam::{DVec2, Vec2};
 use iced::{
     Element, Length, Padding, Rectangle, alignment, color,
     mouse::{self, Interaction},
+    padding,
     wgpu::TextureFormat,
     widget::{
         self, container,
@@ -27,6 +28,7 @@ use crate::{
     plot_renderer::{PlotRenderer, RenderParams},
     plot_state::{HoverHit, PlotState},
     series::SeriesError,
+    ticks::{self, PositionedTick, TickFormatter, TickProducer},
 };
 
 pub type TooltipProvider = Arc<dyn Fn(&TooltipContext) -> String + Send + Sync>;
@@ -56,9 +58,15 @@ pub struct PlotWidget {
     pub(crate) cursor_overlay: bool,
     pub(crate) cursor_provider: Option<CursorProvider>,
     pub(crate) crosshairs_enabled: bool,
+    pub(crate) x_axis_formatter: Option<TickFormatter>,
+    pub(crate) y_axis_formatter: Option<TickFormatter>,
+    pub(crate) x_tick_producer: Option<TickProducer>,
+    pub(crate) y_tick_producer: Option<TickProducer>,
     // UI state
     pub(crate) tooltip_ui: Option<TooltipUiPayload>,
     pub(crate) cursor_ui: Option<CursorPositionUiPayload>,
+    pub(crate) x_ticks: Vec<PositionedTick>,
+    pub(crate) y_ticks: Vec<PositionedTick>,
 }
 
 impl Default for PlotWidget {
@@ -90,7 +98,13 @@ impl PlotWidget {
             tooltip_provider: None,
             cursor_overlay: true,
             cursor_provider: None,
-            crosshairs_enabled: true,
+            crosshairs_enabled: false,
+            x_axis_formatter: Some(Arc::new(ticks::default_formatter)),
+            y_axis_formatter: Some(Arc::new(ticks::default_formatter)),
+            x_tick_producer: Some(Arc::new(ticks::default_tick_producer)),
+            y_tick_producer: Some(Arc::new(ticks::default_tick_producer)),
+            x_ticks: Vec::new(),
+            y_ticks: Vec::new(),
             tooltip_ui: None,
             cursor_ui: None,
         }
@@ -263,6 +277,12 @@ impl PlotWidget {
                 if let Some(c) = payload.cursor_position_ui {
                     self.cursor_ui = Some(c);
                 }
+                if let Some(ticks) = payload.x_ticks {
+                    self.x_ticks = ticks;
+                }
+                if let Some(ticks) = payload.y_ticks {
+                    self.y_ticks = ticks;
+                }
             }
         }
     }
@@ -277,7 +297,7 @@ impl PlotWidget {
             .padding(2.0)
             .style(|_| container::background(color!(20, 20, 20)));
 
-        let mut elements = stack![inner_container, legend::legend(self, self.legend_collapsed),];
+        let mut elements = stack![inner_container];
 
         if let Some(tooltip_overlay) = self.view_tooltip_overlay() {
             elements = elements.push(tooltip_overlay);
@@ -286,6 +306,12 @@ impl PlotWidget {
         if let Some(cursor_overlay) = self.view_cursor_overlay() {
             elements = elements.push(cursor_overlay);
         };
+
+        if let Some(tick_labels) = self.view_tick_labels() {
+            elements = elements.push(tick_labels);
+        };
+
+        elements = elements.push(legend::legend(self, self.legend_collapsed));
 
         widget::container(axes_labels::stack_with_labels(
             elements,
@@ -333,6 +359,30 @@ impl PlotWidget {
     /// Enable or disable crosshairs that follow the cursor position.
     pub fn set_crosshairs(&mut self, enabled: bool) {
         self.crosshairs_enabled = enabled;
+    }
+
+    /// Set a custom formatter for the x-axis tick labels.
+    /// The formatter receives a GridMark (containing the tick value and step size)
+    /// and the current visible range on the x-axis.
+    pub fn set_x_axis_formatter(&mut self, formatter: TickFormatter) {
+        self.x_axis_formatter = Some(formatter);
+    }
+
+    /// Set a custom formatter for the y-axis tick labels.
+    /// The formatter receives a GridMark (containing the tick value and step size)
+    /// and the current visible range on the y-axis.
+    pub fn set_y_axis_formatter(&mut self, formatter: TickFormatter) {
+        self.y_axis_formatter = Some(formatter);
+    }
+
+    /// Set a custom tick producer for generating tick positions along both axes.
+    pub fn set_x_tick_producer(&mut self, producer: TickProducer) {
+        self.x_tick_producer = Some(producer);
+    }
+
+    /// Set a custom tick producer for generating tick positions along the y-axis.
+    pub fn set_y_tick_producer(&mut self, producer: TickProducer) {
+        self.y_tick_producer = Some(producer);
     }
 
     /// Set the positions of an existing series.
@@ -469,12 +519,60 @@ impl PlotWidget {
 
         Some(
             widget::container(bubble)
-                .width(Length::Shrink)
-                .height(Length::Fill)
-                .align_x(alignment::Horizontal::Left)
-                .align_y(alignment::Vertical::Bottom)
+                .width(Length::Fill)
+                .height(Length::Shrink)
+                .align_x(alignment::Horizontal::Right)
+                .align_y(alignment::Vertical::Top)
                 .into(),
         )
+    }
+
+    fn view_tick_labels(&self) -> Option<Element<'_, PlotUiMessage>> {
+        if self.x_ticks.is_empty() && self.y_ticks.is_empty() {
+            return None;
+        }
+
+        let mut tick_elements = Vec::with_capacity(self.x_ticks.len() + self.y_ticks.len());
+        let tick_text = |text| widget::text(text).size(10.0).color(color!(200, 200, 200));
+
+        if let Some(formatter) = &self.x_axis_formatter {
+            for tick in &self.x_ticks {
+                let label_text = formatter(tick.tick);
+                let centering_offset = 2.0 * (label_text.len() as f32); // A bit of a fudge.
+                let text_widget = tick_text(label_text);
+                let positioned_label = widget::container(text_widget)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .padding(padding::left(tick.screen_pos - centering_offset))
+                    .align_x(alignment::Horizontal::Left)
+                    .align_y(alignment::Vertical::Bottom)
+                    .style(|_| widget::container::background(color!(0, 0, 0, 0.0)));
+
+                tick_elements.push(positioned_label.into());
+            }
+        }
+
+        if let Some(formatter) = &self.y_axis_formatter {
+            for tick in &self.y_ticks {
+                let label_text = formatter(tick.tick);
+                let text_widget = tick_text(label_text);
+                let positioned_label = widget::container(text_widget)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .padding(padding::top(tick.screen_pos - 5.0))
+                    .align_x(alignment::Horizontal::Left)
+                    .align_y(alignment::Vertical::Top)
+                    .style(|_| widget::container::background(color!(0, 0, 0, 0.0)));
+
+                tick_elements.push(positioned_label.into());
+            }
+        }
+
+        if tick_elements.is_empty() {
+            return None;
+        }
+
+        Some(stack(tick_elements).into())
     }
 
     fn toggle_visibility(&mut self, label: &str) {
@@ -505,11 +603,18 @@ impl PlotWidget {
     }
 }
 
-#[derive(Debug)]
 #[doc(hidden)]
 pub struct Primitive {
     instance_id: u64,
     plot_widget: PlotState,
+}
+
+impl std::fmt::Debug for Primitive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Primitive")
+            .field("instance_id", &self.instance_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl shader::Program<PlotUiMessage> for PlotWidget {
@@ -729,8 +834,20 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             }
         }
 
+        let mut publish_x_ticks = None;
+        let mut publish_y_ticks = None;
+
+        if needs_redraw {
+            // If we need to redraw, there's a good chance we need to update the ticks.
+            state.update_ticks(self.x_tick_producer.as_ref(), self.y_tick_producer.as_ref());
+            publish_x_ticks = Some(state.x_ticks.clone());
+            publish_y_ticks = Some(state.y_ticks.clone());
+        }
+
         let needs_publish = publish_tooltip.is_some()
             || publish_cursor.is_some()
+            || publish_x_ticks.is_some()
+            || publish_y_ticks.is_some()
             || clear_tooltip
             || clear_cursor_position;
 
@@ -741,6 +858,8 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                     clear_cursor_position,
                     tooltip_ui: publish_tooltip,
                     cursor_position_ui: publish_cursor,
+                    x_ticks: publish_x_ticks,
+                    y_ticks: publish_y_ticks,
                 },
             )));
         }

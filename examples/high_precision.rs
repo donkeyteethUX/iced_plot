@@ -2,9 +2,9 @@
 //! double-precision camera and offsetting coordinates to keep them near zero when rendering.
 use std::time::Duration;
 
+use iced_plot::PlotUiMessage;
+use iced_plot::PlotWidget;
 use iced_plot::PlotWidgetBuilder;
-use iced_plot::message::PlotUiMessage;
-use iced_plot::plot_widget::PlotWidget;
 use iced_plot::{Color, LineStyle, MarkerStyle, Series, TooltipContext};
 
 use iced::Element;
@@ -49,6 +49,7 @@ fn new() -> PlotWidget {
             .with_color(Color::from_rgb(0.3, 0.9, 0.3)),
         )
         .with_cursor_overlay(true)
+        .with_crosshairs(true)
         .with_y_label("cool data")
         .with_x_label("time (s)")
         .build()

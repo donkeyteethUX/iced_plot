@@ -256,7 +256,7 @@ impl PlotRenderer {
         self.ensure_marker_pipeline(device);
         self.grid
             .ensure_pipeline(device, self.format, &self.camera_bgl);
-        self.grid.update(device, &state.camera);
+        self.grid.update(device, state);
         if !state.series.is_empty() && state.series.iter().any(|s| s.line_style.is_some()) {
             self.ensure_line_pipeline(device);
         }

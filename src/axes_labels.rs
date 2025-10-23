@@ -4,7 +4,7 @@ use iced::widget::{column, container, row, text};
 use iced::{Color, Element, Length};
 
 /// Stack the element with the labels on the bottom and left.
-pub fn stack_with_labels<'a, M: 'a>(
+pub(crate) fn stack_with_labels<'a, M: 'a>(
     widget: impl Into<Element<'a, M>>,
     x_label: &'a str,
     y_label: &'a str,

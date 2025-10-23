@@ -1,7 +1,7 @@
 //! Example of a scrolling plot with new data points being added over time.
+use iced_plot::PlotUiMessage;
+use iced_plot::PlotWidget;
 use iced_plot::Series;
-use iced_plot::message::PlotUiMessage;
-use iced_plot::plot_widget::PlotWidget;
 use iced_plot::{MarkerStyle, PlotWidgetBuilder};
 
 use iced::window;
