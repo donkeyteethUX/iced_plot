@@ -1,7 +1,7 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::text::Wrapping;
 use iced::widget::{column, container, row, text};
-use iced::{Color, Element, Length};
+use iced::{Element, Length};
 
 /// Stack the element with the labels on the bottom and left.
 pub(crate) fn stack_with_labels<'a, M: 'a>(
@@ -25,7 +25,7 @@ pub(crate) fn stack_with_labels<'a, M: 'a>(
 }
 
 fn x_axis_label<'a, M: 'a>(label: &'a str) -> Element<'a, M> {
-    container(text(label).size(16.0).color(Color::WHITE))
+    container(text(label).size(16.0))
         .align_x(Horizontal::Center)
         .align_y(Vertical::Bottom)
         .width(Length::Fill)
@@ -34,16 +34,11 @@ fn x_axis_label<'a, M: 'a>(label: &'a str) -> Element<'a, M> {
 }
 
 fn y_axis_label<'a, M: 'a>(label: &'a str) -> Element<'a, M> {
-    container(
-        text(label)
-            .size(16.0)
-            .color(Color::WHITE)
-            .wrapping(Wrapping::Word),
-    )
-    .align_x(Horizontal::Left)
-    .align_y(Vertical::Center)
-    .width(Length::Shrink)
-    .max_width(100.0)
-    .height(Length::Fill)
-    .into()
+    container(text(label).size(16.0).wrapping(Wrapping::Word))
+        .align_x(Horizontal::Left)
+        .align_y(Vertical::Center)
+        .width(Length::Shrink)
+        .max_width(100.0)
+        .height(Length::Fill)
+        .into()
 }

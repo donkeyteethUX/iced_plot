@@ -9,7 +9,9 @@ use iced::{Color, Element};
 use rand_distr::{Distribution, Normal};
 
 fn main() -> iced::Result {
-    iced::application(new_scatter, update, view).run()
+    iced::application(new_scatter, update, view)
+        .theme(iced::theme::Theme::SolarizedDark)
+        .run()
 }
 
 #[derive(Debug, Clone)]

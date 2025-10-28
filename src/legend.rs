@@ -1,15 +1,9 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{Container, button, column, container, row, text};
-use iced::{Border, Color, Element, Length, color};
+use iced::{Color, Element, Length, color};
 
 use crate::LineStyle;
 use crate::{message::PlotUiMessage, plot_widget::PlotWidget};
-
-const LEGEND_PADDING: f32 = 8.0;
-const ENTRY_SPACING: f32 = 6.0;
-const COLUMN_SPACING: f32 = 4.0;
-const LABEL_TEXT_SIZE: f32 = 14.0;
-const SWATCH_SIZE: f32 = 14.0;
 
 #[derive(Debug, Clone)]
 /// An entry in the plot legend.
@@ -22,7 +16,7 @@ pub(crate) struct LegendEntry {
 }
 
 pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Element<'_, PlotUiMessage> {
-    let entries = widget.legend_entries();
+    let entries: Vec<LegendEntry> = widget.legend_entries();
 
     if entries.is_empty() {
         return legend_container(label_button("Legend")).into();
@@ -31,7 +25,7 @@ pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Element<'_, PlotUi
     }
 
     let mut col = column![label_button("▼ Legend")]
-        .spacing(COLUMN_SPACING)
+        .spacing(4.0)
         .width(Length::Shrink)
         .height(Length::Shrink);
 
@@ -45,8 +39,8 @@ pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Element<'_, PlotUi
         };
 
         let swatch = container("")
-            .width(Length::Fixed(SWATCH_SIZE))
-            .height(Length::Fixed(SWATCH_SIZE))
+            .width(Length::Fixed(12.0))
+            .height(Length::Fixed(12.0))
             .style(move |_| swatch_color.into());
 
         let swatch_btn: Element<'_, PlotUiMessage> = button(swatch)
@@ -54,31 +48,18 @@ pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Element<'_, PlotUi
             .on_press(PlotUiMessage::ToggleSeriesVisibility(label_text.clone()))
             .into();
 
-        let row = row![
-            swatch_btn,
-            text(label_text).size(LABEL_TEXT_SIZE).color(series_color)
-        ]
-        .spacing(ENTRY_SPACING)
-        .width(Length::Shrink);
+        let row = row![swatch_btn, text(label_text).size(12.0).color(series_color)]
+            .spacing(4.0)
+            .width(Length::Shrink);
 
         col = col.push(row);
     }
 
-    legend_container(col)
-        .style(|theme| {
-            container::rounded_box(theme)
-                .background(color!(12, 12, 15, 0.55))
-                .border(Border {
-                    radius: 4.0.into(),
-                    width: 1.0,
-                    color: color!(255, 255, 255, 0.08),
-                })
-        })
-        .into()
+    legend_container(col).style(container::bordered_box).into()
 }
 
 fn label_button(label: &str) -> Element<'_, PlotUiMessage> {
-    button(text(label).size(LABEL_TEXT_SIZE))
+    button(text(label).size(12.0))
         .on_press(PlotUiMessage::ToggleLegend)
         .into()
 }
@@ -87,7 +68,7 @@ fn legend_container<'a>(
     content: impl Into<Element<'a, PlotUiMessage>>,
 ) -> Container<'a, PlotUiMessage> {
     container(content)
-        .padding(LEGEND_PADDING)
+        .padding(4.0)
         .align_x(Horizontal::Left)
         .align_y(Vertical::Top)
 }

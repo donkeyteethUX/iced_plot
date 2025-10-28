@@ -51,7 +51,7 @@ fn new() -> PlotWidget {
         .with_cursor_overlay(true)
         .with_crosshairs(true)
         .with_y_label("cool data")
-        .with_x_label("time (s)")
+        .with_x_label("time (s)\n\n\n")
         .build()
         .unwrap()
 }

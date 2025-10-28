@@ -8,7 +8,8 @@ use std::{
 
 use glam::{DVec2, Vec2};
 use iced::{
-    Element, Length, Padding, Rectangle, alignment, color,
+    Color, Element, Length, Padding, Rectangle, Theme,
+    alignment::{self, Horizontal},
     mouse::{self, Interaction},
     padding,
     wgpu::TextureFormat,
@@ -293,33 +294,25 @@ impl PlotWidget {
             .width(Length::Fill)
             .height(Length::Fill);
 
-        let inner_container = widget::container(plot)
+        let inner_container = container(plot)
             .padding(2.0)
-            .style(|_| container::background(color!(20, 20, 20)));
+            .style(|theme: &Theme| container::background(theme.palette().background));
 
-        let mut elements = stack![inner_container];
+        let elements = stack![
+            inner_container,
+            self.view_tooltip_overlay(),
+            self.view_cursor_overlay(),
+            self.view_tick_labels(),
+            legend::legend(self, self.legend_collapsed),
+        ];
 
-        if let Some(tooltip_overlay) = self.view_tooltip_overlay() {
-            elements = elements.push(tooltip_overlay);
-        };
-
-        if let Some(cursor_overlay) = self.view_cursor_overlay() {
-            elements = elements.push(cursor_overlay);
-        };
-
-        if let Some(tick_labels) = self.view_tick_labels() {
-            elements = elements.push(tick_labels);
-        };
-
-        elements = elements.push(legend::legend(self, self.legend_collapsed));
-
-        widget::container(axes_labels::stack_with_labels(
+        container(axes_labels::stack_with_labels(
             elements,
             &self.x_axis_label,
             &self.y_axis_label,
         ))
         .padding(3.0)
-        .style(|_| container::background(color!(50, 50, 50)))
+        .style(|theme: &Theme| container::background(theme.palette().background))
         .into()
     }
 
@@ -464,24 +457,11 @@ impl PlotWidget {
         let offset_x = payload.x + 8.0;
         let offset_y = payload.y + 8.0;
 
-        let bubble = widget::container(widget::text(payload.text.clone()).size(14.0).style(
-            // TODO: Use theme colors consistently everywhere rather than hardcoding.
-            |_| widget::text::Style {
-                color: Some(iced::Color::WHITE),
-            },
-        ))
-        .padding(6.0)
-        .style(|theme| {
-            widget::container::rounded_box(theme)
-                .background(color!(12, 12, 15, 0.9))
-                .border(iced::Border {
-                    radius: 4.0.into(),
-                    width: 1.0,
-                    color: color!(255, 255, 255, 0.12),
-                })
-        });
+        let bubble = container(widget::text(payload.text.clone()).size(14.0))
+            .padding(6.0)
+            .style(container::rounded_box);
 
-        let overlay = widget::container(bubble)
+        let overlay = container(bubble)
             .width(Length::Fill)
             .height(Length::Fill)
             .padding(Padding {
@@ -490,9 +470,9 @@ impl PlotWidget {
                 top: offset_y,
                 bottom: 0.0,
             })
-            .align_x(alignment::Horizontal::Left)
+            .align_x(Horizontal::Left)
             .align_y(alignment::Vertical::Top)
-            .style(|_| widget::container::background(color!(0, 0, 0, 0.0)))
+            .style(|_| container::background(Color::TRANSPARENT))
             .into();
 
         Some(overlay)
@@ -507,21 +487,15 @@ impl PlotWidget {
             return None;
         };
 
-        let bubble = widget::container(widget::text(payload.text.clone()).size(12.0))
+        let bubble = container(widget::text(payload.text.clone()).size(12.0))
             .padding(6.0)
-            .style(|theme| {
-                widget::container::dark(theme).border(iced::Border {
-                    radius: 4.0.into(),
-                    width: 1.0,
-                    color: color!(255, 255, 255, 0.2),
-                })
-            });
+            .style(container::rounded_box);
 
         Some(
-            widget::container(bubble)
+            container(bubble)
                 .width(Length::Fill)
                 .height(Length::Shrink)
-                .align_x(alignment::Horizontal::Right)
+                .align_x(Horizontal::Right)
                 .align_y(alignment::Vertical::Top)
                 .into(),
         )
@@ -533,21 +507,20 @@ impl PlotWidget {
         }
 
         let mut tick_elements = Vec::with_capacity(self.x_ticks.len() + self.y_ticks.len());
-        let tick_text = |text| widget::text(text).size(10.0).color(color!(200, 200, 200));
+        let tick_text = |text| widget::text(text).size(10.0);
 
         if let Some(formatter) = &self.x_axis_formatter {
             for tick in &self.x_ticks {
                 let label_text = formatter(tick.tick);
                 let centering_offset = 2.0 * (label_text.len() as f32); // A bit of a fudge.
                 let text_widget = tick_text(label_text);
-                let positioned_label = widget::container(text_widget)
+                let positioned_label = container(text_widget)
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .padding(padding::left(tick.screen_pos - centering_offset))
-                    .align_x(alignment::Horizontal::Left)
+                    .align_x(Horizontal::Left)
                     .align_y(alignment::Vertical::Bottom)
-                    .style(|_| widget::container::background(color!(0, 0, 0, 0.0)));
-
+                    .style(container::transparent);
                 tick_elements.push(positioned_label.into());
             }
         }
@@ -562,8 +535,7 @@ impl PlotWidget {
                     .padding(padding::top(tick.screen_pos - 5.0))
                     .align_x(alignment::Horizontal::Left)
                     .align_y(alignment::Vertical::Top)
-                    .style(|_| widget::container::background(color!(0, 0, 0, 0.0)));
-
+                    .style(container::transparent);
                 tick_elements.push(positioned_label.into());
             }
         }
