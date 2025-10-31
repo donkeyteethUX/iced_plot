@@ -9,9 +9,6 @@ use crate::ticks::{Tick, TickFormatter, TickProducer};
 
 /// Builder for configuring and constructing a PlotWidget.
 ///
-/// Provides a fluent API for setting up a plot with all its configuration options
-/// before creating the widget. All settings have sensible defaults.
-///
 /// # Example
 ///
 /// ```ignore
@@ -217,6 +214,12 @@ impl PlotWidgetBuilder {
     pub fn add_hline(mut self, hline: HLine) -> Self {
         self.hlines.push(hline);
         self
+    }
+
+    /// Disable background grid lines and ticks on both axes.
+    pub fn without_grid(self) -> Self {
+        self.with_x_tick_producer(|_, _| Vec::new())
+            .with_y_tick_producer(|_, _| Vec::new())
     }
 
     /// Build the PlotWidget; validates series and duplicate labels via PlotWidget::add_series.

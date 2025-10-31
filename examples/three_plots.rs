@@ -4,7 +4,7 @@
 use iced_plot::PlotUiMessage;
 use iced_plot::PlotWidget;
 use iced_plot::PlotWidgetBuilder;
-use iced_plot::{AxisLink, Color, LineStyle, MarkerStyle, Series};
+use iced_plot::{AxisLink, LineStyle, MarkerStyle, Series};
 
 use iced::Element;
 use iced::widget::column;
@@ -75,11 +75,13 @@ impl App {
             .collect();
         let s2 = Series::markers_only(positions, MarkerStyle::circle(6.0))
             .with_label("cosine_markers_only")
-            .with_color(Color::from_rgb(0.9, 0.3, 0.3));
+            .with_color([0.9, 0.3, 0.3]);
 
         let w2 = PlotWidgetBuilder::new()
             .with_tooltips(true)
             .with_x_axis_link(x_link.clone()) // Link the x-axis
+            .with_x_tick_formatter(|_| String::new()) // Remove tick labels
+            .with_y_tick_formatter(|_| String::new())
             .add_series(s2)
             .build()
             .unwrap();
@@ -97,12 +99,13 @@ impl App {
             LineStyle::Dashed { length: 10.0 },
         )
         .with_label("both_markers_and_lines")
-        .with_color(Color::from_rgb(0.3, 0.9, 0.3));
+        .with_color([0.3, 0.9, 0.3]);
 
         let w3 = PlotWidgetBuilder::new()
             .with_tooltips(true)
             .with_x_axis_link(x_link.clone()) // Link the x-axis
             .add_series(s3)
+            .without_grid() // Disable grid lines and ticks
             .build()
             .unwrap();
 

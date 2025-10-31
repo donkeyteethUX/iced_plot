@@ -179,8 +179,8 @@ impl Series {
     }
 
     /// Set the color of the series (affects both markers and lines).
-    pub fn with_color(mut self, color: Color) -> Self {
-        self.color = color;
+    pub fn with_color(mut self, color: impl Into<Color>) -> Self {
+        self.color = color.into();
         self
     }
 

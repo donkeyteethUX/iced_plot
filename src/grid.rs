@@ -150,6 +150,10 @@ impl Grid {
     }
 
     pub(crate) fn draw<'a>(&'a self, pass: &mut RenderPass<'a>, camera_bind_group: &'a BindGroup) {
+        if self.vertex_count == 0 {
+            return;
+        }
+
         if let (Some(pipeline), Some(vb)) = (&self.pipeline, &self.vertex_buffer) {
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, camera_bind_group, &[]);
