@@ -46,6 +46,8 @@ pub struct PlotWidgetBuilder {
     y_tick_producer: Option<TickProducer>,
     enable_x_tick_labels: Option<bool>,
     enable_y_tick_labels: Option<bool>,
+    tick_label_size: Option<f32>,
+    axis_label_size: Option<f32>,
     series: Vec<Series>,
     vlines: Vec<VLine>,
     hlines: Vec<HLine>,
@@ -201,6 +203,18 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Set the font size for tick labels (the numbers on the axes).
+    pub fn with_tick_label_size(mut self, size: f32) -> Self {
+        self.tick_label_size = Some(size.max(1.0));
+        self
+    }
+
+    /// Set the font size for axis labels.
+    pub fn with_axis_label_size(mut self, size: f32) -> Self {
+        self.axis_label_size = Some(size.max(1.0));
+        self
+    }
+
     /// Add a [`Series`] to the plot.
     pub fn add_series(mut self, series: Series) -> Self {
         self.series.push(series);
@@ -284,6 +298,12 @@ impl PlotWidgetBuilder {
         }
         if let Some(producer) = self.y_tick_producer {
             w.set_y_tick_producer(producer);
+        }
+        if let Some(size) = self.tick_label_size {
+            w.tick_label_size = size;
+        }
+        if let Some(size) = self.axis_label_size {
+            w.axis_label_size = size;
         }
         for s in self.series {
             w.add_series(s)?;
