@@ -63,6 +63,8 @@ pub struct PlotWidget {
     pub(crate) y_axis_formatter: Option<TickFormatter>,
     pub(crate) x_tick_producer: Option<TickProducer>,
     pub(crate) y_tick_producer: Option<TickProducer>,
+    pub(crate) tick_label_size: f32,
+    pub(crate) axis_label_size: f32,
     // UI state
     pub(crate) tooltip_ui: Option<TooltipUiPayload>,
     pub(crate) cursor_ui: Option<CursorPositionUiPayload>,
@@ -104,6 +106,8 @@ impl PlotWidget {
             y_axis_formatter: Some(Arc::new(ticks::default_formatter)),
             x_tick_producer: Some(Arc::new(ticks::default_tick_producer)),
             y_tick_producer: Some(Arc::new(ticks::default_tick_producer)),
+            tick_label_size: 10.0,
+            axis_label_size: 16.0,
             x_ticks: Vec::new(),
             y_ticks: Vec::new(),
             tooltip_ui: None,
@@ -310,6 +314,7 @@ impl PlotWidget {
             elements,
             &self.x_axis_label,
             &self.y_axis_label,
+            self.axis_label_size,
         ))
         .padding(3.0)
         .style(|theme: &Theme| container::background(theme.palette().background))
@@ -507,7 +512,7 @@ impl PlotWidget {
         }
 
         let mut tick_elements = Vec::with_capacity(self.x_ticks.len() + self.y_ticks.len());
-        let tick_text = |text| widget::text(text).size(10.0);
+        let tick_text = |text| widget::text(text).size(self.tick_label_size);
 
         if let Some(formatter) = &self.x_axis_formatter {
             for tick in &self.x_ticks {
