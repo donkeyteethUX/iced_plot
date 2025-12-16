@@ -1,8 +1,14 @@
 [package]
-name    = "iced_plot"
-version = "0.1.0"
-edition = "2024"
-license = "MIT"
+name        = "iced_plot"
+version     = "0.1.0"
+edition     = "2024"
+license     = "MIT"
+description = "A GPU-accelerated plotting widget for Iced."
+repository  = "https://github.com/donkeyteethUX/iced_plot/"
+homepage    = "https://github.com/donkeyteethUX/iced_plot/"
+readme      = "README.md"
+categories  = ["gui", "graphics", "visualization"]
+keywords    = ["iced", "plot", "widget", "wgpu", "plotting"]
 
 [dependencies]
 bytemuck = { version = "1.24", features = ["derive"] }
