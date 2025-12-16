@@ -48,4 +48,4 @@ pub use plot_widget_builder::PlotWidgetBuilder;
 pub use point::{MarkerType, Point};
 pub use reference_lines::{HLine, VLine};
 pub use series::{LineStyle, MarkerStyle, Series};
-pub use ticks::{Tick, TickFormatter};
+pub use ticks::{Tick, TickFormatter, TickProducer};
