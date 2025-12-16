@@ -15,7 +15,7 @@ use iced::{
     wgpu::TextureFormat,
     widget::{
         self, container,
-        shader::{self, Viewport},
+        shader::{self, Pipeline, Viewport},
         stack,
     },
 };
@@ -865,23 +865,11 @@ pub struct PlotRendererState {
 }
 
 impl shader::Primitive for Primitive {
-    type Renderer = PlotRendererState;
-
-    fn initialize(
-        &self,
-        _device: &iced::wgpu::Device,
-        _queue: &iced::wgpu::Queue,
-        format: iced::wgpu::TextureFormat,
-    ) -> Self::Renderer {
-        PlotRendererState {
-            renderers: HashMap::new(),
-            format,
-        }
-    }
+    type Pipeline = PlotRendererState;
 
     fn prepare(
         &self,
-        renderer_state: &mut Self::Renderer,
+        renderer_state: &mut Self::Pipeline,
         device: &iced::wgpu::Device,
         queue: &iced::wgpu::Queue,
         bounds: &Rectangle,
@@ -899,7 +887,7 @@ impl shader::Primitive for Primitive {
 
     fn render(
         &self,
-        renderer_state: &Self::Renderer,
+        renderer_state: &Self::Pipeline,
         encoder: &mut iced::wgpu::CommandEncoder,
         target: &iced::wgpu::TextureView,
         clip_bounds: &Rectangle<u32>,
@@ -910,6 +898,22 @@ impl shader::Primitive for Primitive {
                 target,
                 bounds: *clip_bounds,
             });
+        }
+    }
+}
+
+impl Pipeline for PlotRendererState {
+    fn new(
+        _device: &iced::wgpu::Device,
+        _queue: &iced::wgpu::Queue,
+        format: iced::wgpu::TextureFormat,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        PlotRendererState {
+            renderers: HashMap::new(),
+            format,
         }
     }
 }

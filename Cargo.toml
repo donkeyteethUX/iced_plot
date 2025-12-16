@@ -7,7 +7,7 @@ license = "MIT"
 [dependencies]
 bytemuck = { version = "1.24", features = ["derive"] }
 glam     = "0.30"
-iced     = { git = "https://github.com/iced-rs/iced", rev = "bfc27e4" }
+iced     = "0.14"
 
 [dev-dependencies]
 rand       = "0.9"

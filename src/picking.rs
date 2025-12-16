@@ -251,7 +251,10 @@ impl PickingPass {
             let _ = tx.send(res);
         });
         // Drive completion for this tiny buffer
-        let _ = device.poll(PollType::Wait);
+        let _ = device.poll(PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
         let _ = rx.recv();
         let data = slice.get_mapped_range();
         // Scan for nearest non-zero, by squared distance in pixel space
