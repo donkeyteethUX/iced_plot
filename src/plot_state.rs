@@ -451,61 +451,36 @@ impl PlotState {
                 }
                 // Only zoom when Ctrl is held down
                 if self.modifiers.contains(keyboard::Modifiers::CTRL) {
-                    if let iced::mouse::ScrollDelta::Pixels { y, .. } = delta {
-                        // Apply zoom factor based on scroll direction
-                        let zoom_factor = if y > 0.0 { 0.95 } else { 1.05 };
+                    let y = match delta {
+                        iced::mouse::ScrollDelta::Lines { y, .. } => y,
+                        iced::mouse::ScrollDelta::Pixels { y, .. } => y,
+                    };
 
-                        // Convert cursor position to render coordinates before zoom (without offset)
-                        let cursor_render_before = self.camera.screen_to_render(
-                            DVec2::new(
-                                self.cursor_position.x as f64,
-                                self.cursor_position.y as f64,
-                            ),
-                            viewport,
-                        );
+                    // Apply zoom factor based on scroll direction
+                    let zoom_factor = if y > 0.0 { 0.95 } else { 1.05 };
 
-                        // Apply zoom by scaling half_extents
-                        self.camera.half_extents *= zoom_factor;
+                    // Convert cursor position to render coordinates before zoom (without offset)
+                    let cursor_render_before = self.camera.screen_to_render(
+                        DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
+                        viewport,
+                    );
 
-                        // Convert cursor position to render coordinates after zoom
-                        let cursor_render_after = self.camera.screen_to_render(
-                            DVec2::new(
-                                self.cursor_position.x as f64,
-                                self.cursor_position.y as f64,
-                            ),
-                            viewport,
-                        );
+                    // Apply zoom by scaling half_extents
+                    self.camera.half_extents *= zoom_factor;
 
-                        // Adjust camera position (in render space) to keep cursor at same position
-                        let render_delta = cursor_render_before - cursor_render_after;
-                        // Convert render delta back to world space and adjust camera position
-                        self.camera.position += render_delta;
+                    // Convert cursor position to render coordinates after zoom
+                    let cursor_render_after = self.camera.screen_to_render(
+                        DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
+                        viewport,
+                    );
 
-                        self.update_axis_links();
-                        needs_redraw = true;
-                    }
-                } else if let iced::mouse::ScrollDelta::Pixels { y, x } = delta {
-                    let scroll_ratio = y / x;
+                    // Adjust camera position (in render space) to keep cursor at same position
+                    let render_delta = cursor_render_before - cursor_render_after;
+                    // Convert render delta back to world space and adjust camera position
+                    self.camera.position += render_delta;
 
-                    if scroll_ratio.abs() > 2.0 {
-                        // Mostly vertical scroll
-                        let y_pan_amount = 20.0 * if y > 0.0 { -1.0 } else { 1.0 };
-                        // Convert pan amount from screen space to world space
-                        let world_pan =
-                            y_pan_amount * (self.camera.half_extents.y / (viewport.y / 2.0));
-                        self.camera.position.y += world_pan;
-                        self.update_axis_links();
-                        needs_redraw = true;
-                    } else if scroll_ratio.abs() < 0.5 {
-                        // Mostly horizontal scroll
-                        let x_pan_amount = 20.0 * if x > 0.0 { -1.0 } else { 1.0 };
-                        // Convert pan amount from screen space to world space
-                        let world_pan_x =
-                            x_pan_amount * (self.camera.half_extents.x / (viewport.x / 2.0));
-                        self.camera.position.x -= world_pan_x;
-                        self.update_axis_links();
-                        needs_redraw = true;
-                    }
+                    self.update_axis_links();
+                    needs_redraw = true;
                 }
             }
             _ => {}
