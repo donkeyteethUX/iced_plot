@@ -449,13 +449,14 @@ impl PlotState {
                 if !inside {
                     return needs_redraw;
                 }
+
+                let (x, y) = match delta {
+                    iced::mouse::ScrollDelta::Lines { x, y } => (x, y),
+                    iced::mouse::ScrollDelta::Pixels { x, y } => (x, y),
+                };
+
                 // Only zoom when Ctrl is held down
                 if self.modifiers.contains(keyboard::Modifiers::CTRL) {
-                    let y = match delta {
-                        iced::mouse::ScrollDelta::Lines { y, .. } => y,
-                        iced::mouse::ScrollDelta::Pixels { y, .. } => y,
-                    };
-
                     // Apply zoom factor based on scroll direction
                     let zoom_factor = if y > 0.0 { 0.95 } else { 1.05 };
 
@@ -481,6 +482,28 @@ impl PlotState {
 
                     self.update_axis_links();
                     needs_redraw = true;
+                } else {
+                    let scroll_ratio = y / x;
+
+                    if scroll_ratio.abs() > 2.0 {
+                        // Mostly vertical scroll
+                        let y_pan_amount = 20.0 * if y > 0.0 { -1.0 } else { 1.0 };
+                        // Convert pan amount from screen space to world space
+                        let world_pan =
+                            y_pan_amount * (self.camera.half_extents.y / (viewport.y / 2.0));
+                        self.camera.position.y += world_pan;
+                        self.update_axis_links();
+                        needs_redraw = true;
+                    } else if scroll_ratio.abs() < 0.5 {
+                        // Mostly horizontal scroll
+                        let x_pan_amount = 20.0 * if x > 0.0 { -1.0 } else { 1.0 };
+                        // Convert pan amount from screen space to world space
+                        let world_pan_x =
+                            x_pan_amount * (self.camera.half_extents.x / (viewport.x / 2.0));
+                        self.camera.position.x -= world_pan_x;
+                        self.update_axis_links();
+                        needs_redraw = true;
+                    }
                 }
             }
             _ => {}
