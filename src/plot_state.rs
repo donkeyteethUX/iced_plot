@@ -449,42 +449,40 @@ impl PlotState {
                 if !inside {
                     return needs_redraw;
                 }
+
+                let (x, y) = match delta {
+                    iced::mouse::ScrollDelta::Lines { x, y } => (x, y),
+                    iced::mouse::ScrollDelta::Pixels { x, y } => (x, y),
+                };
+
                 // Only zoom when Ctrl is held down
                 if self.modifiers.contains(keyboard::Modifiers::CTRL) {
-                    if let iced::mouse::ScrollDelta::Pixels { y, .. } = delta {
-                        // Apply zoom factor based on scroll direction
-                        let zoom_factor = if y > 0.0 { 0.95 } else { 1.05 };
+                    // Apply zoom factor based on scroll direction
+                    let zoom_factor = if y > 0.0 { 0.95 } else { 1.05 };
 
-                        // Convert cursor position to render coordinates before zoom (without offset)
-                        let cursor_render_before = self.camera.screen_to_render(
-                            DVec2::new(
-                                self.cursor_position.x as f64,
-                                self.cursor_position.y as f64,
-                            ),
-                            viewport,
-                        );
+                    // Convert cursor position to render coordinates before zoom (without offset)
+                    let cursor_render_before = self.camera.screen_to_render(
+                        DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
+                        viewport,
+                    );
 
-                        // Apply zoom by scaling half_extents
-                        self.camera.half_extents *= zoom_factor;
+                    // Apply zoom by scaling half_extents
+                    self.camera.half_extents *= zoom_factor;
 
-                        // Convert cursor position to render coordinates after zoom
-                        let cursor_render_after = self.camera.screen_to_render(
-                            DVec2::new(
-                                self.cursor_position.x as f64,
-                                self.cursor_position.y as f64,
-                            ),
-                            viewport,
-                        );
+                    // Convert cursor position to render coordinates after zoom
+                    let cursor_render_after = self.camera.screen_to_render(
+                        DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
+                        viewport,
+                    );
 
-                        // Adjust camera position (in render space) to keep cursor at same position
-                        let render_delta = cursor_render_before - cursor_render_after;
-                        // Convert render delta back to world space and adjust camera position
-                        self.camera.position += render_delta;
+                    // Adjust camera position (in render space) to keep cursor at same position
+                    let render_delta = cursor_render_before - cursor_render_after;
+                    // Convert render delta back to world space and adjust camera position
+                    self.camera.position += render_delta;
 
-                        self.update_axis_links();
-                        needs_redraw = true;
-                    }
-                } else if let iced::mouse::ScrollDelta::Pixels { y, x } = delta {
+                    self.update_axis_links();
+                    needs_redraw = true;
+                } else {
                     let scroll_ratio = y / x;
 
                     if scroll_ratio.abs() > 2.0 {
