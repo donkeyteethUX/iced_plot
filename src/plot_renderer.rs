@@ -650,7 +650,7 @@ impl PlotRenderer {
         let mut writer = VertexWriter::with_capacity(marker_series_count * 32);
         let mut id_map: Vec<(u32, u32)> = Vec::with_capacity(marker_series_count);
 
-        // Iterate series so we can pick series-level color/marker for each point.
+        // Iterate series so we can pick per-point color/marker for each point.
         for (span_idx, s) in state.series.iter().enumerate() {
             // Skip series without markers
             if s.marker == u32::MAX {
@@ -666,8 +666,10 @@ impl PlotRenderer {
             for (local_i, p) in state.points[s.start..end].iter().enumerate() {
                 // Subtract render_offset for high-precision rendering near zero
                 let render_pos = self.world_to_render_pos(p.position, &state.camera);
+                let color_idx = s.start + local_i;
+                let color = state.point_colors.get(color_idx).unwrap_or(&s.color);
                 writer.write_position(render_pos);
-                writer.write_color(&s.color);
+                writer.write_color(color);
                 writer.write_u32(s.marker);
                 writer.write_f32(p.size);
 
@@ -731,9 +733,11 @@ impl PlotRenderer {
                 }
 
                 let render_pos = self.world_to_render_pos(p.position, &state.camera);
+                let color_idx = s.start + i;
+                let color = state.point_colors.get(color_idx).unwrap_or(&s.color);
                 writer.write_line_vertex(
                     render_pos,
-                    &s.color,
+                    color,
                     line_style_u32,
                     cumulative_distance,
                     style_param,

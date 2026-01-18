@@ -85,6 +85,8 @@ pub enum SeriesError {
     DuplicateLabel(String),
     /// Axis limits are not properly set (min >= max).
     InvalidAxisLimits,
+    /// Per-point colors length does not match positions length.
+    InvalidPointColorsLength,
 }
 
 /// A collection of per-point styled data to be plotted.
@@ -96,10 +98,15 @@ pub struct Series {
     /// Series point positions.
     pub positions: Vec<[f64; 2]>,
 
+    /// Optional per-point colors. Must match the length of `positions` if set.
+    pub point_colors: Option<Vec<Color>>,
+
     /// Optional label for the entire series.
     pub label: Option<String>,
 
-    /// Color of the series (used for both markers and lines).
+    /// Color of the entire series.
+    ///
+    /// Overridden by per-point colors if they are set.
     pub color: Color,
 
     /// Optional marker style for the series. If none, no markers are drawn.
@@ -114,6 +121,7 @@ impl Series {
     pub fn new(positions: Vec<[f64; 2]>, marker_style: MarkerStyle, line_style: LineStyle) -> Self {
         Self {
             positions,
+            point_colors: None,
             label: None,
             color: Color::from_rgb(0.3, 0.3, 0.9),
             marker_style: Some(marker_style),
@@ -125,8 +133,9 @@ impl Series {
     pub fn line_only(positions: Vec<[f64; 2]>, line_style: LineStyle) -> Self {
         Self {
             positions,
+            point_colors: None,
             label: None,
-            color: Color::from_rgb(0.5, 0.5, 0.5),
+            color: Color::from_rgb(0.3, 0.3, 0.9),
             marker_style: None,
             line_style: Some(line_style),
         }
@@ -136,6 +145,7 @@ impl Series {
     pub fn markers_only(positions: Vec<[f64; 2]>, marker_style: MarkerStyle) -> Self {
         Self {
             positions,
+            point_colors: None,
             label: None,
             color: Color::from_rgb(0.3, 0.3, 0.9),
             marker_style: Some(marker_style),
@@ -178,9 +188,15 @@ impl Series {
         self
     }
 
-    /// Set the color of the series (affects both markers and lines).
+    /// Set the color of the entire series. Overridden by per-point colors if they are set.
     pub fn with_color(mut self, color: impl Into<Color>) -> Self {
         self.color = color.into();
+        self
+    }
+
+    /// Set per-point colors for the series. Length must match the number of positions.
+    pub fn with_point_colors(mut self, colors: Vec<Color>) -> Self {
+        self.point_colors = Some(colors);
         self
     }
 
@@ -211,6 +227,11 @@ impl Series {
         }
         if self.marker_style.is_none() && self.line_style.is_none() {
             return Err(SeriesError::NoMarkersAndNoLines);
+        }
+        if let Some(colors) = &self.point_colors
+            && colors.len() != self.positions.len()
+        {
+            return Err(SeriesError::InvalidPointColorsLength);
         }
         Ok(())
     }

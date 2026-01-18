@@ -390,7 +390,30 @@ impl PlotWidget {
             .iter()
             .position(|s| s.label.as_deref() == Some(label))
         {
-            self.series[idx].positions = positions.to_vec();
+            let series = &mut self.series[idx];
+            series.positions = positions.to_vec();
+            if let Some(colors) = &mut series.point_colors
+                && colors.len() != series.positions.len()
+            {
+                colors.resize(series.positions.len(), series.color);
+            }
+            self.data_version += 1;
+        }
+    }
+
+    /// Set per-point colors for an existing series.
+    pub fn set_series_point_colors(&mut self, label: &str, colors: Vec<Color>) {
+        if let Some(idx) = self
+            .series
+            .iter()
+            .position(|s| s.label.as_deref() == Some(label))
+        {
+            let mut colors = colors;
+            let series = &mut self.series[idx];
+            if colors.len() != series.positions.len() {
+                colors.resize(series.positions.len(), series.color);
+            }
+            series.point_colors = Some(colors);
             self.data_version += 1;
         }
     }

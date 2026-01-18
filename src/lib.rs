@@ -6,7 +6,9 @@
 //!
 //! Quick start:
 //!
-//! ```no_run
+//! ```
+//! use iced_plot::{Color, PlotWidgetBuilder, Series};
+//!
 //! let series = Series::circles((0..100).map(|i| [i as f64, i as f64]).collect(), 2.0)
 //!     .with_color(Color::from_rgb(0.2, 0.6, 1.0))
 //!     .with_label("points");
@@ -16,7 +18,7 @@
 //!     .with_y_label("y")
 //!     .add_series(series)
 //!     .build()
-//!     .unwrap()
+//!     .unwrap();
 //! ```
 //!
 //! See `examples/` for more.

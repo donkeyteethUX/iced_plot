@@ -23,7 +23,7 @@ PlotWidgetBuilder::new()
     .with_y_label("y")
     .add_series(series)
     .build()
-    .unwrap()
+    .unwrap();
 ```
 
 See the `examples/` directory for more.

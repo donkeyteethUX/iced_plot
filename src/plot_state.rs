@@ -20,10 +20,11 @@ use crate::{
 /// Not part of the public API, but pub visibility is required for the shader implementation.
 pub struct PlotState {
     // Immutable shared data to allow cheap shallow clones.
-    pub(crate) points: Arc<[Point]>,      // vertex/instance data
-    pub(crate) series: Arc<[SeriesSpan]>, // spans describing logical series
-    pub(crate) vlines: Arc<[VLine]>,      // vertical reference lines
-    pub(crate) hlines: Arc<[HLine]>,      // horizontal reference lines
+    pub(crate) points: Arc<[Point]>,       // vertex/instance data
+    pub(crate) point_colors: Arc<[Color]>, // per-point colors (matches points)
+    pub(crate) series: Arc<[SeriesSpan]>,  // spans describing logical series
+    pub(crate) vlines: Arc<[VLine]>,       // vertical reference lines
+    pub(crate) hlines: Arc<[HLine]>,       // horizontal reference lines
     pub(crate) data_min: Option<DVec2>,
     pub(crate) data_max: Option<DVec2>,
     // Axis limits
@@ -68,6 +69,7 @@ impl Default for PlotState {
         Self {
             src_version: 0,
             points: Arc::new([]),
+            point_colors: Arc::new([]),
             series: Arc::new([]),
             vlines: Arc::new([]),
             hlines: Arc::new([]),
@@ -109,6 +111,7 @@ impl PlotState {
     /// Rebuild GPU data from widget configuration.
     pub(crate) fn rebuild_from_widget(&mut self, widget: &PlotWidget) {
         let mut points = Vec::new();
+        let mut point_colors = Vec::new();
         let mut series_spans = Vec::new();
         let mut data_min: Option<DVec2> = None;
         let mut data_max: Option<DVec2> = None;
@@ -129,7 +132,7 @@ impl PlotState {
             let start = points.len();
 
             // Add points and track bounds
-            for &pos in &series.positions {
+            for (pos_index, &pos) in series.positions.iter().enumerate() {
                 let p = DVec2::new(pos[0], pos[1]);
                 data_min = Some(data_min.map_or(p, |m| m.min(p)));
                 data_max = Some(data_max.map_or(p, |m| m.max(p)));
@@ -141,10 +144,17 @@ impl PlotState {
                         .as_ref()
                         .map(|ms| ms.size)
                         .unwrap_or(1.0);
+                    let color = series
+                        .point_colors
+                        .as_ref()
+                        .and_then(|colors| colors.get(pos_index))
+                        .copied()
+                        .unwrap_or(series.color);
                     points.push(Point {
                         position: pos,
                         size,
                     });
+                    point_colors.push(color);
                 }
             }
 
@@ -189,6 +199,7 @@ impl PlotState {
             .collect();
 
         self.points = points.into();
+        self.point_colors = point_colors.into();
         self.series = series_spans.into();
         self.vlines = vlines.into();
         self.hlines = hlines.into();
