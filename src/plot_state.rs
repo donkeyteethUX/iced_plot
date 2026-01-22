@@ -1,9 +1,10 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use glam::{DVec2, Vec2};
 use iced::{
     Color, Rectangle, keyboard,
     mouse::{self, Event},
+    time::Instant
 };
 
 use crate::{
