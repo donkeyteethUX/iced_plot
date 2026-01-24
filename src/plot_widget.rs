@@ -129,7 +129,6 @@ impl PlotWidget {
         {
             return Err(SeriesError::DuplicateLabel(label.to_string()));
         }
-
         self.series.push(item);
         self.data_version += 1;
         Ok(())
@@ -642,6 +641,9 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
     ) -> Option<shader::Action<PlotUiMessage>> {
         let mut needs_redraw = false;
         let mut clear_tooltip = false;
+        let mut publish_tooltip: Option<TooltipUiPayload> = None;
+        let mut publish_cursor: Option<CursorPositionUiPayload> = None;
+        let mut clear_cursor_position = false;
 
         if self.data_version != state.src_version {
             // Rebuild derived state from widget data
@@ -660,15 +662,32 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                     && state.cursor_position.x <= state.bounds.width
                     && state.cursor_position.y <= state.bounds.height;
                 if inside {
-                    picking::submit_request(
-                        self.instance_id,
-                        crate::picking::PickRequest {
-                            cursor_x: state.cursor_position.x,
-                            cursor_y: state.cursor_position.y,
-                            radius_px: state.hover_radius_px,
-                            seq: state.hover_version.wrapping_add(1),
-                        },
-                    );
+                    state.pick_seq = state.pick_seq.wrapping_add(1);
+                    if state.points.len() < CPU_PICK_THRESHOLD {
+                        let hit = cpu_pick_hit(state);
+                        let (tooltip, cleared, _redraw) = apply_pick_result(
+                            state,
+                            self.tooltip_provider.as_ref(),
+                            state.pick_seq,
+                            hit,
+                        );
+                        if tooltip.is_some() {
+                            publish_tooltip = tooltip;
+                        }
+                        if cleared {
+                            clear_tooltip = true;
+                        }
+                    } else {
+                        picking::submit_request(
+                            self.instance_id,
+                            crate::picking::PickRequest {
+                                cursor_x: state.cursor_position.x,
+                                cursor_y: state.cursor_position.y,
+                                radius_px: state.hover_radius_px,
+                                seq: state.pick_seq,
+                            },
+                        );
+                    }
                 }
             }
 
@@ -713,10 +732,6 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         state.hover_radius_px = self.hover_radius_px;
         state.crosshairs_enabled = self.crosshairs_enabled;
 
-        let mut clear_cursor_position = false;
-        let mut publish_tooltip: Option<TooltipUiPayload> = None;
-        let mut publish_cursor: Option<CursorPositionUiPayload> = None;
-
         // viewport size (screen pixels for this widget)
         let viewport = Vec2::new(state.bounds.width, state.bounds.height);
 
@@ -736,15 +751,35 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                         && state.cursor_position.x <= state.bounds.width
                         && state.cursor_position.y <= state.bounds.height;
                     if inside {
-                        picking::submit_request(
-                            self.instance_id,
-                            crate::picking::PickRequest {
-                                cursor_x: state.cursor_position.x,
-                                cursor_y: state.cursor_position.y,
-                                radius_px: state.hover_radius_px,
-                                seq: state.hover_version.wrapping_add(1),
-                            },
-                        );
+                        state.pick_seq = state.pick_seq.wrapping_add(1);
+                        if state.points.len() < CPU_PICK_THRESHOLD {
+                            let hit = cpu_pick_hit(state);
+                            let (tooltip, cleared, redraw) = apply_pick_result(
+                                state,
+                                self.tooltip_provider.as_ref(),
+                                state.pick_seq,
+                                hit,
+                            );
+                            if tooltip.is_some() {
+                                publish_tooltip = tooltip;
+                            }
+                            if cleared {
+                                clear_tooltip = true;
+                            }
+                            if redraw {
+                                needs_redraw = true;
+                            }
+                        } else {
+                            picking::submit_request(
+                                self.instance_id,
+                                crate::picking::PickRequest {
+                                    cursor_x: state.cursor_position.x,
+                                    cursor_y: state.cursor_position.y,
+                                    radius_px: state.hover_radius_px,
+                                    seq: state.pick_seq,
+                                },
+                            );
+                        }
                     }
                     // Publish cursor overlay updates when enabled
                     if self.cursor_overlay {
@@ -785,53 +820,25 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         }
 
         // Process picking results after event handling (works for both mouse events and data updates)
-        if state.hover_enabled {
+        if state.hover_enabled && state.points.len() >= CPU_PICK_THRESHOLD {
             // Try to consume a GPU pick result for this instance
             if let Some(res) = picking::take_result(self.instance_id) {
-                match res.hit {
-                    Some(hit) => {
-                        // Update hover cache and overlay
-                        let world_v = DVec2::new(hit.world[0], hit.world[1]);
-                        state.hovered_world = Some(hit.world);
-                        state.hovered_size_px = hit.size_px;
-                        let ctx = TooltipContext {
-                            series_label: hit.series_label.clone(),
-                            point_index: hit.point_index,
-                            x: hit.world[0],
-                            y: hit.world[1],
-                        };
-                        let text = if let Some(p) = &self.tooltip_provider {
-                            (p)(&ctx)
-                        } else {
-                            // Default: just show coordinates
-                            format!("{:.4}, {:.4}", ctx.x, ctx.y)
-                        };
-                        let hover_hit = HoverHit {
-                            series_label: hit.series_label,
-                            point_index: hit.point_index,
-                            _world: world_v,
-                            _size_px: hit.size_px,
-                        };
-                        state.last_hover_cache = Some(hover_hit);
-                        state.hover_version = state.hover_version.wrapping_add(1);
-                        publish_tooltip = Some(TooltipUiPayload {
-                            x: state.cursor_position.x,
-                            y: state.cursor_position.y,
-                            text,
-                        });
-                        needs_redraw = true;
-                    }
-                    None => {
-                        if state.last_hover_cache.is_some() {
-                            state.hovered_world = None;
-                            state.last_hover_cache = None;
-                            state.hover_version = state.hover_version.wrapping_add(1);
-                            clear_tooltip = true;
-                            needs_redraw = true;
-                        }
-                    }
+                let (tooltip, cleared, redraw) =
+                    apply_pick_result(state, self.tooltip_provider.as_ref(), res.seq, res.hit);
+                if tooltip.is_some() {
+                    publish_tooltip = tooltip;
+                }
+                if cleared {
+                    clear_tooltip = true;
+                }
+                if redraw {
+                    needs_redraw = true;
                 }
             }
+        }
+
+        if state.hover_enabled && state.pick_seq > state.pick_result_seq {
+            needs_redraw = true;
         }
 
         let mut publish_x_ticks = None;
@@ -926,6 +933,128 @@ impl shader::Primitive for Primitive {
                 target,
                 bounds: *clip_bounds,
             });
+        }
+    }
+}
+
+/// Threshold for number of points above which GPU picking is used instead of CPU picking.
+const CPU_PICK_THRESHOLD: usize = 5000;
+
+fn cpu_pick_hit(state: &PlotState) -> Option<picking::Hit> {
+    if state.points.is_empty() || state.series.is_empty() {
+        return None;
+    }
+
+    let width = state.bounds.width.max(1.0) as f64;
+    let height = state.bounds.height.max(1.0) as f64;
+    let cursor_x = state.cursor_position.x as f64;
+    let cursor_y = state.cursor_position.y as f64;
+
+    let mut span_idx = 0usize;
+    let mut span_start = 0usize;
+    let mut best: Option<(usize, f64)> = None;
+
+    for (idx, pt) in state.points.iter().enumerate() {
+        while span_idx < state.series.len() && idx >= span_start + state.series[span_idx].len {
+            span_start += state.series[span_idx].len;
+            span_idx += 1;
+        }
+        if span_idx >= state.series.len() {
+            break;
+        }
+
+        let world = DVec2::new(pt.position[0], pt.position[1]);
+        let ndc_x = (world.x - state.camera.position.x) / state.camera.half_extents.x;
+        let ndc_y = (world.y - state.camera.position.y) / state.camera.half_extents.y;
+        let screen_x = (ndc_x + 1.0) * 0.5 * width;
+        let screen_y = (1.0 - ndc_y) * 0.5 * height;
+
+        let dx = screen_x - cursor_x;
+        let dy = screen_y - cursor_y;
+        let d2 = dx * dx + dy * dy;
+        let radius = state.hover_radius_px as f64 + (pt.size as f64) * 0.5;
+        if d2 <= radius * radius {
+            if let Some((_, best_d2)) = best {
+                if d2 < best_d2 {
+                    best = Some((idx, d2));
+                }
+            } else {
+                best = Some((idx, d2));
+            }
+        }
+    }
+
+    let (best_idx, _) = best?;
+    let mut span_idx = 0usize;
+    let mut span_start = 0usize;
+    while span_idx < state.series.len() && best_idx >= span_start + state.series[span_idx].len {
+        span_start += state.series[span_idx].len;
+        span_idx += 1;
+    }
+    let span = state.series.get(span_idx)?;
+    let local_idx = best_idx - span_start;
+    let pt = &state.points[best_idx];
+    Some(picking::Hit {
+        series_label: span.label.clone(),
+        point_index: local_idx,
+        world: [pt.position[0], pt.position[1]],
+        size_px: pt.size,
+    })
+}
+
+fn apply_pick_result(
+    state: &mut PlotState,
+    tooltip_provider: Option<&TooltipProvider>,
+    seq: u64,
+    hit: Option<picking::Hit>,
+) -> (Option<TooltipUiPayload>, bool, bool) {
+    match hit {
+        Some(hit) => {
+            let world_v = DVec2::new(hit.world[0], hit.world[1]);
+            state.hovered_world = Some(hit.world);
+            state.hovered_size_px = hit.size_px;
+            let ctx = TooltipContext {
+                series_label: hit.series_label.clone(),
+                point_index: hit.point_index,
+                x: hit.world[0],
+                y: hit.world[1],
+            };
+            let text = if let Some(p) = tooltip_provider {
+                (p)(&ctx)
+            } else {
+                format!("{:.4}, {:.4}", ctx.x, ctx.y)
+            };
+            let hover_hit = HoverHit {
+                series_label: hit.series_label,
+                point_index: hit.point_index,
+                _world: world_v,
+                _size_px: hit.size_px,
+            };
+            state.last_hover_cache = Some(hover_hit);
+            state.hover_version = state.hover_version.wrapping_add(1);
+            state.pick_result_seq = seq;
+            (
+                Some(TooltipUiPayload {
+                    x: state.cursor_position.x,
+                    y: state.cursor_position.y,
+                    text,
+                }),
+                false,
+                true,
+            )
+        }
+        None => {
+            let mut cleared = false;
+            let mut redraw = false;
+            if state.last_hover_cache.is_some() {
+                state.hovered_world = None;
+                state.last_hover_cache = None;
+                state.hover_version = state.hover_version.wrapping_add(1);
+                cleared = true;
+                redraw = true;
+            }
+            state.pick_result_seq = seq;
+            (None, cleared, redraw)
         }
     }
 }
