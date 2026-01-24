@@ -17,7 +17,7 @@ struct VsIn {
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(1) line_style: u32,
+    @interpolate(flat) @location(1) line_style: u32,
     @location(2) distance_along_line: f32,
     @location(3) style_param: f32,
 };

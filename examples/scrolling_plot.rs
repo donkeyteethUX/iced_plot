@@ -9,6 +9,8 @@ use iced::{Color, Element};
 
 fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
+        .font(include_bytes!("fonts/FiraCodeNerdFont-Regular.ttf"))
+        .default_font(iced::Font::with_name("FiraCode Nerd Font"))
         .subscription(App::subscription)
         .run()
 }

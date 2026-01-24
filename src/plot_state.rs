@@ -4,7 +4,7 @@ use glam::{DVec2, Vec2};
 use iced::{
     Color, Rectangle, keyboard,
     mouse::{self, Event},
-    time::Instant
+    time::Instant,
 };
 
 use crate::{

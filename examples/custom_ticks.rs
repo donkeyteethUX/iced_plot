@@ -13,6 +13,8 @@ use iced::Element;
 fn main() -> iced::Result {
     iced::application(new, update, view)
         .theme(iced::theme::Theme::KanagawaDragon)
+        .font(include_bytes!("fonts/FiraCodeNerdFont-Regular.ttf"))
+        .default_font(iced::Font::with_name("FiraCode Nerd Font"))
         .run()
 }
 

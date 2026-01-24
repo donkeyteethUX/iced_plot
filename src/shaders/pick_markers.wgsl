@@ -26,7 +26,7 @@ struct VertexInput {
 struct VsOut {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) local_pos: vec2<f32>,
-    @location(1) instance_id: u32,
+    @interpolate(flat) @location(1) instance_id: u32,
 };
 
 @vertex

@@ -10,7 +10,10 @@ use iced_plot::{Color, LineStyle, MarkerStyle, Series, TooltipContext};
 use iced::Element;
 
 fn main() -> iced::Result {
-    iced::application(new, update, view).run()
+    iced::application(new, update, view)
+        .font(include_bytes!("fonts/FiraCodeNerdFont-Regular.ttf"))
+        .default_font(iced::Font::with_name("FiraCode Nerd Font"))
+        .run()
 }
 
 fn update(widget: &mut PlotWidget, message: PlotUiMessage) {

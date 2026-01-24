@@ -28,4 +28,10 @@ PlotWidgetBuilder::new()
 
 See the `examples/` directory for more.
 
-<img src="./iced_plot.png" alt="iced_plot" width="800">
+## Wasm support
+
+Iced plot works in WebGPU-enabled browsers. The examples can be served with [trunk](https://trunkrs.dev/):
+
+```
+$ trunk serve examples/index.html --example custom_ticks
+```

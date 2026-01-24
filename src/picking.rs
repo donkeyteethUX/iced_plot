@@ -9,7 +9,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use iced::wgpu::*;
@@ -98,6 +98,22 @@ pub(crate) struct PickingPass {
 
     // Mapping from instance_id (draw instance) -> (span_index, local_pt_index)
     id_map: Vec<(u32, u32)>,
+
+    pending: Option<PendingReadback>,
+}
+
+struct PendingReadback {
+    instance_id: u64,
+    seq: u64,
+    needed: u64,
+    bytes_per_row: u32,
+    max_w: u32,
+    max_h: u32,
+    min_x: u32,
+    min_y: u32,
+    cx: u32,
+    cy: u32,
+    map_status: Arc<Mutex<Option<Result<(), BufferAsyncError>>>>,
 }
 
 impl Default for PickingPass {
@@ -112,12 +128,14 @@ impl Default for PickingPass {
             staging: None,
             staging_size: 0,
             id_map: Vec::new(),
+            pending: None,
         }
     }
 }
 
 impl PickingPass {
-    /// Service a pick request: draw IDs, copy a small region around cursor, map and scan synchronously.
+    /// Service a pick request: draw IDs, copy a small region around cursor, and start an async
+    /// map/readback. Completion is handled on later frames without blocking.
     /// Publishes a PickResult via the registry.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn service(
@@ -132,6 +150,12 @@ impl PickingPass {
         points: &[Point],
         series: &[SeriesSpan],
     ) {
+        self.poll_pending(device, points, series);
+
+        if self.pending.is_some() {
+            return;
+        }
+
         // Take the latest request, if any
         let req = match take_latest_request(instance_id) {
             Some(r) => r,
@@ -241,24 +265,102 @@ impl PickingPass {
             copy_size,
         );
 
-        // Submit and synchronously map the tiny buffer (acceptable small stall)
+        // Submit and asynchronously map the tiny buffer
         queue.submit(std::iter::once(encoder.finish()));
 
         let buf = self.staging.as_ref().unwrap();
         let slice = buf.slice(0..needed);
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let map_status = Arc::new(Mutex::new(None));
+        let status_clone = Arc::clone(&map_status);
         slice.map_async(MapMode::Read, move |res| {
-            let _ = tx.send(res);
+            *status_clone.lock().unwrap() = Some(res);
         });
-        // Drive completion for this tiny buffer
-        let _ = device.poll(PollType::Wait {
-            submission_index: None,
-            timeout: None,
+
+        self.pending = Some(PendingReadback {
+            instance_id,
+            seq: req.seq,
+            needed,
+            bytes_per_row,
+            max_w,
+            max_h,
+            min_x,
+            min_y,
+            cx,
+            cy,
+            map_status,
         });
-        let _ = rx.recv();
-        let data = slice.get_mapped_range();
-        // Scan for nearest non-zero, by squared distance in pixel space
-        let mut best: Option<(u32, i32)> = None; // (id, dist2)
+    }
+
+    pub(crate) fn set_view(&mut self, w: u32, h: u32, scale: f32) {
+        self.size_w = w.max(1);
+        self.size_h = h.max(1);
+        self.scale_factor = scale;
+    }
+
+    pub(crate) fn set_id_map(&mut self, map: Vec<(u32, u32)>) {
+        self.id_map = map;
+    }
+
+    fn poll_pending(&mut self, device: &Device, points: &[Point], series: &[SeriesSpan]) {
+        let Some(pending) = self.pending.as_ref() else {
+            return;
+        };
+
+        let _ = device.poll(PollType::Poll);
+        let Some(res) = pending.map_status.lock().unwrap().take() else {
+            return;
+        };
+
+        let hit = match res {
+            Ok(()) => {
+                let buf = self.staging.as_ref().unwrap();
+                let slice = buf.slice(0..pending.needed);
+                let data = slice.get_mapped_range();
+                let best = Self::scan_best_id(
+                    &data,
+                    pending.bytes_per_row,
+                    pending.max_w,
+                    pending.max_h,
+                    pending.min_x,
+                    pending.min_y,
+                    pending.cx,
+                    pending.cy,
+                );
+                drop(data);
+                buf.unmap();
+                best.and_then(|(id, _)| self.decode_id_to_hit(id, points, series))
+            }
+            Err(_) => {
+                if let Some(buf) = self.staging.as_ref() {
+                    buf.unmap();
+                }
+                None
+            }
+        };
+
+        publish_result(
+            pending.instance_id,
+            PickResult {
+                seq: pending.seq,
+                hit,
+            },
+        );
+
+        self.pending = None;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn scan_best_id(
+        data: &[u8],
+        bytes_per_row: u32,
+        max_w: u32,
+        max_h: u32,
+        min_x: u32,
+        min_y: u32,
+        cx: u32,
+        cy: u32,
+    ) -> Option<(u32, i32)> {
+        let mut best: Option<(u32, i32)> = None;
         for row in 0..max_h as usize {
             let row_off = row as u64 * bytes_per_row as u64;
             for col in 0..max_w as usize {
@@ -272,8 +374,8 @@ impl PickingPass {
                 if id != 0 {
                     let sx = min_x as i32 + col as i32;
                     let sy = min_y as i32 + row as i32;
-                    let dx = sx as i32 - cx as i32;
-                    let dy = sy as i32 - cy as i32;
+                    let dx = sx - cx as i32;
+                    let dy = sy - cy as i32;
                     let d2 = dx * dx + dy * dy;
                     if let Some((_, bd2)) = best {
                         if d2 < bd2 {
@@ -285,22 +387,7 @@ impl PickingPass {
                 }
             }
         }
-        drop(data);
-        buf.unmap();
-
-        // Decode and publish
-        let hit = best.and_then(|(id, _)| self.decode_id_to_hit(id, points, series));
-        publish_result(instance_id, PickResult { seq: req.seq, hit });
-    }
-
-    pub(crate) fn set_view(&mut self, w: u32, h: u32, scale: f32) {
-        self.size_w = w.max(1);
-        self.size_h = h.max(1);
-        self.scale_factor = scale;
-    }
-
-    pub(crate) fn set_id_map(&mut self, map: Vec<(u32, u32)>) {
-        self.id_map = map;
+        best
     }
 
     fn ensure_staging(&mut self, device: &Device, needed: u64) {

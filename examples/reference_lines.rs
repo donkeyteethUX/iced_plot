@@ -8,7 +8,10 @@ use iced::Element;
 use std::f64::consts::{PI, TAU};
 
 fn main() -> iced::Result {
-    iced::application(new, update, view).run()
+    iced::application(new, update, view)
+        .font(include_bytes!("fonts/FiraCodeNerdFont-Regular.ttf"))
+        .default_font(iced::Font::with_name("FiraCode Nerd Font"))
+        .run()
 }
 
 fn update(widget: &mut PlotWidget, message: PlotUiMessage) {

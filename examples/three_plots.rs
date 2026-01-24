@@ -10,7 +10,10 @@ use iced::Element;
 use iced::widget::column;
 
 fn main() -> iced::Result {
-    iced::application(App::new, App::update, App::view).run()
+    iced::application(App::new, App::update, App::view)
+        .font(include_bytes!("fonts/FiraCodeNerdFont-Regular.ttf"))
+        .default_font(iced::Font::with_name("FiraCode Nerd Font"))
+        .run()
 }
 
 struct App {
