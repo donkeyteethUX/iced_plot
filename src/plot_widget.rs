@@ -14,9 +14,7 @@ use iced::{
     padding,
     wgpu::TextureFormat,
     widget::{
-        self, container,
-        shader::{self, Pipeline, Viewport},
-        stack,
+        self, container, responsive, shader::{self, Pipeline, Viewport}, stack
     },
 };
 
@@ -484,23 +482,26 @@ impl PlotWidget {
         let offset_x = payload.x + 8.0;
         let offset_y = payload.y + 8.0;
 
-        let bubble = container(widget::text(payload.text.clone()).size(14.0))
+        let overlay = responsive(move |size| {
+            let bubble = container(widget::text(payload.text.clone()).size(14.0))
             .padding(6.0)
             .style(container::rounded_box);
 
-        let overlay = container(bubble)
+            container(bubble)
             .width(Length::Fill)
             .height(Length::Fill)
             .padding(Padding {
-                left: offset_x,
+                left: offset_x.min(size.width - 80.0),
                 right: 0.0,
-                top: offset_y,
+                top: offset_y.min(size.height - 40.0),
                 bottom: 0.0,
             })
             .align_x(Horizontal::Left)
             .align_y(alignment::Vertical::Top)
             .style(|_| container::background(Color::TRANSPARENT))
-            .into();
+            .into()
+        })
+        .into();
 
         Some(overlay)
     }
