@@ -8,13 +8,15 @@ use std::{
 
 use glam::{DVec2, Vec2};
 use iced::{
-    Color, Element, Length, Padding, Rectangle, Theme,
+    Color, Element, Length, Rectangle, Theme,
     alignment::{self, Horizontal},
     mouse::{self, Interaction},
     padding,
     wgpu::TextureFormat,
     widget::{
-        self, container, responsive, shader::{self, Pipeline, Viewport}, stack
+        self, container,
+        shader::{self, Pipeline, Viewport},
+        stack,
     },
 };
 
@@ -482,23 +484,33 @@ impl PlotWidget {
         let offset_x = payload.x + 8.0;
         let offset_y = payload.y + 8.0;
 
-        let overlay = responsive(move |size| {
-            let bubble = container(widget::text(payload.text.clone()).size(14.0))
-            .padding(6.0)
-            .style(container::rounded_box);
+        let overlay = widget::responsive(move |size| {
+            let tooltip_bubble = container(widget::text(payload.text.clone()).size(14.0))
+                .padding(6.0)
+                .style(container::rounded_box);
 
-            container(bubble)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(Padding {
-                left: offset_x.min(size.width - 80.0),
-                right: 0.0,
-                top: offset_y.min(size.height - 40.0),
-                bottom: 0.0,
-            })
-            .align_x(Horizontal::Left)
-            .align_y(alignment::Vertical::Top)
-            .style(|_| container::background(Color::TRANSPARENT))
+            let hotspot = widget::space()
+                .width(Length::Fixed(1.0))
+                .height(Length::Fixed(1.0));
+
+            let max_left = (size.width - 1.0).max(0.0);
+            let max_top = (size.height - 1.0).max(0.0);
+
+            let positioned_hotspot = container(hotspot)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(padding::left(offset_x.min(max_left)))
+                .padding(padding::top(offset_y.min(max_top)))
+                .align_x(Horizontal::Left)
+                .align_y(alignment::Vertical::Top);
+
+            widget::tooltip(
+                positioned_hotspot,
+                tooltip_bubble,
+                widget::tooltip::Position::FollowCursor,
+            )
+            .gap(8.0)
+            .snap_within_viewport(true)
             .into()
         })
         .into();
