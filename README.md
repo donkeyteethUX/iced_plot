@@ -1,7 +1,7 @@
 [![Crates.io](https://img.shields.io/crates/v/iced_plot)](https://crates.io/crates/iced_plot)
 [![Documentation](https://docs.rs/iced_plot/badge.svg)](https://docs.rs/iced_plot)
 
-A GPU-accelerated plotting widget for Iced.
+A batteries-included GPU-accelerated plotting widget for Iced.
 
 ## Features
 
