@@ -37,7 +37,8 @@ pub(crate) struct Hit {
     pub series_label: String,
     pub point_index: usize, // index within its series span
     pub world: [f64; 2],
-    pub size_px: f32,
+    pub size: f32,
+    pub size_mode: u32,
 }
 
 #[derive(Default)]
@@ -457,8 +458,8 @@ impl PickingPass {
                 entry_point: Some("vs_main"),
                 compilation_options: PipelineCompilationOptions::default(),
                 buffers: &[VertexBufferLayout {
-                    // Must match markers: 32 bytes per instance
-                    array_stride: 32,
+                    // Must match markers: 36 bytes per instance
+                    array_stride: 36,
                     step_mode: VertexStepMode::Instance,
                     attributes: &[
                         VertexAttribute {
@@ -480,6 +481,11 @@ impl PickingPass {
                             offset: 28,
                             shader_location: 3,
                             format: VertexFormat::Float32,
+                        },
+                        VertexAttribute {
+                            offset: 32,
+                            shader_location: 4,
+                            format: VertexFormat::Uint32,
                         },
                     ],
                 }],
@@ -541,7 +547,8 @@ impl PickingPass {
             series_label: span.label.clone(),
             point_index: local_idx,
             world,
-            size_px: pt.size,
+            size: pt.size,
+            size_mode: pt.size_mode,
         })
     }
 }

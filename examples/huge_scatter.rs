@@ -2,7 +2,7 @@
 use iced_plot::PlotUiMessage;
 use iced_plot::PlotWidget;
 use iced_plot::Series;
-use iced_plot::{MarkerStyle, MarkerType, PlotWidgetBuilder};
+use iced_plot::{MarkerStyle, PlotWidgetBuilder};
 
 use iced::{Color, Element};
 
@@ -41,15 +41,9 @@ fn new_scatter() -> PlotWidget {
         .map(|_| [normal.sample(&mut rng), normal.sample(&mut rng)])
         .collect::<Vec<[f64; 2]>>();
 
-    let series = Series::markers_only(
-        positions,
-        MarkerStyle {
-            size: 1.0,
-            marker_type: MarkerType::FilledCircle,
-        },
-    )
-    .with_label("2d Gaussian scatter - 5M points")
-    .with_color(Color::from_rgb(0.2, 0.6, 1.0));
+    let series = Series::markers_only(positions, MarkerStyle::circle(1.0))
+        .with_label("2d Gaussian scatter - 5M points")
+        .with_color(Color::from_rgb(0.2, 0.6, 1.0));
 
     PlotWidgetBuilder::new()
         .with_tooltip_provider(|ctx| {

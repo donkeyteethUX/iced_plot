@@ -8,7 +8,7 @@ use iced::{
 };
 
 use crate::{
-    AxisLink, HLine, LineStyle, PlotWidget, Point, VLine,
+    AxisLink, HLine, LineStyle, MarkerSize, PlotWidget, Point, VLine,
     camera::Camera,
     ticks::{PositionedTick, TickFormatter, TickProducer},
 };
@@ -144,11 +144,11 @@ impl PlotState {
 
                 // Only create points if we have markers OR lines (lines need points for geometry)
                 if series.marker_style.is_some() || series.line_style.is_some() {
-                    let size = series
+                    let (size, size_mode) = series
                         .marker_style
                         .as_ref()
-                        .map(|ms| ms.size)
-                        .unwrap_or(1.0);
+                        .map(|ms| ms.size.to_raw())
+                        .unwrap_or((1.0, crate::point::MARKER_SIZE_PIXELS));
                     let color = series
                         .point_colors
                         .as_ref()
@@ -158,6 +158,7 @@ impl PlotState {
                     points.push(Point {
                         position: pos,
                         size,
+                        size_mode,
                     });
                     point_colors.push(color);
                 }
@@ -178,6 +179,16 @@ impl PlotState {
                 color,
                 marker,
             });
+
+            // If this series has a world-space marker, the data_max should be adjusted to account for the marker size.
+            if let Some(size) = series.marker_style.as_ref().and_then(|m| match m.size {
+                MarkerSize::World(size) => Some(size),
+                MarkerSize::Pixels(_) => None,
+            }) && let Some(data_max) = &mut data_max
+            {
+                data_max.x += size;
+                data_max.y += size;
+            }
         }
 
         // Filter visible reference lines

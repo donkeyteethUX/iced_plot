@@ -21,8 +21,9 @@ use iced::{
 };
 
 use crate::{
-    HLine, PlotUiMessage, Series, TooltipContext, VLine, axes_labels,
+    HLine, PlotUiMessage, Point, Series, TooltipContext, VLine, axes_labels,
     axis_link::AxisLink,
+    camera::Camera,
     legend::{self, LegendEntry},
     message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
     picking,
@@ -65,6 +66,7 @@ pub struct PlotWidget {
     pub(crate) y_tick_producer: Option<TickProducer>,
     pub(crate) tick_label_size: f32,
     pub(crate) axis_label_size: f32,
+    pub(crate) data_aspect: Option<f64>,
     // UI state
     pub(crate) tooltip_ui: Option<TooltipUiPayload>,
     pub(crate) cursor_ui: Option<CursorPositionUiPayload>,
@@ -108,6 +110,7 @@ impl PlotWidget {
             y_tick_producer: Some(Arc::new(ticks::default_tick_producer)),
             tick_label_size: 10.0,
             axis_label_size: 16.0,
+            data_aspect: None,
             x_ticks: Vec::new(),
             y_ticks: Vec::new(),
             tooltip_ui: None,
@@ -132,6 +135,16 @@ impl PlotWidget {
         self.series.push(item);
         self.data_version += 1;
         Ok(())
+    }
+
+    /// Set the data aspect ratio (y units per x unit). Use 1.0 for square pixels.
+    pub fn set_data_aspect(&mut self, aspect: f64) {
+        if aspect.is_finite() && aspect > 0.0 {
+            self.data_aspect = Some(aspect);
+        } else {
+            self.data_aspect = None;
+        }
+        self.data_version = self.data_version.wrapping_add(1);
     }
 
     /// Remove a data series from the plot by its label.
@@ -832,6 +845,12 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             _ => {}
         }
 
+        if let Some(aspect) = self.data_aspect
+            && apply_data_aspect(&mut state.camera, &state.bounds, aspect)
+        {
+            needs_redraw = true;
+        }
+
         // Process picking results after event handling (works for both mouse events and data updates)
         if state.hover_enabled && state.points.len() >= CPU_PICK_THRESHOLD {
             // Try to consume a GPU pick result for this instance
@@ -976,7 +995,7 @@ fn cpu_pick_hit(state: &PlotState) -> Option<picking::Hit> {
             break;
         }
 
-        let world = DVec2::new(pt.position[0], pt.position[1]);
+        let world = marker_center_world(pt);
         let ndc_x = (world.x - state.camera.position.x) / state.camera.half_extents.x;
         let ndc_y = (world.y - state.camera.position.y) / state.camera.half_extents.y;
         let screen_x = (ndc_x + 1.0) * 0.5 * width;
@@ -985,7 +1004,8 @@ fn cpu_pick_hit(state: &PlotState) -> Option<picking::Hit> {
         let dx = screen_x - cursor_x;
         let dy = screen_y - cursor_y;
         let d2 = dx * dx + dy * dy;
-        let radius = state.hover_radius_px as f64 + (pt.size as f64) * 0.5;
+        let marker_px = marker_size_px(pt.size, pt.size_mode, &state.camera, &state.bounds) as f64;
+        let radius = state.hover_radius_px as f64 + marker_px * 0.5;
         if d2 <= radius * radius {
             if let Some((_, best_d2)) = best {
                 if d2 < best_d2 {
@@ -1011,7 +1031,8 @@ fn cpu_pick_hit(state: &PlotState) -> Option<picking::Hit> {
         series_label: span.label.clone(),
         point_index: local_idx,
         world: [pt.position[0], pt.position[1]],
-        size_px: pt.size,
+        size: pt.size,
+        size_mode: pt.size_mode,
     })
 }
 
@@ -1023,9 +1044,16 @@ fn apply_pick_result(
 ) -> (Option<TooltipUiPayload>, bool, bool) {
     match hit {
         Some(hit) => {
+            let size_px = marker_size_px(hit.size, hit.size_mode, &state.camera, &state.bounds);
             let world_v = DVec2::new(hit.world[0], hit.world[1]);
-            state.hovered_world = Some(hit.world);
-            state.hovered_size_px = hit.size_px;
+            let hover_world = if hit.size_mode == crate::point::MARKER_SIZE_WORLD {
+                let half = hit.size as f64 * 0.5;
+                [hit.world[0] + half, hit.world[1] + half]
+            } else {
+                hit.world
+            };
+            state.hovered_world = Some(hover_world);
+            state.hovered_size_px = size_px;
             let ctx = TooltipContext {
                 series_label: hit.series_label.clone(),
                 point_index: hit.point_index,
@@ -1041,7 +1069,7 @@ fn apply_pick_result(
                 series_label: hit.series_label,
                 point_index: hit.point_index,
                 _world: world_v,
-                _size_px: hit.size_px,
+                _size_px: size_px,
             };
             state.last_hover_cache = Some(hover_hit);
             state.hover_version = state.hover_version.wrapping_add(1);
@@ -1070,6 +1098,42 @@ fn apply_pick_result(
             (None, cleared, redraw)
         }
     }
+}
+
+fn marker_size_px(size: f32, size_mode: u32, camera: &Camera, bounds: &Rectangle) -> f32 {
+    if size_mode != crate::point::MARKER_SIZE_WORLD {
+        return size;
+    }
+    let width = bounds.width.max(1.0) as f64;
+    let height = bounds.height.max(1.0) as f64;
+    let world_per_px_x = (2.0 * camera.half_extents.x) / width;
+    let world_per_px_y = (2.0 * camera.half_extents.y) / height;
+    let world_per_px_x = world_per_px_x.max(1e-12);
+    let world_per_px_y = world_per_px_y.max(1e-12);
+    let px_x = size as f64 / world_per_px_x;
+    let px_y = size as f64 / world_per_px_y;
+    px_x.max(px_y) as f32
+}
+
+fn marker_center_world(pt: &Point) -> DVec2 {
+    let mut world = DVec2::new(pt.position[0], pt.position[1]);
+    if pt.size_mode == crate::point::MARKER_SIZE_WORLD {
+        let half = pt.size as f64 * 0.5;
+        world.x += half;
+        world.y += half;
+    }
+    world
+}
+
+fn apply_data_aspect(camera: &mut Camera, bounds: &Rectangle, aspect: f64) -> bool {
+    let width = bounds.width.max(1.0) as f64;
+    let height = bounds.height.max(1.0) as f64;
+    let target_half_y = aspect * camera.half_extents.x * (height / width);
+    if (camera.half_extents.y - target_half_y).abs() > f64::EPSILON {
+        camera.half_extents.y = target_half_y;
+        return true;
+    }
+    false
 }
 
 impl Pipeline for PlotRendererState {

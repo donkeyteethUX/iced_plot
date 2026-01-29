@@ -21,6 +21,7 @@ struct VertexInput {
     @location(1) color: vec4<f32>,
     // We don't care about the marker type which is at location 2.
     @location(3) size: f32,
+    @location(4) size_mode: u32,
 };
 
 struct VsOut {
@@ -37,10 +38,22 @@ fn vs_main(
 ) -> VsOut {
     var out: VsOut;
     let local = QUAD_POS[vid];
-    let center = camera.view_proj * vec4<f32>(model.position, 0.0, 1.0);
+    var center_pos = model.position;
+    var half_world = 0.0;
+    if (model.size_mode == 1u) {
+        half_world = model.size * 0.5;
+        center_pos = center_pos + vec2<f32>(half_world, half_world);
+    }
+    let center = camera.view_proj * vec4<f32>(center_pos, 0.0, 1.0);
+    var half_size_px_x = model.size;
+    var half_size_px_y = model.size;
+    if (model.size_mode == 1u) {
+        half_size_px_x = half_world / camera.pixel_to_world.x;
+        half_size_px_y = half_world / camera.pixel_to_world.y;
+    }
     let offset = vec4<f32>(
-        local.x * model.size * camera.pixel_to_clip.x * center.w,
-        local.y * model.size * camera.pixel_to_clip.y * center.w,
+        local.x * half_size_px_x * camera.pixel_to_clip.x * center.w,
+        local.y * half_size_px_y * camera.pixel_to_clip.y * center.w,
         0.0, 0.0);
     out.clip_position = center + offset;
     out.local_pos = local;

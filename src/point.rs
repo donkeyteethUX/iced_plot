@@ -16,6 +16,9 @@ pub enum MarkerType {
     Triangle = 4,
 }
 
+pub(crate) const MARKER_SIZE_PIXELS: u32 = 0;
+pub(crate) const MARKER_SIZE_WORLD: u32 = 1;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 /// A point in data-space with a visual size.
@@ -24,8 +27,10 @@ pub enum MarkerType {
 pub struct Point {
     /// Position in data coordinates [x, y].
     pub position: [f64; 2],
-    /// Visual size in pixels.
+    /// Visual size value (pixels or world units depending on mode).
     pub size: f32,
+    /// 0 = pixels, 1 = world units.
+    pub size_mode: u32,
 }
 
 impl Point {
@@ -33,6 +38,15 @@ impl Point {
         Self {
             position: [x, y],
             size,
+            size_mode: MARKER_SIZE_PIXELS,
+        }
+    }
+
+    pub fn new_world(x: f64, y: f64, size: f64) -> Self {
+        Self {
+            position: [x, y],
+            size: size as f32,
+            size_mode: MARKER_SIZE_WORLD,
         }
     }
 
@@ -54,5 +68,25 @@ impl Point {
 
     pub fn triangle(x: f64, y: f64, size: f32) -> Self {
         Self::new(x, y, size)
+    }
+
+    pub fn filled_circle_world(x: f64, y: f64, size: f64) -> Self {
+        Self::new_world(x, y, size)
+    }
+
+    pub fn empty_circle_world(x: f64, y: f64, size: f64) -> Self {
+        Self::new_world(x, y, size)
+    }
+
+    pub fn square_world(x: f64, y: f64, size: f64) -> Self {
+        Self::new_world(x, y, size)
+    }
+
+    pub fn star_world(x: f64, y: f64, size: f64) -> Self {
+        Self::new_world(x, y, size)
+    }
+
+    pub fn triangle_world(x: f64, y: f64, size: f64) -> Self {
+        Self::new_world(x, y, size)
     }
 }

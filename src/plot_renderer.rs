@@ -378,9 +378,9 @@ impl PlotRenderer {
                 entry_point: Some("vs_main"),
                 compilation_options: PipelineCompilationOptions::default(),
                 buffers: &[VertexBufferLayout {
-                    // Explicit 32-byte stride: vec2<f32> position (8) + vec4<f32> color (16)
-                    // + u32 marker (4) + f32 size (4) = 32
-                    array_stride: 32u64,
+                    // Explicit 36-byte stride: vec2<f32> position (8) + vec4<f32> color (16)
+                    // + u32 marker (4) + f32 size (4) + u32 size_mode (4) = 36
+                    array_stride: 36u64,
                     step_mode: VertexStepMode::Instance,
                     attributes: &[
                         VertexAttribute {
@@ -403,6 +403,12 @@ impl PlotRenderer {
                                 + std::mem::size_of::<u32>() as u64,
                             shader_location: 3,
                             format: VertexFormat::Float32,
+                        },
+                        VertexAttribute {
+                            offset: std::mem::size_of::<[f32; 7]>() as u64
+                                + std::mem::size_of::<u32>() as u64,
+                            shader_location: 4,
+                            format: VertexFormat::Uint32,
                         },
                     ],
                 }],
@@ -647,7 +653,7 @@ impl PlotRenderer {
             return;
         }
 
-        let mut writer = VertexWriter::with_capacity(marker_series_count * 32);
+        let mut writer = VertexWriter::with_capacity(marker_series_count * 36);
         let mut id_map: Vec<(u32, u32)> = Vec::with_capacity(marker_series_count);
 
         // Iterate series so we can pick per-point color/marker for each point.
@@ -672,6 +678,7 @@ impl PlotRenderer {
                 writer.write_color(color);
                 writer.write_u32(s.marker);
                 writer.write_f32(p.size);
+                writer.write_u32(p.size_mode);
 
                 id_map.push((span_idx as u32, local_i as u32));
             }

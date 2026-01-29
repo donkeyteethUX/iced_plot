@@ -24,6 +24,7 @@ struct VertexInput {
     @location(1) color: vec4<f32>,
     @location(2) marker_type: u32,
     @location(3) size: f32,
+    @location(4) size_mode: u32,
 };
 
 struct VertexOutput {
@@ -44,13 +45,24 @@ fn vs_main(
     // Generate quad vertices for each marker
     let local_pos = QUAD_POS[vertex_index];
 
+    var center_pos = model.position;
+    var half_world = 0.0;
+    if (model.size_mode == 1u) {
+        half_world = model.size * 0.5;
+        center_pos = center_pos + vec2<f32>(half_world, half_world);
+    }
     // Center in clip space
-    let center_clip = camera.view_proj * vec4<f32>(model.position, 0.0, 1.0);
-    // Perspective divide later handled by hardware; apply pixel offsets in clip units scaled by w.
-    // Interpret model.size as pixel radius directly
-    let half_size_px = model.size;
-    let offset_clip = vec4<f32>(local_pos.x * half_size_px * camera.pixel_to_clip.x * center_clip.w,
-                                local_pos.y * half_size_px * camera.pixel_to_clip.y * center_clip.w,
+    let center_clip = camera.view_proj * vec4<f32>(center_pos, 0.0, 1.0);
+
+    // Interpret model.size as pixels or world units depending on size_mode
+    var half_size_px_x = model.size;
+    var half_size_px_y = model.size;
+    if (model.size_mode == 1u) {
+        half_size_px_x = half_world / camera.pixel_to_world.x;
+        half_size_px_y = half_world / camera.pixel_to_world.y;
+    }
+    let offset_clip = vec4<f32>(local_pos.x * half_size_px_x * camera.pixel_to_clip.x * center_clip.w,
+                                local_pos.y * half_size_px_y * camera.pixel_to_clip.y * center_clip.w,
                                 0.0, 0.0);
     out.clip_position = center_clip + offset_clip;
     out.color = model.color;

@@ -45,6 +45,7 @@ pub struct PlotWidgetBuilder {
     enable_y_tick_labels: Option<bool>,
     tick_label_size: Option<f32>,
     axis_label_size: Option<f32>,
+    data_aspect: Option<f64>,
     series: Vec<Series>,
     vlines: Vec<VLine>,
     hlines: Vec<HLine>,
@@ -212,6 +213,18 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Set the width-to-height aspect ratio of the data in the plot.
+    ///
+    /// For example, you may want to use 1.0 if both axes are in the same units.
+    pub fn with_data_aspect(mut self, aspect: f64) -> Self {
+        if aspect.is_sign_positive() {
+            self.data_aspect = Some(aspect);
+        } else {
+            self.data_aspect = None;
+        }
+        self
+    }
+
     /// Add a [`Series`] to the plot.
     pub fn add_series(mut self, series: Series) -> Self {
         self.series.push(series);
@@ -307,6 +320,9 @@ impl PlotWidgetBuilder {
         }
         if let Some(size) = self.axis_label_size {
             w.axis_label_size = size;
+        }
+        if let Some(aspect) = self.data_aspect {
+            w.set_data_aspect(aspect);
         }
         for s in self.series {
             w.add_series(s)?;

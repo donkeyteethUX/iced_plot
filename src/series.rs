@@ -14,12 +14,43 @@ pub enum LineStyle {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+/// Marker size modes.
+pub enum MarkerSize {
+    /// Marker size in logical pixels. The marker will be centered on the data position.
+    ///
+    /// This is usually the right default.
+    Pixels(f32),
+
+    /// Marker size in world units. The marker will be painted at the data position such that
+    /// the lower-left corner of the marker is at the data position.
+    ///
+    /// This is useful for implementing heatmaps and similar applications where markers
+    /// need to paint an area of the plot.
+    World(f64),
+}
+
+impl From<f32> for MarkerSize {
+    fn from(size: f32) -> Self {
+        Self::Pixels(size)
+    }
+}
+
+impl MarkerSize {
+    pub(crate) fn to_raw(self) -> (f32, u32) {
+        match self {
+            Self::Pixels(size) => (size, 0),
+            Self::World(size) => (size as f32, 1),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 /// Marker styling options for series points.
 ///
 /// Defines how individual data points are rendered.
 pub struct MarkerStyle {
-    /// Size of the marker in pixels.
-    pub size: f32,
+    /// Size of the marker in pixels or world units.
+    pub size: MarkerSize,
     /// Shape of the marker.
     pub marker_type: MarkerType,
 }
@@ -27,7 +58,7 @@ pub struct MarkerStyle {
 impl Default for MarkerStyle {
     fn default() -> Self {
         Self {
-            size: 5.0,
+            size: MarkerSize::Pixels(5.0),
             marker_type: MarkerType::FilledCircle,
         }
     }
@@ -35,40 +66,50 @@ impl Default for MarkerStyle {
 
 impl MarkerStyle {
     pub fn new(size: f32, marker_type: MarkerType) -> Self {
-        Self { size, marker_type }
+        Self {
+            size: MarkerSize::Pixels(size),
+            marker_type,
+        }
+    }
+
+    pub fn new_world(size: f64, marker_type: MarkerType) -> Self {
+        Self {
+            size: MarkerSize::World(size),
+            marker_type,
+        }
     }
 
     pub fn circle(size: f32) -> Self {
         Self {
-            size,
+            size: MarkerSize::Pixels(size),
             marker_type: MarkerType::FilledCircle,
         }
     }
 
     pub fn ring(size: f32) -> Self {
         Self {
-            size,
+            size: MarkerSize::Pixels(size),
             marker_type: MarkerType::EmptyCircle,
         }
     }
 
     pub fn square(size: f32) -> Self {
         Self {
-            size,
+            size: MarkerSize::Pixels(size),
             marker_type: MarkerType::Square,
         }
     }
 
     pub fn star(size: f32) -> Self {
         Self {
-            size,
+            size: MarkerSize::Pixels(size),
             marker_type: MarkerType::Star,
         }
     }
 
     pub fn triangle(size: f32) -> Self {
         Self {
-            size,
+            size: MarkerSize::Pixels(size),
             marker_type: MarkerType::Triangle,
         }
     }
