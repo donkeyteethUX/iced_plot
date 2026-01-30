@@ -120,15 +120,10 @@ impl PlotWidget {
     }
 
     /// Add a data series to the plot.
+    /// If there is a series with the same `item.id` ([ShapeId]) already exists, the old one will be replaced.
     pub fn add_series(&mut self, item: Series) -> Result<(), SeriesError> {
         item.validate()?;
-
-        // Enforce unique ID
-        let id = item.id;
-        if self.series.insert(id, item).is_some() {
-            return Err(SeriesError::DuplicateId(id));
-        }
-
+        _ = self.series.insert(item.id, item);
         self.data_version += 1;
         Ok(())
     }
@@ -143,9 +138,10 @@ impl PlotWidget {
         self.data_version = self.data_version.wrapping_add(1);
     }
 
-    /// Remove a data series from the plot by its it.
+    /// Remove a data series from the plot by its ID.
     pub fn remove_series(&mut self, id: &ShapeId) -> Result<(), SeriesError> {
         if self.series.shift_remove(id).is_some() {
+            self.hidden_shapes.remove(id);
             self.data_version += 1;
             Ok(())
         } else {
@@ -169,27 +165,17 @@ impl PlotWidget {
     }
 
     /// Add a vertical reference line to the plot.
-    pub fn add_vline(&mut self, vline: VLine) -> Result<(), SeriesError> {
-        // Enforce unique ID
-        let id = vline.id;
-        if self.vlines.insert(id, vline).is_some() {
-            return Err(SeriesError::DuplicateId(id));
-        }
-
+    /// If there is a line with the same `vline.id` ([ShapeId]) already exists, the old one will be replaced.
+    pub fn add_vline(&mut self, vline: VLine) {
+        _ = self.vlines.insert(vline.id, vline);
         self.data_version += 1;
-        Ok(())
     }
 
     /// Add a horizontal reference line to the plot.
-    pub fn add_hline(&mut self, hline: HLine) -> Result<(), SeriesError> {
-        // Enforce unique ID
-        let id = hline.id;
-        if self.hlines.insert(id, hline).is_some() {
-            return Err(SeriesError::DuplicateId(id));
-        }
-
+    /// If there is a line with the same `hline.id` ([ShapeId]) already exists, the old one will be replaced.
+    pub fn add_hline(&mut self, hline: HLine) {
+        _ = self.hlines.insert(hline.id, hline);
         self.data_version += 1;
-        Ok(())
     }
 
     /// Set the x-axis label.

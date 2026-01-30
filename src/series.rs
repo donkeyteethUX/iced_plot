@@ -134,9 +134,30 @@ pub enum SeriesError {
     InvalidPointColorsLength,
 }
 
+/// Unique identifier for a shape in the plot.
+///
+/// You can obtain the [ShapeId] of [Series], [VLine](crate::VLine), or [HLine](crate::HLine) by `id` field:
+/// ```rust
+/// use iced_plot::{Series, VLine, HLine, MarkerStyle, LineStyle};
+/// let series = Series::new(vec![[0.0, 0.0], [1.0, 1.0]], MarkerStyle::circle(5.0), LineStyle::Solid);
+/// let id1 = series.id;
+///
+/// let vline = VLine::new(0.0);
+/// let id2 = vline.id;
+///
+/// let hline = HLine::new(0.0);
+/// let id3 = hline.id;
+///
+/// assert_ne!(id1, id2);
+/// assert_ne!(id1, id3);
+/// assert_ne!(id2, id3);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ShapeId(pub(crate) u64);
 impl ShapeId {
+    /// Create a new unique shape ID (0, 1, 2, ...).
+    ///
+    /// Used internally by the plot widget to create unique IDs for series, vlines, and hlines.
     pub(crate) fn new() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
