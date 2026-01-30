@@ -1,8 +1,8 @@
 //! Example of a scrolling plot with new data points being added over time.
 use iced_plot::PlotUiMessage;
 use iced_plot::PlotWidget;
-use iced_plot::Series;
 use iced_plot::{MarkerStyle, PlotWidgetBuilder};
+use iced_plot::{Series, ShapeId};
 
 use iced::window;
 use iced::{Color, Element};
@@ -22,8 +22,8 @@ enum Message {
 }
 
 struct App {
+    series_id: ShapeId,
     widget: PlotWidget,
-    positions: Vec<[f64; 2]>,
     x: f64,
 }
 
@@ -34,22 +34,19 @@ impl App {
                 self.widget.update(plot_msg);
             }
             Message::Tick => {
-                // Add new point
                 let y = (self.x * 0.5).sin();
-                self.positions.push([self.x, y]);
-                self.x += 0.1f64;
-
-                // Keep only last 300 points for scrolling effect
-                if self.positions.len() > 300 {
-                    self.positions.remove(0);
-                }
-
                 // Update the series
-                self.widget.remove_series("scrolling");
-                let series = Series::markers_only(self.positions.clone(), MarkerStyle::ring(10.0))
-                    .with_label("scrolling")
-                    .with_color(Color::WHITE);
-                self.widget.add_series(series).unwrap();
+                self.widget
+                    .update_series(&self.series_id, |series| {
+                        // Add new point
+                        series.positions.push([self.x, y]);
+                        // Keep only last 300 points for scrolling effect
+                        if series.positions.len() > 300 {
+                            series.positions.remove(0);
+                        }
+                    })
+                    .unwrap();
+                self.x += 0.1f64;
             }
         }
     }
@@ -63,13 +60,18 @@ impl App {
     }
 
     fn new() -> Self {
+        let x = 0.0f64;
+        let series = Series::markers_only(vec![[x, (x * 0.5).sin()]], MarkerStyle::ring(10.0))
+            .with_label("scrolling")
+            .with_color(Color::WHITE);
         Self {
+            series_id: series.id,
             widget: PlotWidgetBuilder::new()
                 .with_autoscale_on_updates(true)
+                .add_series(series)
                 .build()
                 .unwrap(),
-            positions: Vec::new(),
-            x: 0.0f64,
+            x,
         }
     }
 }

@@ -1,4 +1,4 @@
-use crate::ticks::PositionedTick;
+use crate::{series::ShapeId, ticks::PositionedTick};
 
 #[derive(Debug, Clone)]
 /// Messages sent by the plot widget to the application.
@@ -8,7 +8,7 @@ pub enum PlotUiMessage {
     /// Toggle the legend visibility.
     ToggleLegend,
     /// Toggle visibility of a series or reference line by label.
-    ToggleSeriesVisibility(String),
+    ToggleSeriesVisibility(ShapeId),
     /// Internal render update message.
     RenderUpdate(PlotRenderUpdate),
 }

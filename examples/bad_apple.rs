@@ -1,6 +1,6 @@
 //! A totally necessary example.
 use iced_plot::{
-    Color, MarkerStyle, MarkerType, PlotUiMessage, PlotWidget, PlotWidgetBuilder, Series,
+    Color, MarkerStyle, MarkerType, PlotUiMessage, PlotWidget, PlotWidgetBuilder, Series, ShapeId,
 };
 
 use iced::Element;
@@ -28,6 +28,7 @@ enum Message {
 }
 
 struct App {
+    series_id: ShapeId,
     widget: PlotWidget,
     frames: &'static [u8],
     frame_idx: usize,
@@ -48,25 +49,25 @@ impl App {
         } else {
             vec![Color::from_rgb(0.0, 0.0, 0.0); positions.len()]
         };
-
+        let series = Series::markers_only(
+            positions.clone(),
+            MarkerStyle::new_world(1.0, MarkerType::Square),
+        )
+        .with_label(LABEL)
+        .with_point_colors(initial_colors);
+        let series_id = series.id;
         let widget = PlotWidgetBuilder::new()
             .with_data_aspect(1.0)
             .with_x_tick_labels(false)
             .with_y_tick_labels(false)
             .with_tooltips(false)
             .with_cursor_overlay(false)
-            .add_series(
-                Series::markers_only(
-                    positions.clone(),
-                    MarkerStyle::new_world(1.0, MarkerType::Square),
-                )
-                .with_label(LABEL)
-                .with_point_colors(initial_colors),
-            )
+            .add_series(series)
             .build()
             .unwrap();
 
         Self {
+            series_id,
             widget,
             frames,
             frame_idx: 0,
@@ -112,7 +113,7 @@ impl App {
         }
 
         let colors = frame_colors(self.frame_idx, self.frames, FRAME_WIDTH, FRAME_HEIGHT);
-        self.widget.set_series_point_colors(LABEL, colors);
+        self.widget.set_series_point_colors(&self.series_id, colors);
     }
 
     fn view(&self) -> Element<'_, Message> {

@@ -1,3 +1,5 @@
+use core::fmt;
+
 use crate::{Color, point::MarkerType};
 
 /// Line styling options for series connections.
@@ -122,12 +124,29 @@ pub enum SeriesError {
     Empty,
     /// Series has neither markers nor lines enabled.
     NoMarkersAndNoLines,
-    /// A series with the same non-empty label already exists.
-    DuplicateLabel(String),
+    /// A series with the same ID already exists.
+    DuplicateId(ShapeId),
+    /// A series with the given ID does not exist.
+    NotFound(ShapeId),
     /// Axis limits are not properly set (min >= max).
     InvalidAxisLimits,
     /// Per-point colors length does not match positions length.
     InvalidPointColorsLength,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ShapeId(pub(crate) u64);
+impl ShapeId {
+    pub(crate) fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+impl fmt::Display for ShapeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Shape({})", self.0)
+    }
 }
 
 /// A collection of per-point styled data to be plotted.
@@ -136,6 +155,9 @@ pub enum SeriesError {
 /// lines, or both. The same series can contain any number of points.
 #[derive(Debug, Clone)]
 pub struct Series {
+    /// Unique identifier for the series.
+    pub id: ShapeId,
+
     /// Series point positions.
     pub positions: Vec<[f64; 2]>,
 
@@ -161,6 +183,7 @@ impl Series {
     /// Create a new series with both markers and lines.
     pub fn new(positions: Vec<[f64; 2]>, marker_style: MarkerStyle, line_style: LineStyle) -> Self {
         Self {
+            id: ShapeId::new(),
             positions,
             point_colors: None,
             label: None,
@@ -173,6 +196,7 @@ impl Series {
     /// Create a new line-only series.
     pub fn line_only(positions: Vec<[f64; 2]>, line_style: LineStyle) -> Self {
         Self {
+            id: ShapeId::new(),
             positions,
             point_colors: None,
             label: None,
@@ -185,6 +209,7 @@ impl Series {
     /// Create a new marker-only series.
     pub fn markers_only(positions: Vec<[f64; 2]>, marker_style: MarkerStyle) -> Self {
         Self {
+            id: ShapeId::new(),
             positions,
             point_colors: None,
             label: None,
