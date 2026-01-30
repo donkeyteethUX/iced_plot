@@ -120,7 +120,7 @@ impl PlotWidget {
     }
 
     /// Add a data series to the plot.
-    /// If there is a series with the same `item.id` ([ShapeId]) already exists, the old one will be replaced.
+    /// If there exists a series with the same `item.id` ([ShapeId]), the old one will be replaced.
     pub fn add_series(&mut self, item: Series) -> Result<(), SeriesError> {
         item.validate()?;
         _ = self.series.insert(item.id, item);
@@ -165,14 +165,14 @@ impl PlotWidget {
     }
 
     /// Add a vertical reference line to the plot.
-    /// If there is a line with the same `vline.id` ([ShapeId]) already exists, the old one will be replaced.
+    /// If there exists a line with the same `vline.id` ([ShapeId]), the old one will be replaced.
     pub fn add_vline(&mut self, vline: VLine) {
         _ = self.vlines.insert(vline.id, vline);
         self.data_version += 1;
     }
 
     /// Add a horizontal reference line to the plot.
-    /// If there is a line with the same `hline.id` ([ShapeId]) already exists, the old one will be replaced.
+    /// If there exists a line with the same `hline.id` ([ShapeId]), the old one will be replaced.
     pub fn add_hline(&mut self, hline: HLine) {
         _ = self.hlines.insert(hline.id, hline);
         self.data_version += 1;
