@@ -14,6 +14,7 @@ keywords    = ["iced", "plot", "widget", "wgpu", "plotting"]
 bytemuck = { version = "1.24", features = ["derive"] }
 glam     = "0.25"
 iced     = "0.14"
+indexmap = "2.13"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }

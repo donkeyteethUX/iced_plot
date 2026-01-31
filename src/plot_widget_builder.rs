@@ -328,10 +328,10 @@ impl PlotWidgetBuilder {
             w.add_series(s)?;
         }
         for vline in self.vlines {
-            w.add_vline(vline)?;
+            w.add_vline(vline);
         }
         for hline in self.hlines {
-            w.add_hline(hline)?;
+            w.add_hline(hline);
         }
 
         Ok(w)

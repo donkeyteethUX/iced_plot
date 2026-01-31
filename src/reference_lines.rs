@@ -1,8 +1,10 @@
-use crate::{Color, LineStyle};
+use crate::{Color, LineStyle, series::ShapeId};
 
 /// A vertical line at a fixed x-coordinate.
 #[derive(Debug, Clone)]
 pub struct VLine {
+    /// Unique identifier for the line.
+    pub id: ShapeId,
     /// The x-coordinate where the vertical line is drawn.
     pub x: f64,
     /// Optional label for the line (appears in legend if provided).
@@ -19,6 +21,7 @@ impl VLine {
     /// Create a new vertical line at the given x-coordinate.
     pub fn new(x: f64) -> Self {
         Self {
+            id: ShapeId::new(),
             x,
             label: None,
             color: Color::from_rgb(0.5, 0.5, 0.5),
@@ -58,6 +61,8 @@ impl VLine {
 /// A horizontal line at a fixed y-coordinate.
 #[derive(Debug, Clone)]
 pub struct HLine {
+    /// Unique identifier for the line.
+    pub id: ShapeId,
     /// The y-coordinate where the horizontal line is drawn.
     pub y: f64,
     /// Optional label for the line (appears in legend if provided).
@@ -74,6 +79,7 @@ impl HLine {
     /// Create a new horizontal line at the given y-coordinate.
     pub fn new(y: f64) -> Self {
         Self {
+            id: ShapeId::new(),
             y,
             label: None,
             color: Color::from_rgb(0.5, 0.5, 0.5),

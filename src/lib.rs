@@ -49,5 +49,5 @@ pub use plot_widget::PlotWidget;
 pub use plot_widget_builder::PlotWidgetBuilder;
 pub use point::{MarkerType, Point};
 pub use reference_lines::{HLine, VLine};
-pub use series::{LineStyle, MarkerSize, MarkerStyle, Series};
+pub use series::{LineStyle, MarkerSize, MarkerStyle, Series, ShapeId};
 pub use ticks::{Tick, TickFormatter, TickProducer};

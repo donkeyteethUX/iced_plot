@@ -1,3 +1,5 @@
+use core::fmt;
+
 use crate::{Color, point::MarkerType};
 
 /// Line styling options for series connections.
@@ -122,12 +124,48 @@ pub enum SeriesError {
     Empty,
     /// Series has neither markers nor lines enabled.
     NoMarkersAndNoLines,
-    /// A series with the same non-empty label already exists.
-    DuplicateLabel(String),
+    /// A series with the given ID does not exist.
+    NotFound(ShapeId),
     /// Axis limits are not properly set (min >= max).
     InvalidAxisLimits,
     /// Per-point colors length does not match positions length.
     InvalidPointColorsLength,
+}
+
+/// Unique identifier for a shape in the plot.
+///
+/// You can obtain the [ShapeId] of [Series], [VLine](crate::VLine), or [HLine](crate::HLine) by `id` field:
+/// ```rust
+/// use iced_plot::{Series, VLine, HLine, MarkerStyle, LineStyle};
+/// let series = Series::new(vec![[0.0, 0.0], [1.0, 1.0]], MarkerStyle::circle(5.0), LineStyle::Solid);
+/// let id1 = series.id;
+///
+/// let vline = VLine::new(0.0);
+/// let id2 = vline.id;
+///
+/// let hline = HLine::new(0.0);
+/// let id3 = hline.id;
+///
+/// assert_ne!(id1, id2);
+/// assert_ne!(id1, id3);
+/// assert_ne!(id2, id3);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ShapeId(pub(crate) u64);
+impl ShapeId {
+    /// Create a new unique shape ID (0, 1, 2, ...).
+    ///
+    /// Used internally by the plot widget to create unique IDs for series, vlines, and hlines.
+    pub(crate) fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+impl fmt::Display for ShapeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Shape({})", self.0)
+    }
 }
 
 /// A collection of per-point styled data to be plotted.
@@ -136,6 +174,9 @@ pub enum SeriesError {
 /// lines, or both. The same series can contain any number of points.
 #[derive(Debug, Clone)]
 pub struct Series {
+    /// Unique identifier for the series.
+    pub id: ShapeId,
+
     /// Series point positions.
     pub positions: Vec<[f64; 2]>,
 
@@ -161,6 +202,7 @@ impl Series {
     /// Create a new series with both markers and lines.
     pub fn new(positions: Vec<[f64; 2]>, marker_style: MarkerStyle, line_style: LineStyle) -> Self {
         Self {
+            id: ShapeId::new(),
             positions,
             point_colors: None,
             label: None,
@@ -173,6 +215,7 @@ impl Series {
     /// Create a new line-only series.
     pub fn line_only(positions: Vec<[f64; 2]>, line_style: LineStyle) -> Self {
         Self {
+            id: ShapeId::new(),
             positions,
             point_colors: None,
             label: None,
@@ -185,6 +228,7 @@ impl Series {
     /// Create a new marker-only series.
     pub fn markers_only(positions: Vec<[f64; 2]>, marker_style: MarkerStyle) -> Self {
         Self {
+            id: ShapeId::new(),
             positions,
             point_colors: None,
             label: None,

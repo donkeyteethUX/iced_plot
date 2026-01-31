@@ -3,11 +3,13 @@ use iced::widget::{Container, button, column, container, row, text};
 use iced::{Color, Element, Length, color};
 
 use crate::LineStyle;
+use crate::series::ShapeId;
 use crate::{message::PlotUiMessage, plot_widget::PlotWidget};
 
 #[derive(Debug, Clone)]
 /// An entry in the plot legend.
 pub(crate) struct LegendEntry {
+    pub(crate) id: ShapeId,
     pub(crate) label: String,
     pub(crate) color: Color,
     pub(crate) _marker: u32,
@@ -30,7 +32,6 @@ pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Element<'_, PlotUi
         .height(Length::Shrink);
 
     for e in entries {
-        let label_text = e.label.clone();
         let series_color = e.color;
         let swatch_color = if e.hidden {
             color!(120, 120, 120)
@@ -45,10 +46,10 @@ pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Element<'_, PlotUi
 
         let swatch_btn: Element<'_, PlotUiMessage> = button(swatch)
             .padding(2.0)
-            .on_press(PlotUiMessage::ToggleSeriesVisibility(label_text.clone()))
+            .on_press(PlotUiMessage::ToggleSeriesVisibility(e.id))
             .into();
 
-        let row = row![swatch_btn, text(label_text).size(12.0).color(series_color)]
+        let row = row![swatch_btn, text(e.label).size(12.0).color(series_color)]
             .spacing(4.0)
             .width(Length::Shrink);
 

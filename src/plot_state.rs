@@ -122,11 +122,9 @@ impl PlotState {
         let mut data_max: Option<DVec2> = None;
 
         // Process each series
-        for series in &widget.series {
+        for (id, series) in &widget.series {
             // Skip hidden series
-            if let Some(label) = &series.label
-                && widget.hidden_labels.contains(label)
-            {
+            if widget.hidden_shapes.contains(id) {
                 continue;
             }
 
@@ -195,23 +193,15 @@ impl PlotState {
         let vlines: Vec<_> = widget
             .vlines
             .iter()
-            .filter(|v| {
-                !v.label
-                    .as_ref()
-                    .is_some_and(|l| widget.hidden_labels.contains(l))
-            })
-            .cloned()
+            .filter(|(id, _)| !widget.hidden_shapes.contains(id))
+            .map(|(_, v)| v.clone())
             .collect();
 
         let hlines: Vec<_> = widget
             .hlines
             .iter()
-            .filter(|h| {
-                !h.label
-                    .as_ref()
-                    .is_some_and(|l| widget.hidden_labels.contains(l))
-            })
-            .cloned()
+            .filter(|(id, _)| !widget.hidden_shapes.contains(id))
+            .map(|(_, h)| h.clone())
             .collect();
 
         self.points = points.into();

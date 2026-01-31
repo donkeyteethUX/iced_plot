@@ -1214,6 +1214,7 @@ dependencies = [
  "getrandom",
  "glam",
  "iced",
+ "indexmap",
  "rand",
  "rand_distr",
 ]
