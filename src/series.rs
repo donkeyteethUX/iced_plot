@@ -124,8 +124,6 @@ pub enum SeriesError {
     Empty,
     /// Series has neither markers nor lines enabled.
     NoMarkersAndNoLines,
-    /// A series with the same ID already exists.
-    DuplicateId(ShapeId),
     /// A series with the given ID does not exist.
     NotFound(ShapeId),
     /// Axis limits are not properly set (min >= max).

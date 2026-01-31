@@ -167,14 +167,14 @@ impl PlotWidget {
     /// Add a vertical reference line to the plot.
     /// If there exists a line with the same `vline.id` ([ShapeId]), the old one will be replaced.
     pub fn add_vline(&mut self, vline: VLine) {
-        _ = self.vlines.insert(vline.id, vline);
+        self.vlines.insert(vline.id, vline);
         self.data_version += 1;
     }
 
     /// Add a horizontal reference line to the plot.
     /// If there exists a line with the same `hline.id` ([ShapeId]), the old one will be replaced.
     pub fn add_hline(&mut self, hline: HLine) {
-        _ = self.hlines.insert(hline.id, hline);
+        self.hlines.insert(hline.id, hline);
         self.data_version += 1;
     }
 
