@@ -44,8 +44,8 @@ pub use iced::Color;
 // Re-exports of public types.
 pub use axis_link::AxisLink;
 pub use grid::TickWeight;
-pub use message::{PlotUiMessage, TooltipContext};
-pub use plot_widget::PlotWidget;
+pub use message::{HoverPickEvent, PlotUiMessage, PointId, TooltipContext};
+pub use plot_widget::{HighlightPoint, PlotWidget};
 pub use plot_widget_builder::PlotWidgetBuilder;
 pub use point::{MarkerType, Point};
 pub use reference_lines::{HLine, VLine};

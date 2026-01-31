@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::axis_link::AxisLink;
 use crate::message::TooltipContext;
-use crate::plot_widget::{CursorProvider, PlotWidget, TooltipProvider};
+use crate::plot_widget::{CursorProvider, HighlightPoint, HighlightPointProvider, PlotWidget};
 use crate::reference_lines::{HLine, VLine};
 use crate::series::{Series, SeriesError};
 use crate::ticks::{Tick, TickFormatter, TickProducer};
@@ -26,10 +26,10 @@ use crate::ticks::{Tick, TickFormatter, TickProducer};
 pub struct PlotWidgetBuilder {
     x_label: Option<String>,
     y_label: Option<String>,
-    tooltips: Option<bool>,
     autoscale_on_updates: Option<bool>,
     hover_radius_px: Option<f32>,
-    tooltip_provider: Option<TooltipProvider>,
+    pick_highlight_provider: Option<HighlightPointProvider>,
+    hover_highlight_provider: Option<HighlightPointProvider>,
     cursor_overlay: Option<bool>,
     cursor_provider: Option<CursorProvider>,
     crosshairs: Option<bool>,
@@ -75,9 +75,13 @@ impl PlotWidgetBuilder {
         self
     }
 
+    #[deprecated(
+        since = "0.3.1",
+        note = "Use `with_pick_highlight_provider`/`with_hover_highlight_provider` instead"
+    )]
     /// Enable or disable tooltips for the plot. Tooltips are enabled by default.
-    pub fn with_tooltips(mut self, enabled: bool) -> Self {
-        self.tooltips = Some(enabled);
+    pub fn with_tooltips(self, enabled: bool) -> Self {
+        _ = enabled;
         self
     }
 
@@ -93,12 +97,34 @@ impl PlotWidgetBuilder {
         self
     }
 
+    #[deprecated(
+        since = "0.3.1",
+        note = "Use `with_pick_highlight_provider`/`with_hover_highlight_provider` instead"
+    )]
     /// Provide a custom tooltip text formatter. Passing `None` disables formatting.
-    pub fn with_tooltip_provider<F>(mut self, provider: F) -> Self
+    pub fn with_tooltip_provider<F>(self, provider: F) -> Self
     where
-        F: Fn(&TooltipContext) -> String + Send + Sync + 'static,
+        F: Fn(TooltipContext<'_>) -> String + Send + Sync + 'static,
     {
-        self.tooltip_provider = Some(Arc::new(provider));
+        _ = provider;
+        self
+    }
+
+    /// Provide a custom highlighter for pick point.
+    pub fn with_pick_highlight_provider<F>(mut self, provider: F) -> Self
+    where
+        F: Fn(TooltipContext<'_>, &mut HighlightPoint) -> Option<String> + Send + Sync + 'static,
+    {
+        self.pick_highlight_provider = Some(Arc::new(provider));
+        self
+    }
+
+    /// Provide a custom highlighter for hovered point.
+    pub fn with_hover_highlight_provider<F>(mut self, provider: F) -> Self
+    where
+        F: Fn(TooltipContext<'_>, &mut HighlightPoint) -> Option<String> + Send + Sync + 'static,
+    {
+        self.hover_highlight_provider = Some(Arc::new(provider));
         self
     }
 
@@ -258,9 +284,6 @@ impl PlotWidgetBuilder {
         }
         let mut w = PlotWidget::new();
 
-        if let Some(enabled) = self.tooltips {
-            w.tooltips(enabled);
-        }
         if let Some(enabled) = self.autoscale_on_updates {
             w.autoscale_on_updates(enabled);
         }
@@ -279,14 +302,17 @@ impl PlotWidgetBuilder {
         if let Some((min, max)) = self.y_lim {
             w.set_y_lim(min, max);
         }
-        if let Some(p) = self.tooltip_provider {
-            w.set_tooltip_provider(p.clone());
-        }
         if let Some(c) = self.cursor_overlay {
             w.set_cursor_overlay(c);
         }
+        if let Some(p) = self.pick_highlight_provider {
+            w.set_pick_highlight_provider(p);
+        }
+        if let Some(p) = self.hover_highlight_provider {
+            w.set_hover_highlight_provider(p);
+        }
         if let Some(p) = self.cursor_provider {
-            w.set_cursor_provider(p.clone());
+            w.set_cursor_provider(p);
         }
         if let Some(enabled) = self.crosshairs {
             w.set_crosshairs(enabled);

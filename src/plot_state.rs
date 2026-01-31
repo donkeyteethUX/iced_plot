@@ -10,6 +10,7 @@ use iced::{
 use crate::{
     AxisLink, HLine, LineStyle, MarkerSize, PlotWidget, Point, VLine,
     camera::Camera,
+    plot_widget::{HighlightPoint, world_to_screen_position_x, world_to_screen_position_y},
     ticks::{PositionedTick, TickFormatter, TickProducer},
 };
 
@@ -48,17 +49,20 @@ pub struct PlotState {
     pub(crate) modifiers: keyboard::Modifiers,
     pub(crate) selection: SelectionState,
     pub(crate) pan: PanState,
+    /// Hover/select point rendering data (for incremental rendering)
+    pub(crate) highlighted_points: Arc<[HighlightPoint]>,
     // Version counters
     pub(crate) markers_version: u64,
     pub(crate) lines_version: u64,
+    pub(crate) highlight_version: u64,
     pub(crate) src_version: u64, // version of source data last synced
     // Hover/picking internals
     pub(crate) hover_enabled: bool,
     pub(crate) hover_radius_px: f32,
     pub(crate) last_hover_cache: Option<HoverHit>,
-    pub(crate) hovered_world: Option<[f64; 2]>,
-    pub(crate) hovered_size_px: f32,
     pub(crate) hover_version: u64,
+    // Track if we're waiting for a select picking result
+    pub(crate) pending_select_seq: Option<u64>,
     pub(crate) pick_seq: u64,
     pub(crate) pick_result_seq: u64,
     pub(crate) crosshairs_enabled: bool,
@@ -73,6 +77,7 @@ impl Default for PlotState {
             src_version: 0,
             points: Arc::new([]),
             point_colors: Arc::new([]),
+            highlighted_points: Arc::new([]),
             series: Arc::new([]),
             vlines: Arc::new([]),
             hlines: Arc::new([]),
@@ -94,12 +99,12 @@ impl Default for PlotState {
             pan: PanState::default(),
             markers_version: 1,
             lines_version: 1,
+            highlight_version: 0,
             hover_enabled: true,
             hover_radius_px: 8.0,
             last_hover_cache: None,
-            hovered_world: None,
-            hovered_size_px: 0.0,
             hover_version: 0,
+            pending_select_seq: None,
             pick_seq: 0,
             pick_result_seq: 0,
             crosshairs_enabled: false,
@@ -212,11 +217,27 @@ impl PlotState {
         self.data_min = data_min;
         self.data_max = data_max;
 
+        // highlighted_points
+        let highlighted_points: Vec<_> = widget
+            .picked_points
+            .values()
+            .chain(widget.hovered_points.values())
+            .map(|(highlight_point, _)| highlight_point.clone())
+            .collect();
+        let new_highlighted_points: Arc<[HighlightPoint]> = highlighted_points.into();
+
+        // Only increment highlight_version if highlighted_points actually changed
+        if self.highlighted_points != new_highlighted_points {
+            self.highlight_version = self.highlight_version.wrapping_add(1);
+            self.highlighted_points = new_highlighted_points;
+        }
+
         // Copy formatters
         self.x_axis_formatter = widget.x_axis_formatter.clone();
         self.y_axis_formatter = widget.y_axis_formatter.clone();
 
-        // Force GPU buffers to rebuild
+        // Force GPU buffers to rebuild only when data actually changes
+        // (not when only hover/pick changes - that's tracked by highlight_version)
         self.markers_version = self.markers_version.wrapping_add(1);
         self.lines_version = self.lines_version.wrapping_add(1);
     }
@@ -258,17 +279,11 @@ impl PlotState {
         self.x_ticks.clear();
         for tick in x_tick_values {
             // Convert world position to screen position
-            let ndc_x = (tick.value - self.camera.position.x) / self.camera.half_extents.x;
-            let screen_x = (ndc_x + 1.0) * 0.5 * self.bounds.width as f64;
-
-            if screen_x < 0.0 || screen_x > self.bounds.width as f64 {
-                continue;
+            if let Some(screen_pos) =
+                world_to_screen_position_x(tick.value, &self.camera, &self.bounds)
+            {
+                self.x_ticks.push(PositionedTick { screen_pos, tick });
             }
-
-            self.x_ticks.push(PositionedTick {
-                screen_pos: screen_x as f32,
-                tick,
-            });
         }
 
         // Calculate y-axis ticks
@@ -283,17 +298,11 @@ impl PlotState {
         self.y_ticks.clear();
         for tick in y_tick_values {
             // Convert world position to screen position
-            let ndc_y = (tick.value - self.camera.position.y) / self.camera.half_extents.y;
-            let screen_y = (1.0 - ndc_y) * 0.5 * self.bounds.height as f64;
-
-            if screen_y < 0.0 || screen_y > self.bounds.height as f64 {
-                continue;
+            if let Some(screen_pos) =
+                world_to_screen_position_y(tick.value, &self.camera, &self.bounds)
+            {
+                self.y_ticks.push(PositionedTick { screen_pos, tick });
             }
-
-            self.y_ticks.push(PositionedTick {
-                screen_pos: screen_y as f32,
-                tick,
-            });
         }
     }
 
@@ -350,9 +359,8 @@ impl PlotState {
                 if !self.pan.active && !self.selection.active && self.hover_enabled {
                     if !inside {
                         // If cursor leaves this widget, clear hover state for this widget only
-                        if self.last_hover_cache.is_some() || self.hovered_world.is_some() {
+                        if self.last_hover_cache.is_some() {
                             self.last_hover_cache = None;
-                            self.hovered_world = None;
                             self.hover_version = self.hover_version.wrapping_add(1);
                             // Redraw once to clear hover halo overlay
                             needs_redraw = true;
@@ -367,9 +375,8 @@ impl PlotState {
             }
             Event::CursorLeft => {
                 // Clear hover state on leave and request a redraw to clear hover halo
-                if self.last_hover_cache.is_some() || self.hovered_world.is_some() {
+                if self.last_hover_cache.is_some() {
                     self.last_hover_cache = None;
-                    self.hovered_world = None;
                     self.hover_version = self.hover_version.wrapping_add(1);
                     needs_redraw = true;
                 }
@@ -578,12 +585,6 @@ pub(crate) struct PanState {
 pub(crate) struct HoverHit {
     pub(crate) series_label: String,
     pub(crate) point_index: usize,
-    pub(crate) _world: DVec2,
-    pub(crate) _size_px: f32,
-}
-
-impl HoverHit {
-    pub(crate) fn key(&self) -> (String, usize) {
-        (self.series_label.clone(), self.point_index)
-    }
+    pub(crate) world: DVec2,
+    pub(crate) size_px: f32,
 }

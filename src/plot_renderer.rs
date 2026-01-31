@@ -54,7 +54,8 @@ struct BufferCache {
     lines: Option<LineBuffer>,
     reflines: Option<LineBuffer>,
     selection: Option<VertexBuffer>,
-    hover: Option<VertexBuffer>,
+    highlight: Option<VertexBuffer>,
+    highlight_markers: Option<VertexBuffer>,
     crosshairs: Option<VertexBuffer>,
 }
 
@@ -65,7 +66,9 @@ impl BufferCache {
             lines: None,
             reflines: None,
             selection: None,
-            hover: None,
+            // hover: None,
+            highlight: None,
+            highlight_markers: None,
             crosshairs: None,
         }
     }
@@ -75,6 +78,7 @@ impl BufferCache {
 struct VersionTracker {
     markers: u64,
     lines: u64,
+    highlight: u64,
     render_offset: glam::DVec2,
 }
 
@@ -83,6 +87,7 @@ impl VersionTracker {
         Self {
             markers: 0,
             lines: 0,
+            highlight: 0,
             render_offset: glam::DVec2::ZERO,
         }
     }
@@ -294,8 +299,11 @@ impl PlotRenderer {
         // Selection is rebuilt whenever it's active.
         self.rebuild_selection(device, queue, state);
 
-        // Hover halo is rebuilt every frame from state.hovered_world when present.
-        self.rebuild_hover(device, queue, state);
+        // Hover/pick highlights are rebuilt only when highlighted_points changes.
+        if state.highlight_version != self.versions.highlight || offset_changed {
+            self.rebuild_highlight(device, queue, state);
+            self.versions.highlight = state.highlight_version;
+        }
 
         // Crosshairs are rebuilt every frame when enabled.
         self.rebuild_crosshairs(device, queue, state);
@@ -916,47 +924,104 @@ impl PlotRenderer {
         }
     }
 
-    fn rebuild_hover(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
-        self.buffers.hover = None;
-        let Some(world) = state.hovered_world else {
+    fn rebuild_highlight(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
+        self.buffers.highlight = None;
+        self.buffers.highlight_markers = None;
+
+        if state.highlighted_points.is_empty() {
             return;
-        };
-        // Convert world -> screen px, then to clip for a small ring quad (approximate circle by a square with alpha falloff in shader? We reuse solid quad here)
-        // We will draw a simple filled square halo in overlay space (clip) sized by marker size + padding.
+        }
+
         let w = self.bounds_w.max(1) as f32;
         let h = self.bounds_h.max(1) as f32;
         if w <= 1.0 || h <= 1.0 {
             return;
         }
-        // Convert world coordinates to NDC
-        let ndc = self.world_to_ndc(world, &state.camera);
 
-        // Convert size in px to clip delta
-        let (dx, dy) = self.pixels_to_clip_delta(state.hovered_size_px.max(1.0) + 3.0);
+        let mut mask_box_data: Vec<f32> = Vec::new();
+        let mut marker_writer = VertexWriter::new();
 
-        // Build a quad around (cx, cy) in clip coords
-        let tl = [ndc[0] - dx, ndc[1] + dy];
-        let tr = [ndc[0] + dx, ndc[1] + dy];
-        let bl = [ndc[0] - dx, ndc[1] - dy];
-        let br = [ndc[0] + dx, ndc[1] - dy];
-        let color = [1.0, 1.0, 1.0, 0.25];
-        let mut data: Vec<f32> = Vec::new();
-        for v in [tl, tr, bl, br] {
-            data.extend_from_slice(&v);
-            data.extend_from_slice(&color);
+        for highlight_point in state.highlighted_points.iter() {
+            // Build mask box if enabled
+            if let Some(mask_padding) = highlight_point.mask_padding
+                && let Some(marker_style) = highlight_point.marker_style
+            {
+                // For world-space markers, the position is the bottom-left corner,
+                // but we need to center the mask_box at the marker's center.
+                // Adjust position if marker is world-space (same as shader does)
+                let mut world_pos = [highlight_point.x, highlight_point.y];
+                if let crate::MarkerSize::World(size) = marker_style.size {
+                    let half_size = size * 0.5;
+                    world_pos[0] += half_size;
+                    world_pos[1] += half_size;
+                }
+
+                // Convert world coordinates to NDC
+                let ndc = self.world_to_ndc(world_pos, &state.camera);
+                // Calculate mask box size based on marker_size
+                let mask_box_size_px =
+                    marker_style.size.to_px(&state.camera, &state.bounds) + mask_padding;
+
+                let (dx, dy) = self.pixels_to_clip_delta(mask_box_size_px.max(1.0));
+
+                // Build a quad around the point in clip coords
+                let tl = [ndc[0] - dx, ndc[1] + dy];
+                let tr = [ndc[0] + dx, ndc[1] + dy];
+                let bl = [ndc[0] - dx, ndc[1] - dy];
+                let br = [ndc[0] + dx, ndc[1] - dy];
+                let color = [1.0, 1.0, 1.0, 0.25];
+                for v in [tl, tr, bl, br] {
+                    mask_box_data.extend_from_slice(&v);
+                    mask_box_data.extend_from_slice(&color);
+                }
+            }
+
+            // Build marker if marker_style is Some
+            if let Some(marker_style) = highlight_point.marker_style {
+                let render_pos =
+                    self.world_to_render_pos([highlight_point.x, highlight_point.y], &state.camera);
+                let (size, size_mode) = marker_style.size.to_raw();
+                marker_writer.write_position(render_pos);
+                marker_writer.write_color(&highlight_point.color);
+                marker_writer.write_u32(marker_style.marker_type as u32);
+                marker_writer.write_f32(size);
+                marker_writer.write_u32(size_mode);
+            }
         }
-        let raw = bytemuck::cast_slice(&data);
-        self.buffers.hover = Some(VertexBuffer {
-            buffer: device.create_buffer(&BufferDescriptor {
-                label: Some("hover halo vb"),
-                size: raw.len() as u64,
-                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            vertex_count: 4,
-        });
-        if let Some(vb) = &self.buffers.hover {
-            queue.write_buffer(&vb.buffer, 0, raw);
+
+        // Create mask box buffer if we have any
+        if !mask_box_data.is_empty() {
+            let raw = bytemuck::cast_slice(&mask_box_data);
+            self.buffers.highlight = Some(VertexBuffer {
+                buffer: device.create_buffer(&BufferDescriptor {
+                    label: Some("highlight mask boxes vb"),
+                    size: raw.len() as u64,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                vertex_count: (mask_box_data.len() / 6) as u32, // 6 floats per vertex (2 pos + 4 color)
+            });
+            if let Some(vb) = &self.buffers.highlight {
+                queue.write_buffer(&vb.buffer, 0, raw);
+            }
+        }
+
+        // Create marker buffer if we have any
+        if !marker_writer.is_empty() {
+            let data = marker_writer.as_slice();
+            let marker_count = (data.len() / 36) as u32; // 36 bytes per marker instance
+            self.buffers.highlight_markers = Some(VertexBuffer {
+                buffer: device.create_buffer(&BufferDescriptor {
+                    label: Some("highlight markers vb"),
+                    size: data.len() as u64,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                vertex_count: marker_count,
+            });
+            if let Some(vb) = &self.buffers.highlight_markers {
+                queue.write_buffer(&vb.buffer, 0, data);
+            }
         }
     }
 
@@ -1088,6 +1153,16 @@ impl PlotRenderer {
                 pass.set_vertex_buffer(0, vb.buffer.slice(..));
                 pass.draw(0..4, 0..vb.vertex_count);
             }
+            // highlight markers (rendered after regular markers so they appear on top)
+            if let (Some(pipeline), Some(vb)) = (
+                self.pipelines.marker.as_ref(),
+                &self.buffers.highlight_markers,
+            ) {
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, vb.buffer.slice(..));
+                pass.draw(0..4, 0..vb.vertex_count);
+            }
         }
 
         // Selection overlay
@@ -1123,10 +1198,15 @@ impl PlotRenderer {
                 pass.set_vertex_buffer(0, vb.buffer.slice(..));
                 pass.draw(0..vb.vertex_count, 0..1);
             }
-            // Draw hover halo if present
-            if let Some(vb) = &self.buffers.hover {
+            // Draw highlight mask boxes if present
+            // Each mask box is a quad (4 vertices) in TriangleStrip topology
+            if let Some(vb) = &self.buffers.highlight {
                 pass.set_vertex_buffer(0, vb.buffer.slice(..));
-                pass.draw(0..vb.vertex_count, 0..1);
+                // Draw each quad separately (4 vertices per quad)
+                let quad_count = vb.vertex_count / 4;
+                for i in 0..quad_count {
+                    pass.draw(i * 4..(i + 1) * 4, 0..1);
+                }
             }
         }
 

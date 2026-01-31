@@ -43,7 +43,7 @@ impl Default for CameraUniform {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Copy, PartialEq)]
 /// Camera for viewing the plot in world-space.
 ///
 /// Manages the viewport transformation between world coordinates (data space),

@@ -60,7 +60,14 @@ impl App {
             .with_data_aspect(1.0)
             .with_x_tick_labels(false)
             .with_y_tick_labels(false)
-            .with_tooltips(false)
+            .with_hover_highlight_provider(|context, point| {
+                Some(format!(
+                    "frame: {}\nx: {}, y: {}",
+                    context.point_index,
+                    point.x.round(),
+                    point.y.round()
+                ))
+            })
             .with_cursor_overlay(false)
             .add_series(series)
             .build()

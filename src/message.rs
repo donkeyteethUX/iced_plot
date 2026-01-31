@@ -1,4 +1,6 @@
-use crate::{series::ShapeId, ticks::PositionedTick};
+use iced::Rectangle;
+
+use crate::{camera::Camera, series::ShapeId, ticks::PositionedTick};
 
 #[derive(Debug, Clone)]
 /// Messages sent by the plot widget to the application.
@@ -13,25 +15,33 @@ pub enum PlotUiMessage {
     RenderUpdate(PlotRenderUpdate),
 }
 
+impl PlotUiMessage {
+    pub fn get_hover_pick_event(&self) -> Option<HoverPickEvent> {
+        if let PlotUiMessage::RenderUpdate(update) = self {
+            update.hover_pick
+        } else {
+            None
+        }
+    }
+}
+
 /// Context passed to a tooltip formatting callback.
 ///
 /// Contains information about the point being hovered over.
-#[derive(Debug, Clone)]
-pub struct TooltipContext {
+#[derive(Debug, Clone, Copy)]
+pub struct TooltipContext<'a> {
+    /// ID of the series
+    pub series_id: ShapeId,
     /// Label of the series, if any (empty string means none)
-    pub series_label: String,
+    pub series_label: &'a str,
     /// Index within the series [0..len)
     pub point_index: usize,
-    /// Data-space coordinates
-    pub x: f64,
-    /// Data-space coordinates
-    pub y: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TooltipUiPayload {
-    pub x: f32,
-    pub y: f32,
+    pub screen_x: f32,
+    pub screen_y: f32,
     pub text: String,
 }
 
@@ -48,10 +58,26 @@ pub struct CursorPositionUiPayload {
 #[derive(Debug, Clone)]
 #[doc(hidden)]
 pub struct PlotRenderUpdate {
-    pub clear_tooltip: bool,
-    pub tooltip_ui: Option<TooltipUiPayload>,
+    pub hover_pick: Option<HoverPickEvent>,
     pub clear_cursor_position: bool,
     pub cursor_position_ui: Option<CursorPositionUiPayload>,
     pub x_ticks: Option<Vec<PositionedTick>>,
     pub y_ticks: Option<Vec<PositionedTick>>,
+    /// Internal: Camera and bounds for coordinate conversion (only used internally, not part of public API)
+    pub(crate) camera_bounds: Option<(Camera, Rectangle)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PointId {
+    pub series_id: ShapeId,
+    pub point_index: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[doc(hidden)]
+pub enum HoverPickEvent {
+    Hover(PointId),
+    ClearHover,
+    Pick(PointId),
+    ClearPick,
 }

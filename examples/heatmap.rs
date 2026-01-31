@@ -1,7 +1,6 @@
 //! Heatmap example using colored world-spacesquare markers.
 use iced_plot::{
     Color, MarkerStyle, MarkerType, PlotUiMessage, PlotWidget, PlotWidgetBuilder, Series,
-    TooltipContext,
 };
 
 use iced::Element;
@@ -58,12 +57,15 @@ fn new() -> PlotWidget {
         .with_tick_label_size(12.0)
         .with_axis_label_size(18.0)
         .with_data_aspect(1.0) // keep the pixels square
-        .with_tooltips(true)
-        .with_tooltip_provider(move |ctx: &TooltipContext| {
-            let nx = ctx.x / (cols - 1) as f64;
-            let ny = ctx.y / (rows - 1) as f64;
+        .with_hover_highlight_provider(move |_ctx, point| {
+            // point.mask_padding = Some(1.0);
+            let nx = point.x / (cols - 1) as f64;
+            let ny = point.y / (rows - 1) as f64;
             let value = heat_value(nx, ny);
-            format!("cell: ({:.0}, {:.0})\nvalue: {:.3}", ctx.x, ctx.y, value)
+            Some(format!(
+                "cell: ({:.0}, {:.0})\nvalue: {:.3}",
+                point.x, point.y, value
+            ))
         })
         .with_cursor_overlay(true)
         .build()

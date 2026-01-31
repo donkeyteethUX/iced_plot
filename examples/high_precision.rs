@@ -5,7 +5,7 @@ use std::time::Duration;
 use iced_plot::PlotUiMessage;
 use iced_plot::PlotWidget;
 use iced_plot::PlotWidgetBuilder;
-use iced_plot::{Color, LineStyle, MarkerStyle, Series, TooltipContext};
+use iced_plot::{Color, LineStyle, MarkerStyle, Series};
 
 use iced::Element;
 
@@ -37,9 +37,9 @@ fn new() -> PlotWidget {
     }
 
     PlotWidgetBuilder::new()
-        .with_tooltips(true)
-        .with_tooltip_provider(|ctx: &TooltipContext| {
-            format!("t = {:.9} s\nvalue = {:.4}", ctx.x, ctx.y)
+        .with_hover_highlight_provider(|_ctx, point| {
+            point.color = Color::from_rgb(1.0, 0.0, 0.0);
+            Some(format!("t = {:.9} s\nvalue = {:.4}", point.x, point.y))
         })
         .with_cursor_provider(|x, y| format!("Cursor:\nt = {:.9} s\nvalue = {:.6}", x, y))
         .add_series(

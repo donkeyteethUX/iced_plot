@@ -46,11 +46,22 @@ fn new_scatter() -> PlotWidget {
         .with_color(Color::from_rgb(0.2, 0.6, 1.0));
 
     PlotWidgetBuilder::new()
-        .with_tooltip_provider(|ctx| {
-            format!(
+        .with_hover_highlight_provider(|context, point| {
+            point.color = Color::from_rgb(1.0, 0.5, 0.2);
+            point.resize_marker(1.5);
+            Some(format!(
                 "point: {}\nx: {:.3}, y: {:.3}",
-                ctx.point_index, ctx.x, ctx.y
-            )
+                context.point_index, point.x, point.y
+            ))
+        })
+        .with_pick_highlight_provider(|context, point| {
+            point.color = Color::from_rgb(1.0, 0.0, 0.0);
+            point.mask_padding = None;
+            point.resize_marker(3.0);
+            Some(format!(
+                "point: {}\nx: {:.3}, y: {:.3}",
+                context.point_index, point.x, point.y
+            ))
         })
         .add_series(series.clone())
         .build()
