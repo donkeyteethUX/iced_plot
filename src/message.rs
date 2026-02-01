@@ -42,8 +42,9 @@ pub struct TooltipContext<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TooltipUiPayload {
-    pub screen_x: f32,
-    pub screen_y: f32,
+    /// screen coordinates of the tooltip.
+    /// `screen_xy = None` means the tooltip is outside of the plot widget
+    pub screen_xy: Option<[f32; 2]>,
     pub text: String,
 }
 

@@ -66,7 +66,6 @@ impl BufferCache {
             lines: None,
             reflines: None,
             selection: None,
-            // hover: None,
             highlight: None,
             highlight_markers: None,
             crosshairs: None,

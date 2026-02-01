@@ -31,7 +31,7 @@ use crate::{
     message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
     picking,
     plot_renderer::{PlotRenderer, RenderParams},
-    plot_state::{HoverHit, PlotState},
+    plot_state::PlotState,
     series::{SeriesError, ShapeId},
     ticks::{self, PositionedTick, TickFormatter, TickProducer},
 };
@@ -234,13 +234,13 @@ impl PlotWidget {
     fn world_to_screen_position(
         world: [f64; 2],
         camera_bounds: &(Camera, Rectangle),
-    ) -> Option<(f32, f32)> {
+    ) -> Option<[f32; 2]> {
         let (camera, bounds) = camera_bounds;
         if let (Some(screen_x), Some(screen_y)) = (
             world_to_screen_position_x(world[0], camera, bounds),
             world_to_screen_position_y(world[1], camera, bounds),
         ) {
-            Some((screen_x, screen_y))
+            Some([screen_x, screen_y])
         } else {
             None
         }
@@ -255,14 +255,11 @@ impl PlotWidget {
                 .values_mut()
                 .chain(self.picked_points.values_mut())
             {
-                if let Some(tooltip) = tooltip
-                    && let Some((screen_x, screen_y)) = Self::world_to_screen_position(
+                if let Some(tooltip) = tooltip {
+                    tooltip.screen_xy = Self::world_to_screen_position(
                         [highlight_point.x, highlight_point.y],
                         camera_bounds,
-                    )
-                {
-                    tooltip.screen_x = screen_x;
-                    tooltip.screen_y = screen_y;
+                    );
                 }
             }
         }
@@ -396,15 +393,13 @@ impl PlotWidget {
                 },
                 &mut highlight_point,
             );
-            let tooltip = Self::world_to_screen_position(*position, camera_bounds).and_then(
-                |(screen_x, screen_y)| {
-                    tooltip_text.map(|text| TooltipUiPayload {
-                        screen_x,
-                        screen_y,
-                        text,
-                    })
-                },
-            );
+            let tooltip = tooltip_text.map(|text| TooltipUiPayload {
+                screen_xy: Self::world_to_screen_position(
+                    [highlight_point.x, highlight_point.y],
+                    camera_bounds,
+                ),
+                text,
+            });
             let new_payload = (highlight_point, tooltip);
             match points.entry(point_id) {
                 indexmap::map::Entry::Occupied(mut occupied) => {
@@ -497,11 +492,9 @@ impl PlotWidget {
                 self.hovered_points
                     .values()
                     .chain(self.picked_points.values())
-                    .filter_map(|(_, tooltip)| tooltip.as_ref())
-                    .map(|tooltip| Self::view_tooltip_overlay(
-                        tooltip,
-                        self.camera_bounds.as_ref().map(|(_, bounds)| bounds)
-                    ))
+                    .filter_map(|(_, tooltip)| tooltip.as_ref().and_then(|tooltip| {
+                        Self::view_tooltip_overlay(tooltip, &self.camera_bounds)
+                    }))
             ),
             self.view_cursor_overlay(),
             self.view_tick_labels(),
@@ -667,8 +660,8 @@ impl PlotWidget {
 
     fn view_tooltip_overlay<'a>(
         payload: &'a TooltipUiPayload,
-        bounds: Option<&Rectangle>,
-    ) -> Element<'a, PlotUiMessage> {
+        camera_bounds: &Option<(Camera, Rectangle)>,
+    ) -> Option<Element<'a, PlotUiMessage>> {
         use container::Style;
         const TOOLTIP_ALPHA: f32 = 0.7;
         fn tooltip_style(theme: &Theme) -> container::Style {
@@ -691,38 +684,31 @@ impl PlotWidget {
 
         // Offset a bit from point position
         const OFFSET: f32 = 8.0;
+        let [screen_x, screen_y] = payload.screen_xy?;
 
         // default: top-left aligned
-        let mut top = payload.screen_y + OFFSET;
+        let mut top = screen_y + OFFSET;
         let mut right = 0.0;
         let mut bottom = 0.0;
-        let mut left = payload.screen_x + OFFSET;
+        let mut left = screen_x + OFFSET;
         let mut align_x = alignment::Horizontal::Left;
         let mut align_y = alignment::Vertical::Top;
 
         // flip the tooltip if the point is outside this percentage of the bounds
         const FLIP_PCT: f32 = 0.8;
-        if let Some(bounds) = bounds {
-            let flip_x = payload.screen_x > bounds.width * FLIP_PCT;
-            let flip_y = payload.screen_y > bounds.height * FLIP_PCT;
-            (top, bottom, align_y) = if flip_y {
-                (
-                    0.0,
-                    bounds.height - payload.screen_y + OFFSET,
-                    alignment::Vertical::Bottom,
-                )
-            } else {
-                (payload.screen_y + OFFSET, 0.0, alignment::Vertical::Top)
-            };
-            (left, right, align_x) = if flip_x {
-                (
-                    0.0,
-                    bounds.width - payload.screen_x + OFFSET,
-                    alignment::Horizontal::Right,
-                )
-            } else {
-                (payload.screen_x + OFFSET, 0.0, alignment::Horizontal::Left)
-            };
+        if let Some((_, bounds)) = &camera_bounds {
+            if screen_y > bounds.height * FLIP_PCT {
+                // flip the tooltip to the bottom aligned
+                top = 0.0;
+                bottom = bounds.height - screen_y + OFFSET;
+                align_y = alignment::Vertical::Bottom;
+            }
+            if screen_x > bounds.width * FLIP_PCT {
+                // flip the tooltip to the right aligned
+                left = 0.0;
+                right = bounds.width - screen_x + OFFSET;
+                align_x = alignment::Horizontal::Right;
+            }
         }
 
         let tooltip_bubble = container(
@@ -734,19 +720,21 @@ impl PlotWidget {
         .style(tooltip_style);
 
         // Position tooltip at fixed location relative to point, not following cursor
-        container(tooltip_bubble)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(padding::Padding {
-                top,
-                right,
-                bottom,
-                left,
-            })
-            .align_x(align_x)
-            .align_y(align_y)
-            .style(container::transparent)
-            .into()
+        Some(
+            container(tooltip_bubble)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(padding::Padding {
+                    top,
+                    right,
+                    bottom,
+                    left,
+                })
+                .align_x(align_x)
+                .align_y(align_y)
+                .style(container::transparent)
+                .into(),
+        )
     }
 
     fn view_cursor_overlay(&self) -> Option<Element<'_, PlotUiMessage>> {
@@ -865,7 +853,6 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             plot_widget: state.clone(),
         }
     }
-
     fn update(
         &self,
         state: &mut Self::State,
@@ -888,18 +875,14 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
 
             // Submit a picking request if we have a cursor position and hover is enabled
             if state.hover_enabled && !state.pan.active && !state.selection.active {
-                let inside = state.cursor_position.x >= 0.0
-                    && state.cursor_position.y >= 0.0
-                    && state.cursor_position.x <= state.bounds.width
-                    && state.cursor_position.y <= state.bounds.height;
+                let inside = state.cursor_inside();
                 if inside {
                     state.pick_seq = state.pick_seq.wrapping_add(1);
                     if state.points.len() < CPU_PICK_THRESHOLD {
-                        let hit = cpu_pick_hit(state);
-                        if let Some(hit) = hit {
-                            if let Some(point_id) = hit_to_point_id(self, &hit) {
-                                publish_hover_pick = Some(HoverPickEvent::Hover(point_id));
-                            }
+                        if let Some(point) = cpu_pick_hit(state)
+                            && self.valid_point_id(&point)
+                        {
+                            publish_hover_pick = Some(HoverPickEvent::Hover(point));
                         } else if !self.hovered_points.is_empty() {
                             publish_hover_pick = Some(HoverPickEvent::ClearHover);
                         }
@@ -964,99 +947,8 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
 
         match event {
             iced::Event::Mouse(mouse_event) => {
-                // Handle mouse button press for Pick events
-                // Check for double-click first, then handle pick/pan
-                if let iced::mouse::Event::ButtonPressed(mouse::Button::Left) = mouse_event {
-                    if state.hover_enabled && !state.pan.active && !state.selection.active {
-                        let inside = state.cursor_position.x >= 0.0
-                            && state.cursor_position.y >= 0.0
-                            && state.cursor_position.x <= state.bounds.width
-                            && state.cursor_position.y <= state.bounds.height;
-                        if inside {
-                            // Check for double-click first (double-click should autoscale, not pick)
-                            let now = std::time::Instant::now();
-                            let is_double_click = if let Some(prev) = state.last_click_time {
-                                now.duration_since(prev).as_millis() < 350
-                            } else {
-                                false
-                            };
-                            state.last_click_time = Some(now);
-
-                            // If not double-click, check for pick
-                            if !is_double_click {
-                                // Check if we're hovering over a point
-                                if state.points.len() < CPU_PICK_THRESHOLD {
-                                    let hit = cpu_pick_hit(state);
-                                    if let Some(hit) = hit {
-                                        if let Some(point_id) = hit_to_point_id(self, &hit) {
-                                            publish_hover_pick =
-                                                Some(HoverPickEvent::Pick(point_id));
-                                            // Don't call handle_mouse_event to prevent panning
-                                            needs_redraw = true;
-                                        }
-                                    } else if !self.picked_points.is_empty() {
-                                        // Clicked but not on any point - clear pick
-                                        publish_hover_pick = Some(HoverPickEvent::ClearPick);
-                                    } else {
-                                        // No pick, allow normal mouse handling (panning)
-                                        needs_redraw |= state.handle_mouse_event(*mouse_event);
-                                    }
-                                } else {
-                                    // For GPU picking, submit a pick request
-                                    // Check if we have a current hover result first
-                                    if let Some(hover_hit) = &state.last_hover_cache {
-                                        // Convert hover hit to pick
-                                        if let Some(point_id) = hit_to_point_id(
-                                            self,
-                                            &picking::Hit {
-                                                series_label: hover_hit.series_label.clone(),
-                                                point_index: hover_hit.point_index,
-                                                world: [hover_hit.world.x, hover_hit.world.y],
-                                                size: hover_hit.size_px,
-                                                size_mode: crate::point::MARKER_SIZE_PIXELS,
-                                            },
-                                        ) {
-                                            publish_hover_pick =
-                                                Some(HoverPickEvent::Pick(point_id));
-                                            // Don't call handle_mouse_event to prevent panning
-                                            needs_redraw = true;
-                                        } else {
-                                            // No pick, allow normal mouse handling (panning)
-                                            needs_redraw |= state.handle_mouse_event(*mouse_event);
-                                        }
-                                    } else {
-                                        // No hover result, submit a picking request for selection
-                                        state.pick_seq = state.pick_seq.wrapping_add(1);
-                                        state.pending_select_seq = Some(state.pick_seq);
-                                        picking::submit_request(
-                                            self.instance_id,
-                                            crate::picking::PickRequest {
-                                                cursor_x: state.cursor_position.x,
-                                                cursor_y: state.cursor_position.y,
-                                                radius_px: state.hover_radius_px,
-                                                seq: state.pick_seq,
-                                            },
-                                        );
-                                        // Don't clear selection - wait for the result
-                                        // Don't call handle_mouse_event to prevent panning
-                                    }
-                                }
-                            } else {
-                                // Double-click: let handle_mouse_event handle autoscale
-                                needs_redraw |= state.handle_mouse_event(*mouse_event);
-                            }
-                        } else {
-                            // Outside bounds, allow normal mouse handling
-                            needs_redraw |= state.handle_mouse_event(*mouse_event);
-                        }
-                    } else {
-                        // Not hover enabled or already panning/selecting, allow normal mouse handling
-                        needs_redraw |= state.handle_mouse_event(*mouse_event);
-                    }
-                } else {
-                    // Not ButtonPressed, allow normal mouse handling
-                    needs_redraw |= state.handle_mouse_event(*mouse_event);
-                }
+                needs_redraw |=
+                    state.handle_mouse_event(*mouse_event, self, &mut publish_hover_pick);
 
                 // If cursor moved and hover enabled, submit a GPU pick request
                 if let iced::mouse::Event::CursorMoved { .. } = mouse_event
@@ -1065,18 +957,14 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                     && !state.selection.active
                 {
                     // Only submit pick request if cursor is within widget bounds
-                    let inside = state.cursor_position.x >= 0.0
-                        && state.cursor_position.y >= 0.0
-                        && state.cursor_position.x <= state.bounds.width
-                        && state.cursor_position.y <= state.bounds.height;
+                    let inside = state.cursor_inside();
                     if inside {
                         state.pick_seq = state.pick_seq.wrapping_add(1);
                         if state.points.len() < CPU_PICK_THRESHOLD {
-                            let hit = cpu_pick_hit(state);
-                            if let Some(hit) = hit {
-                                if let Some(point_id) = hit_to_point_id(self, &hit) {
-                                    publish_hover_pick = Some(HoverPickEvent::Hover(point_id));
-                                }
+                            if let Some(point) = cpu_pick_hit(state)
+                                && self.valid_point_id(&point)
+                            {
+                                publish_hover_pick = Some(HoverPickEvent::Hover(point));
                             } else if !self.hovered_points.is_empty() {
                                 // Moved but not over any point - clear hover
                                 publish_hover_pick = Some(HoverPickEvent::ClearHover);
@@ -1139,7 +1027,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                 {
                     publish_hover_pick = Some(HoverPickEvent::ClearPick);
                 }
-                needs_redraw |= state.handle_keyboard_event(keyboard_event.clone());
+                needs_redraw |= state.handle_keyboard_event(&keyboard_event);
             }
             _ => {}
         }
@@ -1159,36 +1047,22 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                     // Only process GPU pick results if we haven't already set publish_hover_pick (e.g., from ESC key)
                     if publish_hover_pick.is_none() {
                         // Check if this is a select request
-                        let is_select = state.pending_select_seq == Some(res.seq);
-                        if is_select {
-                            state.pending_select_seq = None;
+                        if state.pending_gpu_pick_seq == Some(res.seq) {
+                            state.pending_gpu_pick_seq = None;
                             // Process as select
-                            if let Some(hit) = res.hit {
-                                if let Some(point_id) = hit_to_point_id(self, &hit) {
-                                    publish_hover_pick = Some(HoverPickEvent::Pick(point_id));
-                                }
-                            } else if !self.picked_points.is_empty() {
-                                // Clicked on blank space, clear pick
-                                publish_hover_pick = Some(HoverPickEvent::ClearPick);
+                            if let Some(point) = res.hit
+                                && self.valid_point_id(&point)
+                            {
+                                publish_hover_pick = Some(HoverPickEvent::Pick(point));
                             }
                         } else {
                             // Process as hover
-                            if let Some(hit) = res.hit {
-                                if let Some(point_id) = hit_to_point_id(self, &hit) {
-                                    // Update hover cache
-                                    state.last_hover_cache = Some(HoverHit {
-                                        series_label: hit.series_label.clone(),
-                                        point_index: hit.point_index,
-                                        world: glam::DVec2::new(hit.world[0], hit.world[1]),
-                                        size_px: MarkerSize::marker_size_px(
-                                            hit.size,
-                                            hit.size_mode,
-                                            &state.camera,
-                                            &state.bounds,
-                                        ),
-                                    });
-                                    publish_hover_pick = Some(HoverPickEvent::Hover(point_id));
-                                }
+                            if let Some(point) = res.hit
+                                && self.valid_point_id(&point)
+                            {
+                                // Update hover cache
+                                state.last_hover_cache = Some(point);
+                                publish_hover_pick = Some(HoverPickEvent::Hover(point));
                             } else {
                                 // Moved but not over any point - clear hover
                                 if state.last_hover_cache.is_some()
@@ -1318,7 +1192,7 @@ impl shader::Primitive for Primitive {
 /// Threshold for number of points above which GPU picking is used instead of CPU picking.
 const CPU_PICK_THRESHOLD: usize = 5000;
 
-fn cpu_pick_hit(state: &PlotState) -> Option<picking::Hit> {
+fn cpu_pick_hit(state: &PlotState) -> Option<PointId> {
     if state.points.is_empty() || state.series.is_empty() {
         return None;
     }
@@ -1373,37 +1247,20 @@ fn cpu_pick_hit(state: &PlotState) -> Option<picking::Hit> {
     }
     let span = state.series.get(span_idx)?;
     let local_idx = best_idx - span_start;
-    let pt = &state.points[best_idx];
-    Some(picking::Hit {
-        series_label: span.label.clone(),
+    Some(PointId {
+        series_id: span.id,
         point_index: local_idx,
-        world: [pt.position[0], pt.position[1]],
-        size: pt.size,
-        size_mode: pt.size_mode,
     })
 }
 
-/// Helper function to convert a picking Hit to PointId by finding the series by label
-fn hit_to_point_id(widget: &PlotWidget, hit: &picking::Hit) -> Option<PointId> {
-    // Find the series with matching label
-    // Note: If multiple series have the same label, this will return the first match
-    for (series_id, series) in &widget.series {
-        if series
-            .label
-            .as_ref()
-            .map(|l| l == &hit.series_label)
-            .unwrap_or(hit.series_label.is_empty())
-        {
-            // Check if point_index is valid for this series
-            if hit.point_index < series.positions.len() {
-                return Some(PointId {
-                    series_id: *series_id,
-                    point_index: hit.point_index,
-                });
-            }
-        }
+impl PlotWidget {
+    /// Check if the point index is valid for the series
+    fn valid_point_id(&self, point_id: &PointId) -> bool {
+        self.series
+            .get(&point_id.series_id)
+            .map(|series| point_id.point_index < series.positions.len())
+            .unwrap_or(false)
     }
-    None
 }
 
 fn marker_center_world(pt: &Point) -> DVec2 {
@@ -1425,6 +1282,35 @@ fn apply_data_aspect(camera: &mut Camera, bounds: &Rectangle, aspect: f64) -> bo
         return true;
     }
     false
+}
+
+impl PlotWidget {
+    pub(crate) fn pick_hit(&self, state: &mut PlotState) -> Option<PointId> {
+        if let Some(point) = state.last_hover_cache
+            && self.valid_point_id(&point)
+        {
+            return Some(point);
+        }
+        if state.points.len() < CPU_PICK_THRESHOLD {
+            if let Some(point) = cpu_pick_hit(state)
+                && self.valid_point_id(&point)
+            {
+                return Some(point);
+            }
+        } else {
+            state.pending_gpu_pick_seq = Some(state.pick_seq);
+            picking::submit_request(
+                self.instance_id,
+                crate::picking::PickRequest {
+                    cursor_x: state.cursor_position.x,
+                    cursor_y: state.cursor_position.y,
+                    radius_px: state.hover_radius_px,
+                    seq: state.pick_seq,
+                },
+            );
+        }
+        None
+    }
 }
 
 impl Pipeline for PlotRendererState {

@@ -97,8 +97,8 @@ impl PlotWidgetBuilder {
     }
 
     /// Provide a custom highlighter for hovered point.
-    /// 
-    /// If not provided, a default hover highlight provider will be used that shows the tooltip text with 
+    ///
+    /// If not provided, a default hover highlight provider will be used that shows the tooltip text with
     /// series label, x and y coordinates of the point ([`PlotWidgetBuilder::default_hover_highlight_provider`]).
     pub fn with_hover_highlight_provider<F>(mut self, provider: F) -> Self
     where
@@ -255,7 +255,7 @@ impl PlotWidgetBuilder {
             .with_y_tick_producer(|_, _| Vec::new())
     }
 
-    /// Default hover highlight provider that shows the tooltip text with 
+    /// Default hover highlight provider that shows the tooltip text with
     /// series label, x and y coordinates of the point.
     pub fn default_hover_highlight_provider(
         ctx: TooltipContext<'_>,

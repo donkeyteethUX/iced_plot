@@ -8,14 +8,14 @@ use iced::{
 };
 
 use crate::{
-    AxisLink, HLine, LineStyle, MarkerSize, PlotWidget, Point, VLine,
+    AxisLink, HLine, HoverPickEvent, LineStyle, MarkerSize, PlotWidget, Point, PointId, ShapeId,
+    VLine,
     camera::Camera,
     plot_widget::{HighlightPoint, world_to_screen_position_x, world_to_screen_position_y},
     ticks::{PositionedTick, TickFormatter, TickProducer},
 };
 
 #[derive(Clone)]
-#[doc(hidden)]
 /// PlotState is a projection of the widget configuration, data, and interaction state.
 /// It holds the GPU-ready data needed for rendering the plot.
 ///
@@ -59,10 +59,10 @@ pub struct PlotState {
     // Hover/picking internals
     pub(crate) hover_enabled: bool,
     pub(crate) hover_radius_px: f32,
-    pub(crate) last_hover_cache: Option<HoverHit>,
+    pub(crate) last_hover_cache: Option<PointId>,
     pub(crate) hover_version: u64,
     // Track if we're waiting for a select picking result
-    pub(crate) pending_select_seq: Option<u64>,
+    pub(crate) pending_gpu_pick_seq: Option<u64>,
     pub(crate) pick_seq: u64,
     pub(crate) pick_result_seq: u64,
     pub(crate) crosshairs_enabled: bool,
@@ -104,7 +104,7 @@ impl Default for PlotState {
             hover_radius_px: 8.0,
             last_hover_cache: None,
             hover_version: 0,
-            pending_select_seq: None,
+            pending_gpu_pick_seq: None,
             pick_seq: 0,
             pick_result_seq: 0,
             crosshairs_enabled: false,
@@ -175,7 +175,7 @@ impl PlotState {
                 .unwrap_or((series.color, u32::MAX));
 
             series_spans.push(SeriesSpan {
-                label: series.label.clone().unwrap_or_default(),
+                id: *id,
                 start,
                 len: points.len() - start,
                 line_style: series.line_style,
@@ -306,7 +306,20 @@ impl PlotState {
         }
     }
 
-    pub(crate) fn handle_mouse_event(&mut self, event: Event) -> bool {
+    pub(crate) fn point_inside(&self, x: f32, y: f32) -> bool {
+        x >= 0.0 && y >= 0.0 && x <= self.bounds.width && y <= self.bounds.height
+    }
+
+    pub(crate) fn cursor_inside(&self) -> bool {
+        self.point_inside(self.cursor_position.x, self.cursor_position.y)
+    }
+
+    pub(crate) fn handle_mouse_event(
+        &mut self,
+        event: Event,
+        widget: &PlotWidget,
+        publish_hover_pick: &mut Option<HoverPickEvent>,
+    ) -> bool {
         const SELECTION_DELTA_THRESHOLD: f32 = 4.0; // pixels
         const SELECTION_PADDING: f32 = 0.02; // fractional padding in world units relative to selection size
 
@@ -319,10 +332,7 @@ impl PlotState {
         match event {
             Event::CursorMoved { position } => {
                 // Check if the cursor is inside this widget's bounds in window space
-                let inside = position.x >= self.bounds.x
-                    && position.x <= (self.bounds.x + self.bounds.width)
-                    && position.y >= self.bounds.y
-                    && position.y <= (self.bounds.y + self.bounds.height);
+                let inside = self.point_inside(position.x, position.y);
 
                 // Store cursor in local coordinates (relative to bounds)
                 self.cursor_position =
@@ -384,10 +394,7 @@ impl PlotState {
             Event::ButtonPressed(mouse::Button::Left) => {
                 // Only start panning if the press started inside our bounds
                 // (Drags will continue even if the cursor leaves later)
-                let inside = self.cursor_position.x >= 0.0
-                    && self.cursor_position.y >= 0.0
-                    && self.cursor_position.x <= self.bounds.width
-                    && self.cursor_position.y <= self.bounds.height;
+                let inside = self.cursor_inside();
                 if !inside {
                     return needs_redraw;
                 }
@@ -402,6 +409,17 @@ impl PlotState {
                     self.autoscale();
                     needs_redraw = true;
                 } else {
+                    if self.hover_enabled && !self.pan.active && !self.selection.active {
+                        // check if the cursor is hovering over a point
+                        if let Some(HoverPickEvent::Hover(point_id)) = *publish_hover_pick {
+                            *publish_hover_pick = Some(HoverPickEvent::Pick(point_id));
+                            return true;
+                        }
+                        if let Some(point_id) = widget.pick_hit(self) {
+                            *publish_hover_pick = Some(HoverPickEvent::Pick(point_id));
+                            return true;
+                        }
+                    }
                     // Start panning
                     self.pan.active = true;
                     self.pan.start_cursor = self.cursor_position.into();
@@ -415,10 +433,7 @@ impl PlotState {
             }
             Event::ButtonPressed(mouse::Button::Right) => {
                 // Only start selection if inside our bounds
-                let inside = self.cursor_position.x >= 0.0
-                    && self.cursor_position.y >= 0.0
-                    && self.cursor_position.x <= self.bounds.width
-                    && self.cursor_position.y <= self.bounds.height;
+                let inside = self.cursor_inside();
                 if !inside {
                     return needs_redraw;
                 }
@@ -537,9 +552,9 @@ impl PlotState {
         needs_redraw
     }
 
-    pub(crate) fn handle_keyboard_event(&mut self, event: keyboard::Event) -> bool {
+    pub(crate) fn handle_keyboard_event(&mut self, event: &keyboard::Event) -> bool {
         if let keyboard::Event::ModifiersChanged(modifiers) = event {
-            self.modifiers = modifiers;
+            self.modifiers = modifiers.clone();
         }
         false // No need to redraw
     }
@@ -558,7 +573,7 @@ impl PlotState {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SeriesSpan {
-    pub(crate) label: String,
+    pub(crate) id: ShapeId,
     pub(crate) start: usize,
     pub(crate) len: usize,
     pub(crate) line_style: Option<LineStyle>,
@@ -579,12 +594,4 @@ pub(crate) struct PanState {
     pub(crate) active: bool,
     pub(crate) start_cursor: DVec2,
     pub(crate) start_camera_center: DVec2,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct HoverHit {
-    pub(crate) series_label: String,
-    pub(crate) point_index: usize,
-    pub(crate) world: DVec2,
-    pub(crate) size_px: f32,
 }
