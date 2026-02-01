@@ -554,7 +554,7 @@ impl PlotState {
 
     pub(crate) fn handle_keyboard_event(&mut self, event: &keyboard::Event) -> bool {
         if let keyboard::Event::ModifiersChanged(modifiers) = event {
-            self.modifiers = modifiers.clone();
+            self.modifiers = *modifiers;
         }
         false // No need to redraw
     }

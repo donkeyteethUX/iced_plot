@@ -1027,7 +1027,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                 {
                     publish_hover_pick = Some(HoverPickEvent::ClearPick);
                 }
-                needs_redraw |= state.handle_keyboard_event(&keyboard_event);
+                needs_redraw |= state.handle_keyboard_event(keyboard_event);
             }
             _ => {}
         }
