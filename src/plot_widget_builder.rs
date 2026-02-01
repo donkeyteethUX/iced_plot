@@ -75,16 +75,6 @@ impl PlotWidgetBuilder {
         self
     }
 
-    #[deprecated(
-        since = "0.3.1",
-        note = "Use `with_pick_highlight_provider`/`with_hover_highlight_provider` instead"
-    )]
-    /// Enable or disable tooltips for the plot. Tooltips are enabled by default.
-    pub fn with_tooltips(self, enabled: bool) -> Self {
-        _ = enabled;
-        self
-    }
-
     /// Enable or disable autoscaling of the plot when new data is added.
     pub fn with_autoscale_on_updates(mut self, enabled: bool) -> Self {
         self.autoscale_on_updates = Some(enabled);
@@ -94,19 +84,6 @@ impl PlotWidgetBuilder {
     /// Set the hover radius in pixels for detecting nearby points for tooltips.
     pub fn with_hover_radius_px(mut self, radius: f32) -> Self {
         self.hover_radius_px = Some(radius.max(0.0));
-        self
-    }
-
-    #[deprecated(
-        since = "0.3.1",
-        note = "Use `with_pick_highlight_provider`/`with_hover_highlight_provider` instead"
-    )]
-    /// Provide a custom tooltip text formatter. Passing `None` disables formatting.
-    pub fn with_tooltip_provider<F>(self, provider: F) -> Self
-    where
-        F: Fn(TooltipContext<'_>) -> String + Send + Sync + 'static,
-    {
-        _ = provider;
         self
     }
 
@@ -120,6 +97,9 @@ impl PlotWidgetBuilder {
     }
 
     /// Provide a custom highlighter for hovered point.
+    /// 
+    /// If not provided, a default hover highlight provider will be used that shows the tooltip text with 
+    /// series label, x and y coordinates of the point ([`PlotWidgetBuilder::default_hover_highlight_provider`]).
     pub fn with_hover_highlight_provider<F>(mut self, provider: F) -> Self
     where
         F: Fn(TooltipContext<'_>, &mut HighlightPoint) -> Option<String> + Send + Sync + 'static,
@@ -275,6 +255,18 @@ impl PlotWidgetBuilder {
             .with_y_tick_producer(|_, _| Vec::new())
     }
 
+    /// Default hover highlight provider that shows the tooltip text with 
+    /// series label, x and y coordinates of the point.
+    pub fn default_hover_highlight_provider(
+        ctx: TooltipContext<'_>,
+        point: &mut HighlightPoint,
+    ) -> Option<String> {
+        Some(format!(
+            "{}\nx: {:.2}, y: {:.2}",
+            ctx.series_label, point.x, point.y
+        ))
+    }
+
     /// Build the PlotWidget; validates series and duplicate labels via PlotWidget::add_series.
     pub fn build(self) -> Result<PlotWidget, SeriesError> {
         if let (Some((x_min, x_max)), Some((y_min, y_max))) = (self.x_lim, self.y_lim)
@@ -310,6 +302,8 @@ impl PlotWidgetBuilder {
         }
         if let Some(p) = self.hover_highlight_provider {
             w.set_hover_highlight_provider(p);
+        } else {
+            w.set_hover_highlight_provider(Arc::new(Self::default_hover_highlight_provider));
         }
         if let Some(p) = self.cursor_provider {
             w.set_cursor_provider(p);

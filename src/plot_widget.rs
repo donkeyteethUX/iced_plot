@@ -1446,6 +1446,14 @@ impl Pipeline for PlotRendererState {
 // Global unique ID generator for widget instances
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// The highlight context for a point. You can modify
+///
+/// + `x` and `y` to change the position of the highlight point (not recommended);
+/// + `color` to change the color of the highlight point;
+/// + `marker_style` to change the marker style of the highlight point;
+/// + `mask_padding` to change the mask padding of the highlight point;
+///
+///  to change the highlight point.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HighlightPoint {
     /// Data-space coordinates
@@ -1460,6 +1468,8 @@ pub struct HighlightPoint {
 }
 
 impl HighlightPoint {
+    /// Resize the marker of the highlight point.
+    /// For both pixel-based and world-based markers, the size will be multiplied by the factor.
     pub fn resize_marker(&mut self, factor: f64) {
         if let Some(marker_style) = &mut self.marker_style {
             match &mut marker_style.size {

@@ -2,10 +2,10 @@ use iced::Rectangle;
 
 use crate::{camera::Camera, series::ShapeId, ticks::PositionedTick};
 
-#[derive(Debug, Clone)]
 /// Messages sent by the plot widget to the application.
 ///
 /// These messages are generated in response to user interactions with the plot.
+#[derive(Debug, Clone)]
 pub enum PlotUiMessage {
     /// Toggle the legend visibility.
     ToggleLegend,
@@ -16,6 +16,8 @@ pub enum PlotUiMessage {
 }
 
 impl PlotUiMessage {
+    /// Get the hover or pick event from the render update.
+    /// If the plot widget is not in hover or pick mode, this will return None.
     pub fn get_hover_pick_event(&self) -> Option<HoverPickEvent> {
         if let PlotUiMessage::RenderUpdate(update) = self {
             update.hover_pick
@@ -73,11 +75,15 @@ pub struct PointId {
     pub point_index: usize,
 }
 
+/// The hover or pick event.
 #[derive(Debug, Clone, Copy)]
-#[doc(hidden)]
 pub enum HoverPickEvent {
+    /// Hover a point.
     Hover(PointId),
+    /// Clear all hovered points.
     ClearHover,
+    /// Pick a point.
     Pick(PointId),
+    /// Clear all picked points.
     ClearPick,
 }
