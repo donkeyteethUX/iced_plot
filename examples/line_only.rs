@@ -22,10 +22,10 @@ fn update(widget: &mut PlotWidget, message: PlotUiMessage) {
         Some(HoverPickEvent::Hover(point_id)) => {
             if let Some([x, _]) = widget.point_position(point_id) {
                 for series_id in widget.series_ids() {
-                    if series_id != point_id.series_id {
-                        if let Some(p) = widget.nearest_point_horizontal(series_id, x) {
-                            widget.add_hover_point(p);
-                        }
+                    if series_id != point_id.series_id
+                        && let Some(p) = widget.nearest_point_horizontal(series_id, x)
+                    {
+                        widget.add_hover_point(p);
                     }
                 }
             }
@@ -33,10 +33,10 @@ fn update(widget: &mut PlotWidget, message: PlotUiMessage) {
         Some(HoverPickEvent::Pick(point_id)) => {
             if let Some([x, _]) = widget.point_position(point_id) {
                 for series_id in widget.series_ids() {
-                    if series_id != point_id.series_id {
-                        if let Some(p) = widget.nearest_point_horizontal(series_id, x) {
-                            widget.add_pick_point(p);
-                        }
+                    if series_id != point_id.series_id
+                        && let Some(p) = widget.nearest_point_horizontal(series_id, x)
+                    {
+                        widget.add_pick_point(p);
                     }
                 }
             }

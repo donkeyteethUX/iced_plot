@@ -432,12 +432,12 @@ impl PlotWidget {
             }
             PlotUiMessage::RenderUpdate(payload) => {
                 // Update camera and bounds when ticks are updated (camera changed)
-                if let Some(camera_bounds) = payload.camera_bounds {
-                    if self.camera_bounds != Some(camera_bounds) {
-                        self.camera_bounds = Some(camera_bounds);
-                        // Update tooltip positions when camera/bounds change
-                        self.update_tooltip_positions();
-                    }
+                if let Some(camera_bounds) = payload.camera_bounds
+                    && self.camera_bounds != Some(camera_bounds)
+                {
+                    self.camera_bounds = Some(camera_bounds);
+                    // Update tooltip positions when camera/bounds change
+                    self.update_tooltip_positions();
                 }
 
                 let highlight_changed = match payload.hover_pick {
@@ -1124,10 +1124,10 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                 }
 
                 // Handle cursor leave
-                if let iced::mouse::Event::CursorLeft = mouse_event {
-                    if !self.hovered_points.is_empty() {
-                        publish_hover_pick = Some(HoverPickEvent::ClearHover);
-                    }
+                if let iced::mouse::Event::CursorLeft = mouse_event
+                    && !self.hovered_points.is_empty()
+                {
+                    publish_hover_pick = Some(HoverPickEvent::ClearHover);
                 }
             }
             // CursorLeft is handled inside the Mouse(...) branch above via state.handle_mouse_event
