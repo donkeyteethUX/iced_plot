@@ -27,9 +27,9 @@ impl PlotUiMessage {
     }
 }
 
-/// Context passed to a tooltip formatting callback.
+/// Context passed to hover/pick highlight callbacks.
 ///
-/// Contains information about the point being hovered over.
+/// Contains information identifying the point being highlighted.
 #[derive(Debug, Clone, Copy)]
 pub struct TooltipContext<'a> {
     /// ID of the series

@@ -55,7 +55,8 @@ pub struct PlotState {
     pub(crate) markers_version: u64,
     pub(crate) lines_version: u64,
     pub(crate) highlight_version: u64,
-    pub(crate) src_version: u64, // version of source data last synced
+    pub(crate) data_src_version: u64, // version of source data last synced
+    pub(crate) highlight_src_version: u64,
     // Hover/picking internals
     pub(crate) hover_enabled: bool,
     pub(crate) hover_radius_px: f32,
@@ -74,7 +75,8 @@ pub struct PlotState {
 impl Default for PlotState {
     fn default() -> Self {
         Self {
-            src_version: 0,
+            data_src_version: 0,
+            highlight_src_version: 0,
             points: Arc::new([]),
             point_colors: Arc::new([]),
             highlighted_points: Arc::new([]),
@@ -118,6 +120,28 @@ impl Default for PlotState {
 }
 
 impl PlotState {
+    /// Sync hover/pick highlight overlay points from the widget without rebuilding plot geometry.
+    ///
+    /// Returns true if the overlay data changed.
+    pub(crate) fn sync_highlighted_points_from_widget(&mut self, widget: &PlotWidget) -> bool {
+        let highlighted_points: Vec<_> = widget
+            .picked_points
+            .values()
+            .chain(widget.hovered_points.values())
+            .map(|(highlight_point, _)| highlight_point.clone())
+            .collect();
+
+        let new_highlighted_points: Arc<[HighlightPoint]> = highlighted_points.into();
+
+        if self.highlighted_points != new_highlighted_points {
+            self.highlight_version = self.highlight_version.wrapping_add(1);
+            self.highlighted_points = new_highlighted_points;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Rebuild GPU data from widget configuration.
     pub(crate) fn rebuild_from_widget(&mut self, widget: &PlotWidget) {
         let mut points = Vec::new();
@@ -218,19 +242,8 @@ impl PlotState {
         self.data_max = data_max;
 
         // highlighted_points
-        let highlighted_points: Vec<_> = widget
-            .picked_points
-            .values()
-            .chain(widget.hovered_points.values())
-            .map(|(highlight_point, _)| highlight_point.clone())
-            .collect();
-        let new_highlighted_points: Arc<[HighlightPoint]> = highlighted_points.into();
-
-        // Only increment highlight_version if highlighted_points actually changed
-        if self.highlighted_points != new_highlighted_points {
-            self.highlight_version = self.highlight_version.wrapping_add(1);
-            self.highlighted_points = new_highlighted_points;
-        }
+        self.sync_highlighted_points_from_widget(widget);
+        self.highlight_src_version = widget.highlight_version;
 
         // Copy formatters
         self.x_axis_formatter = widget.x_axis_formatter.clone();

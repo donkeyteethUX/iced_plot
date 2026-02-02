@@ -2,7 +2,7 @@
 //!
 //! - Works with large datasets (up to millions of points)
 //! - Retains GPU buffers between frames for fast redraws and picking
-//! - Axes/labels, legends, reference lines, tooltips, crosshairs, axis linking, etc.
+//! - Axes/labels, legends, reference lines, hover/pick highlighting, crosshairs, axis linking, etc.
 //!
 //! Quick start:
 //!

@@ -1,7 +1,11 @@
 //! GPU renderer for PlotWidget.
 use crate::LineStyle;
 use crate::picking::PickingPass;
-use crate::{camera::CameraUniform, grid::Grid, plot_state::PlotState};
+use crate::{
+    camera::{Camera, CameraUniform},
+    grid::Grid,
+    plot_state::PlotState,
+};
 use iced::widget::shader::Viewport;
 use iced::{Rectangle, wgpu::*};
 
@@ -79,6 +83,8 @@ struct VersionTracker {
     lines: u64,
     highlight: u64,
     render_offset: glam::DVec2,
+    camera: Camera,
+    bounds_px: (u32, u32),
 }
 
 impl VersionTracker {
@@ -88,6 +94,8 @@ impl VersionTracker {
             lines: 0,
             highlight: 0,
             render_offset: glam::DVec2::ZERO,
+            camera: Camera::default(),
+            bounds_px: (0, 0),
         }
     }
 }
@@ -279,6 +287,8 @@ impl PlotRenderer {
         // Check if render offset changed - if so, we need to rebuild vertex buffers
         // since positions are stored relative to render_offset
         let offset_changed = self.versions.render_offset != state.camera.render_offset;
+        let camera_changed = self.versions.camera != state.camera;
+        let bounds_changed = self.versions.bounds_px != (self.bounds_w, self.bounds_h);
 
         if state.markers_version != self.versions.markers || offset_changed {
             self.rebuild_markers(device, queue, state);
@@ -294,12 +304,20 @@ impl PlotRenderer {
 
         // Update cached render offset
         self.versions.render_offset = state.camera.render_offset;
+        self.versions.camera = state.camera;
+        self.versions.bounds_px = (self.bounds_w, self.bounds_h);
 
         // Selection is rebuilt whenever it's active.
         self.rebuild_selection(device, queue, state);
 
-        // Hover/pick highlights are rebuilt only when highlighted_points changes.
-        if state.highlight_version != self.versions.highlight || offset_changed {
+        // Hover/pick highlight mask boxes are baked in clip space, so they must be rebuilt
+        // whenever the camera or viewport changes (zoom/pan/resize), not only when the
+        // highlighted points change.
+        if state.highlight_version != self.versions.highlight
+            || offset_changed
+            || camera_changed
+            || bounds_changed
+        {
             self.rebuild_highlight(device, queue, state);
             self.versions.highlight = state.highlight_version;
         }

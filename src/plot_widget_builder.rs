@@ -15,7 +15,6 @@ use crate::ticks::{Tick, TickFormatter, TickProducer};
 /// let plot = PlotWidgetBuilder::new()
 ///     .with_x_label("Time (s)")
 ///     .with_y_label("Value (V)")
-///     .with_tooltips(true)
 ///     .with_autoscale_on_updates(false)
 ///     .with_x_lim(0.0, 10.0)
 ///     .with_y_lim(-1.0, 1.0)
@@ -81,7 +80,7 @@ impl PlotWidgetBuilder {
         self
     }
 
-    /// Set the hover radius in pixels for detecting nearby points for tooltips.
+    /// Set the hover radius in pixels for detecting nearby points for highlighting.
     pub fn with_hover_radius_px(mut self, radius: f32) -> Self {
         self.hover_radius_px = Some(radius.max(0.0));
         self
