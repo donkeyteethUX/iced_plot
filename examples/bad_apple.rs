@@ -10,7 +10,6 @@ use std::time::Duration;
 
 const FRAME_WIDTH: usize = 120;
 const FRAME_HEIGHT: usize = 90;
-const LABEL: &str = "bad_apple";
 const FRAME_RATE: f64 = 12.0;
 
 fn main() -> iced::Result {
@@ -53,7 +52,6 @@ impl App {
             positions.clone(),
             MarkerStyle::new_world(1.0, MarkerType::Square),
         )
-        .with_label(LABEL)
         .with_point_colors(initial_colors);
         let series_id = series.id;
         let widget = PlotWidgetBuilder::new()
@@ -71,6 +69,8 @@ impl App {
             .with_cursor_overlay(false)
             .add_series(series)
             .disable_controls_help()
+            // no need to disable legend here, legend is disabled by default when no labeled series are added
+            // .disable_legend()
             .build()
             .unwrap();
 

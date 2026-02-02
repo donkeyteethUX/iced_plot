@@ -57,6 +57,7 @@ pub struct PlotWidget {
     pub(crate) highlight_version: u64,
     // Configuration
     pub(crate) autoscale_on_updates: bool,
+    pub(crate) legend_enabled: bool,
     pub(crate) legend_collapsed: bool,
     pub(crate) x_axis_label: String,
     pub(crate) y_axis_label: String,
@@ -109,6 +110,7 @@ impl PlotWidget {
             data_version: 0,
             highlight_version: 0,
             autoscale_on_updates: false,
+            legend_enabled: true,
             legend_collapsed: false,
             x_axis_label: String::new(),
             y_axis_label: String::new(),
@@ -517,6 +519,11 @@ impl PlotWidget {
             .padding(2.0)
             .style(|theme: &Theme| container::background(theme.palette().background));
 
+        let legend = if self.legend_enabled {
+            legend::legend(self, self.legend_collapsed)
+        } else {
+            None
+        };
         let elements = stack![
             inner_container,
             stack(
@@ -527,9 +534,9 @@ impl PlotWidget {
                         Self::view_tooltip_overlay(tooltip, &self.camera_bounds)
                     }))
             ),
-            self.view_top_right_overlay(),
+            self.view_top_right_overlay(legend.is_some()),
             self.view_tick_labels(),
-            legend::legend(self, self.legend_collapsed),
+            legend,
         ];
 
         container(axes_labels::stack_with_labels(
@@ -784,7 +791,7 @@ impl PlotWidget {
         Some(bubble.into())
     }
 
-    fn view_top_right_overlay(&self) -> Element<'_, PlotUiMessage> {
+    fn view_top_right_overlay(&self, has_legend: bool) -> Element<'_, PlotUiMessage> {
         let help_btn = self.controls_help_enabled.then(|| {
             let help_label = if self.controls_overlay_open {
                 "×"
@@ -798,7 +805,7 @@ impl PlotWidget {
         });
 
         let top_row = widget::row![self.view_cursor_overlay(), help_btn].spacing(6.0);
-        let col = widget::column![top_row, self.view_controls_overlay_panel()]
+        let col = widget::column![top_row, self.view_controls_overlay_panel(has_legend)]
             .spacing(6.0)
             .width(Length::Shrink)
             .height(Length::Shrink)
@@ -818,7 +825,7 @@ impl PlotWidget {
             .into()
     }
 
-    fn view_controls_overlay_panel(&self) -> Option<Element<'_, PlotUiMessage>> {
+    fn view_controls_overlay_panel(&self, has_legend: bool) -> Option<Element<'_, PlotUiMessage>> {
         if !self.controls_help_enabled || !self.controls_overlay_open {
             return None;
         }
@@ -833,7 +840,7 @@ impl PlotWidget {
             txt("Double-click: reset / autoscale"),
             txt("Left-click point: pick"),
             txt("Esc: clear picked points"),
-            txt("Click icon in legend to toggle visibility."),
+            has_legend.then(|| txt("Click icon in legend to toggle visibility.")),
         ]
         .spacing(2.0);
 
