@@ -70,6 +70,7 @@ impl App {
             })
             .with_cursor_overlay(false)
             .add_series(series)
+            .disable_controls_help()
             .build()
             .unwrap();
 

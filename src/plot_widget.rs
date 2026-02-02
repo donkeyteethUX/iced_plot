@@ -9,10 +9,10 @@ use std::{
 use glam::{DVec2, Vec2};
 use iced::{
     Color, Element, Length, Rectangle, Theme,
-    alignment::{self, Horizontal},
+    alignment::{self, Horizontal, Vertical},
     keyboard,
     mouse::{self, Interaction},
-    padding,
+    padding::{self, Padding},
     wgpu::TextureFormat,
     widget::{
         self, container,
@@ -70,6 +70,8 @@ pub struct PlotWidget {
     pub(crate) cursor_overlay: bool,
     pub(crate) cursor_provider: Option<CursorProvider>,
     pub(crate) crosshairs_enabled: bool,
+    pub(crate) controls_help_enabled: bool,
+    pub(crate) controls_overlay_open: bool,
     pub(crate) x_axis_formatter: Option<TickFormatter>,
     pub(crate) y_axis_formatter: Option<TickFormatter>,
     pub(crate) x_tick_producer: Option<TickProducer>,
@@ -120,6 +122,8 @@ impl PlotWidget {
             cursor_overlay: true,
             cursor_provider: None,
             crosshairs_enabled: false,
+            controls_help_enabled: true,
+            controls_overlay_open: false,
             x_axis_formatter: Some(Arc::new(ticks::default_formatter)),
             y_axis_formatter: Some(Arc::new(ticks::default_formatter)),
             x_tick_producer: Some(Arc::new(ticks::default_tick_producer)),
@@ -444,6 +448,11 @@ impl PlotWidget {
             PlotUiMessage::ToggleLegend => {
                 self.legend_collapsed = !self.legend_collapsed;
             }
+            PlotUiMessage::ToggleControlsOverlay => {
+                if self.controls_help_enabled {
+                    self.controls_overlay_open = !self.controls_overlay_open;
+                }
+            }
             PlotUiMessage::ToggleSeriesVisibility(id) => {
                 self.toggle_visibility(&id);
             }
@@ -518,7 +527,7 @@ impl PlotWidget {
                         Self::view_tooltip_overlay(tooltip, &self.camera_bounds)
                     }))
             ),
-            self.view_cursor_overlay(),
+            self.view_top_right_overlay(),
             self.view_tick_labels(),
             legend::legend(self, self.legend_collapsed),
         ];
@@ -714,7 +723,7 @@ impl PlotWidget {
         let mut bottom = 0.0;
         let mut left = screen_x + OFFSET;
         let mut align_x = alignment::Horizontal::Left;
-        let mut align_y = alignment::Vertical::Top;
+        let mut align_y = Vertical::Top;
 
         // flip the tooltip if the point is outside this percentage of the bounds
         const FLIP_PCT: f32 = 0.8;
@@ -723,7 +732,7 @@ impl PlotWidget {
                 // flip the tooltip to the bottom aligned
                 top = 0.0;
                 bottom = bounds.height - screen_y + OFFSET;
-                align_y = alignment::Vertical::Bottom;
+                align_y = Vertical::Bottom;
             }
             if screen_x > bounds.width * FLIP_PCT {
                 // flip the tooltip to the right aligned
@@ -746,7 +755,7 @@ impl PlotWidget {
             container(tooltip_bubble)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .padding(padding::Padding {
+                .padding(Padding {
                     top,
                     right,
                     bottom,
@@ -772,12 +781,66 @@ impl PlotWidget {
             .padding(6.0)
             .style(container::rounded_box);
 
+        Some(bubble.into())
+    }
+
+    fn view_top_right_overlay(&self) -> Element<'_, PlotUiMessage> {
+        let help_btn = self.controls_help_enabled.then(|| {
+            let help_label = if self.controls_overlay_open {
+                "×"
+            } else {
+                "?"
+            };
+
+            widget::button(widget::text(help_label).size(12.0))
+                .padding(6.0)
+                .on_press(PlotUiMessage::ToggleControlsOverlay)
+        });
+
+        let top_row = widget::row![self.view_cursor_overlay(), help_btn].spacing(6.0);
+        let col = widget::column![top_row, self.view_controls_overlay_panel()]
+            .spacing(6.0)
+            .width(Length::Shrink)
+            .height(Length::Shrink)
+            .align_x(Horizontal::Right);
+
+        container(col)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(Padding {
+                top: 4.0,
+                right: 4.0,
+                ..Padding::ZERO
+            })
+            .align_x(Horizontal::Right)
+            .align_y(Vertical::Top)
+            .style(container::transparent)
+            .into()
+    }
+
+    fn view_controls_overlay_panel(&self) -> Option<Element<'_, PlotUiMessage>> {
+        if !self.controls_help_enabled || !self.controls_overlay_open {
+            return None;
+        }
+
+        let txt = |t| widget::text(t).size(12.0).style(widget::text::base);
+        let content = widget::column![
+            txt("Controls").style(widget::text::primary),
+            txt("Left-drag: pan"),
+            txt("Right-drag: box zoom"),
+            txt("Ctrl + scroll: zoom at cursor"),
+            txt("Scroll: pan (vertical/horizontal)"),
+            txt("Double-click: reset / autoscale"),
+            txt("Left-click point: pick"),
+            txt("Esc: clear picked points"),
+            txt("Click icon in legend to toggle visibility."),
+        ]
+        .spacing(2.0);
+
         Some(
-            container(bubble)
-                .width(Length::Fill)
-                .height(Length::Shrink)
-                .align_x(Horizontal::Right)
-                .align_y(alignment::Vertical::Top)
+            container(content)
+                .padding(8.0)
+                .style(container::rounded_box)
                 .into(),
         )
     }
@@ -800,7 +863,7 @@ impl PlotWidget {
                     .height(Length::Fill)
                     .padding(padding::left(tick.screen_pos - centering_offset))
                     .align_x(Horizontal::Left)
-                    .align_y(alignment::Vertical::Bottom)
+                    .align_y(Vertical::Bottom)
                     .style(container::transparent);
                 tick_elements.push(positioned_label.into());
             }
@@ -815,7 +878,7 @@ impl PlotWidget {
                     .height(Length::Fill)
                     .padding(padding::top(tick.screen_pos - 5.0))
                     .align_x(alignment::Horizontal::Left)
-                    .align_y(alignment::Vertical::Top)
+                    .align_y(Vertical::Top)
                     .style(container::transparent);
                 tick_elements.push(positioned_label.into());
             }

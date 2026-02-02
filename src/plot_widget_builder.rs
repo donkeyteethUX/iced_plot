@@ -32,6 +32,7 @@ pub struct PlotWidgetBuilder {
     cursor_overlay: Option<bool>,
     cursor_provider: Option<CursorProvider>,
     crosshairs: Option<bool>,
+    disable_controls_help: bool,
     x_lim: Option<(f64, f64)>,
     y_lim: Option<(f64, f64)>,
     x_axis_link: Option<AxisLink>,
@@ -127,6 +128,14 @@ impl PlotWidgetBuilder {
     /// Enable or disable crosshairs that follow the cursor position.
     pub fn with_crosshairs(mut self, enabled: bool) -> Self {
         self.crosshairs = Some(enabled);
+        self
+    }
+
+    /// Disable the in-canvas controls/help UI (`?` button + panel).
+    ///
+    /// Useful if your application provides its own help UI or you want a cleaner canvas.
+    pub fn disable_controls_help(mut self) -> Self {
+        self.disable_controls_help = true;
         self
     }
 
@@ -274,6 +283,10 @@ impl PlotWidgetBuilder {
             return Err(SeriesError::InvalidAxisLimits);
         }
         let mut w = PlotWidget::new();
+        if self.disable_controls_help {
+            w.controls_help_enabled = false;
+            w.controls_overlay_open = false;
+        }
 
         if let Some(enabled) = self.autoscale_on_updates {
             w.autoscale_on_updates(enabled);

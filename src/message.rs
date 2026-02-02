@@ -9,6 +9,8 @@ use crate::{camera::Camera, series::ShapeId, ticks::PositionedTick};
 pub enum PlotUiMessage {
     /// Toggle the legend visibility.
     ToggleLegend,
+    /// Toggle the in-canvas controls/help overlay.
+    ToggleControlsOverlay,
     /// Toggle visibility of a series or reference line by label.
     ToggleSeriesVisibility(ShapeId),
     /// Internal render update message.
