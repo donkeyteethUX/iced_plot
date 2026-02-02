@@ -379,6 +379,10 @@ impl PlotWidget {
     fn handle_hover_pick<const PICK: bool>(&mut self, point_id: PointId) -> bool {
         let mut changed = false;
         let (highlight_provider, points) = if PICK {
+            // Clicking an already-picked point deselects it.
+            if self.picked_points.shift_remove(&point_id).is_some() {
+                return true;
+            }
             changed |= self.hovered_points.shift_remove(&point_id).is_some();
             (&self.pick_highlight_provider, &mut self.picked_points)
         } else {

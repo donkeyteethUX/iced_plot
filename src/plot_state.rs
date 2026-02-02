@@ -424,13 +424,16 @@ impl PlotState {
                 } else {
                     if self.hover_enabled && !self.pan.active && !self.selection.active {
                         // check if the cursor is hovering over a point
-                        if let Some(HoverPickEvent::Hover(point_id)) = *publish_hover_pick {
+                        let picked =
+                            if let Some(HoverPickEvent::Hover(point_id)) = *publish_hover_pick {
+                                Some(point_id)
+                            } else {
+                                widget.pick_hit(self)
+                            };
+
+                        if let Some(point_id) = picked {
+                            // Upgrade the "hover" to a "pick".
                             *publish_hover_pick = Some(HoverPickEvent::Pick(point_id));
-                            return true;
-                        }
-                        if let Some(point_id) = widget.pick_hit(self) {
-                            *publish_hover_pick = Some(HoverPickEvent::Pick(point_id));
-                            return true;
                         }
                     }
                     // Start panning
