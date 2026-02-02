@@ -57,6 +57,7 @@ pub struct PlotWidget {
     pub(crate) highlight_version: u64,
     // Configuration
     pub(crate) autoscale_on_updates: bool,
+    pub(crate) scroll_enabled: bool,
     pub(crate) legend_enabled: bool,
     pub(crate) legend_collapsed: bool,
     pub(crate) x_axis_label: String,
@@ -110,6 +111,7 @@ impl PlotWidget {
             data_version: 0,
             highlight_version: 0,
             autoscale_on_updates: false,
+            scroll_enabled: true,
             legend_enabled: true,
             legend_collapsed: false,
             x_axis_label: String::new(),
@@ -534,7 +536,7 @@ impl PlotWidget {
                         })
                     })
             ),
-            self.view_top_right_overlay(legend.is_some()),
+            self.view_top_right_overlay(legend.is_some(), self.scroll_enabled),
             self.view_tick_labels(),
             legend,
         ];
@@ -791,7 +793,11 @@ impl PlotWidget {
         Some(bubble.into())
     }
 
-    fn view_top_right_overlay(&self, has_legend: bool) -> Element<'_, PlotUiMessage> {
+    fn view_top_right_overlay(
+        &self,
+        has_legend: bool,
+        scroll_enabled: bool,
+    ) -> Element<'_, PlotUiMessage> {
         let help_btn = self.controls_help_enabled.then(|| {
             let help_label = if self.controls_overlay_open {
                 "×"
@@ -805,11 +811,14 @@ impl PlotWidget {
         });
 
         let top_row = widget::row![self.view_cursor_overlay(), help_btn].spacing(6.0);
-        let col = widget::column![top_row, self.view_controls_overlay_panel(has_legend)]
-            .spacing(6.0)
-            .width(Length::Shrink)
-            .height(Length::Shrink)
-            .align_x(Horizontal::Right);
+        let col = widget::column![
+            top_row,
+            self.view_controls_overlay_panel(has_legend, scroll_enabled)
+        ]
+        .spacing(6.0)
+        .width(Length::Shrink)
+        .height(Length::Shrink)
+        .align_x(Horizontal::Right);
 
         container(col)
             .width(Length::Fill)
@@ -825,7 +834,11 @@ impl PlotWidget {
             .into()
     }
 
-    fn view_controls_overlay_panel(&self, has_legend: bool) -> Option<Element<'_, PlotUiMessage>> {
+    fn view_controls_overlay_panel(
+        &self,
+        has_legend: bool,
+        scroll_enabled: bool,
+    ) -> Option<Element<'_, PlotUiMessage>> {
         if !self.controls_help_enabled || !self.controls_overlay_open {
             return None;
         }
@@ -836,7 +849,7 @@ impl PlotWidget {
             txt("Left-drag: pan"),
             txt("Right-drag: box zoom"),
             txt("Ctrl + scroll: zoom at cursor"),
-            txt("Scroll: pan (vertical/horizontal)"),
+            scroll_enabled.then(|| txt("Scroll: pan (vertical/horizontal)")),
             txt("Double-click: reset / autoscale"),
             txt("Left-click point: pick"),
             txt("Esc: clear picked points"),

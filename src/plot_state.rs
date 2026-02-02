@@ -492,11 +492,11 @@ impl PlotState {
                 }
             }
             Event::WheelScrolled { delta } => {
+                if !widget.scroll_enabled {
+                    return needs_redraw;
+                }
                 // Only respond to wheel when cursor is inside our bounds
-                let inside = self.cursor_position.x >= 0.0
-                    && self.cursor_position.y >= 0.0
-                    && self.cursor_position.x <= self.bounds.width
-                    && self.cursor_position.y <= self.bounds.height;
+                let inside = self.cursor_inside();
                 if !inside {
                     return needs_redraw;
                 }
