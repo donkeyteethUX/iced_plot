@@ -71,8 +71,11 @@ pub struct PlotRenderUpdate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Identifier for a point in a series.
 pub struct PointId {
+    /// ID of the series
     pub series_id: ShapeId,
+    /// Index within the series [0..len)
     pub point_index: usize,
 }
 
