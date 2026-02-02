@@ -527,12 +527,12 @@ impl PlotWidget {
         let elements = stack![
             inner_container,
             stack(
-                self.hovered_points
-                    .values()
-                    .chain(self.picked_points.values())
-                    .filter_map(|(_, tooltip)| tooltip.as_ref().and_then(|tooltip| {
-                        Self::view_tooltip_overlay(tooltip, &self.camera_bounds)
-                    }))
+                self.visible_highlighted_points()
+                    .filter_map(|(_, tooltip)| {
+                        tooltip.as_ref().and_then(|tooltip| {
+                            Self::view_tooltip_overlay(tooltip, &self.camera_bounds)
+                        })
+                    })
             ),
             self.view_top_right_overlay(legend.is_some()),
             self.view_tick_labels(),
@@ -898,6 +898,17 @@ impl PlotWidget {
         Some(stack(tick_elements).into())
     }
 
+    pub(crate) fn visible_highlighted_points(
+        &self,
+    ) -> impl Iterator<Item = &(HighlightPoint, Option<TooltipUiPayload>)> {
+        self.hovered_points
+            .iter()
+            .chain(self.picked_points.iter())
+            .filter_map(|(point_id, point_ctx)| {
+                (!self.hidden_shapes.contains(&point_id.series_id)).then_some(point_ctx)
+            })
+    }
+
     fn toggle_visibility(&mut self, id: &ShapeId) {
         let exists = self.series.contains_key(id)
             || self.vlines.contains_key(id)
@@ -907,10 +918,17 @@ impl PlotWidget {
             println!("Toggle visibility: series not found: {id}");
             return;
         }
-        if self.hidden_shapes.contains(id) {
-            self.hidden_shapes.remove(id);
-        } else {
+        // toggle the visibility of the shape
+        if !self.hidden_shapes.remove(id) {
             self.hidden_shapes.insert(*id);
+        }
+        let contains_highlight = self
+            .hovered_points
+            .keys()
+            .chain(self.picked_points.keys())
+            .any(|point_id| point_id.series_id == *id);
+        if contains_highlight {
+            self.highlight_version += 1;
         }
         self.data_version += 1;
     }
@@ -1442,7 +1460,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// + `mask_padding` to change the mask padding of the highlight point;
 ///
 ///  to change the highlight point.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HighlightPoint {
     /// Data-space coordinates
     pub x: f64,

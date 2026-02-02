@@ -125,17 +125,13 @@ impl PlotState {
     /// Returns true if the overlay data changed.
     pub(crate) fn sync_highlighted_points_from_widget(&mut self, widget: &PlotWidget) -> bool {
         let highlighted_points: Vec<_> = widget
-            .picked_points
-            .values()
-            .chain(widget.hovered_points.values())
-            .map(|(highlight_point, _)| highlight_point.clone())
+            .visible_highlighted_points()
+            .map(|(highlight_point, _)| *highlight_point)
             .collect();
 
-        let new_highlighted_points: Arc<[HighlightPoint]> = highlighted_points.into();
-
-        if self.highlighted_points != new_highlighted_points {
+        if self.highlighted_points.as_ref() != highlighted_points.as_slice() {
             self.highlight_version = self.highlight_version.wrapping_add(1);
-            self.highlighted_points = new_highlighted_points;
+            self.highlighted_points = highlighted_points.into();
             true
         } else {
             false
