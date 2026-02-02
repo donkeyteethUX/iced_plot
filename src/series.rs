@@ -1,6 +1,8 @@
 use core::fmt;
 
-use crate::{Color, point::MarkerType};
+use iced::Rectangle;
+
+use crate::{Color, camera::Camera, point::MarkerType};
 
 /// Line styling options for series connections.
 ///
@@ -43,6 +45,29 @@ impl MarkerSize {
             Self::Pixels(size) => (size, 0),
             Self::World(size) => (size as f32, 1),
         }
+    }
+    pub(crate) fn marker_size_px(
+        size: f32,
+        size_mode: u32,
+        camera: &Camera,
+        bounds: &Rectangle,
+    ) -> f32 {
+        if size_mode != crate::point::MARKER_SIZE_WORLD {
+            return size;
+        }
+        let width = bounds.width.max(1.0) as f64;
+        let height = bounds.height.max(1.0) as f64;
+        let world_per_px_x = (2.0 * camera.half_extents.x) / width;
+        let world_per_px_y = (2.0 * camera.half_extents.y) / height;
+        let world_per_px_x = world_per_px_x.max(1e-12);
+        let world_per_px_y = world_per_px_y.max(1e-12);
+        let px_x = size as f64 / world_per_px_x;
+        let px_y = size as f64 / world_per_px_y;
+        px_x.max(px_y) as f32
+    }
+    pub(crate) fn to_px(self, camera: &Camera, bounds: &Rectangle) -> f32 {
+        let (size, size_mode) = self.to_raw();
+        Self::marker_size_px(size, size_mode, camera, bounds)
     }
 }
 

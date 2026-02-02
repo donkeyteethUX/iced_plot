@@ -8,13 +8,14 @@ use iced::{
 };
 
 use crate::{
-    AxisLink, HLine, LineStyle, MarkerSize, PlotWidget, Point, VLine,
+    AxisLink, HLine, HoverPickEvent, LineStyle, MarkerSize, PlotWidget, Point, PointId, ShapeId,
+    VLine,
     camera::Camera,
+    plot_widget::{HighlightPoint, world_to_screen_position_x, world_to_screen_position_y},
     ticks::{PositionedTick, TickFormatter, TickProducer},
 };
 
 #[derive(Clone)]
-#[doc(hidden)]
 /// PlotState is a projection of the widget configuration, data, and interaction state.
 /// It holds the GPU-ready data needed for rendering the plot.
 ///
@@ -48,17 +49,21 @@ pub struct PlotState {
     pub(crate) modifiers: keyboard::Modifiers,
     pub(crate) selection: SelectionState,
     pub(crate) pan: PanState,
+    /// Hover/select point rendering data (for incremental rendering)
+    pub(crate) highlighted_points: Arc<[HighlightPoint]>,
     // Version counters
     pub(crate) markers_version: u64,
     pub(crate) lines_version: u64,
-    pub(crate) src_version: u64, // version of source data last synced
+    pub(crate) highlight_version: u64,
+    pub(crate) data_src_version: u64, // version of source data last synced
+    pub(crate) highlight_src_version: u64,
     // Hover/picking internals
     pub(crate) hover_enabled: bool,
     pub(crate) hover_radius_px: f32,
-    pub(crate) last_hover_cache: Option<HoverHit>,
-    pub(crate) hovered_world: Option<[f64; 2]>,
-    pub(crate) hovered_size_px: f32,
+    pub(crate) last_hover_cache: Option<PointId>,
     pub(crate) hover_version: u64,
+    // Track if we're waiting for a select picking result
+    pub(crate) pending_gpu_pick_seq: Option<u64>,
     pub(crate) pick_seq: u64,
     pub(crate) pick_result_seq: u64,
     pub(crate) crosshairs_enabled: bool,
@@ -70,9 +75,11 @@ pub struct PlotState {
 impl Default for PlotState {
     fn default() -> Self {
         Self {
-            src_version: 0,
+            data_src_version: 0,
+            highlight_src_version: 0,
             points: Arc::new([]),
             point_colors: Arc::new([]),
+            highlighted_points: Arc::new([]),
             series: Arc::new([]),
             vlines: Arc::new([]),
             hlines: Arc::new([]),
@@ -94,12 +101,12 @@ impl Default for PlotState {
             pan: PanState::default(),
             markers_version: 1,
             lines_version: 1,
+            highlight_version: 0,
             hover_enabled: true,
             hover_radius_px: 8.0,
             last_hover_cache: None,
-            hovered_world: None,
-            hovered_size_px: 0.0,
             hover_version: 0,
+            pending_gpu_pick_seq: None,
             pick_seq: 0,
             pick_result_seq: 0,
             crosshairs_enabled: false,
@@ -113,6 +120,28 @@ impl Default for PlotState {
 }
 
 impl PlotState {
+    /// Sync hover/pick highlight overlay points from the widget without rebuilding plot geometry.
+    ///
+    /// Returns true if the overlay data changed.
+    pub(crate) fn sync_highlighted_points_from_widget(&mut self, widget: &PlotWidget) -> bool {
+        let highlighted_points: Vec<_> = widget
+            .picked_points
+            .values()
+            .chain(widget.hovered_points.values())
+            .map(|(highlight_point, _)| highlight_point.clone())
+            .collect();
+
+        let new_highlighted_points: Arc<[HighlightPoint]> = highlighted_points.into();
+
+        if self.highlighted_points != new_highlighted_points {
+            self.highlight_version = self.highlight_version.wrapping_add(1);
+            self.highlighted_points = new_highlighted_points;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Rebuild GPU data from widget configuration.
     pub(crate) fn rebuild_from_widget(&mut self, widget: &PlotWidget) {
         let mut points = Vec::new();
@@ -170,7 +199,7 @@ impl PlotState {
                 .unwrap_or((series.color, u32::MAX));
 
             series_spans.push(SeriesSpan {
-                label: series.label.clone().unwrap_or_default(),
+                id: *id,
                 start,
                 len: points.len() - start,
                 line_style: series.line_style,
@@ -212,11 +241,16 @@ impl PlotState {
         self.data_min = data_min;
         self.data_max = data_max;
 
+        // highlighted_points
+        self.sync_highlighted_points_from_widget(widget);
+        self.highlight_src_version = widget.highlight_version;
+
         // Copy formatters
         self.x_axis_formatter = widget.x_axis_formatter.clone();
         self.y_axis_formatter = widget.y_axis_formatter.clone();
 
-        // Force GPU buffers to rebuild
+        // Force GPU buffers to rebuild only when data actually changes
+        // (not when only hover/pick changes - that's tracked by highlight_version)
         self.markers_version = self.markers_version.wrapping_add(1);
         self.lines_version = self.lines_version.wrapping_add(1);
     }
@@ -258,17 +292,11 @@ impl PlotState {
         self.x_ticks.clear();
         for tick in x_tick_values {
             // Convert world position to screen position
-            let ndc_x = (tick.value - self.camera.position.x) / self.camera.half_extents.x;
-            let screen_x = (ndc_x + 1.0) * 0.5 * self.bounds.width as f64;
-
-            if screen_x < 0.0 || screen_x > self.bounds.width as f64 {
-                continue;
+            if let Some(screen_pos) =
+                world_to_screen_position_x(tick.value, &self.camera, &self.bounds)
+            {
+                self.x_ticks.push(PositionedTick { screen_pos, tick });
             }
-
-            self.x_ticks.push(PositionedTick {
-                screen_pos: screen_x as f32,
-                tick,
-            });
         }
 
         // Calculate y-axis ticks
@@ -283,21 +311,28 @@ impl PlotState {
         self.y_ticks.clear();
         for tick in y_tick_values {
             // Convert world position to screen position
-            let ndc_y = (tick.value - self.camera.position.y) / self.camera.half_extents.y;
-            let screen_y = (1.0 - ndc_y) * 0.5 * self.bounds.height as f64;
-
-            if screen_y < 0.0 || screen_y > self.bounds.height as f64 {
-                continue;
+            if let Some(screen_pos) =
+                world_to_screen_position_y(tick.value, &self.camera, &self.bounds)
+            {
+                self.y_ticks.push(PositionedTick { screen_pos, tick });
             }
-
-            self.y_ticks.push(PositionedTick {
-                screen_pos: screen_y as f32,
-                tick,
-            });
         }
     }
 
-    pub(crate) fn handle_mouse_event(&mut self, event: Event) -> bool {
+    pub(crate) fn point_inside(&self, x: f32, y: f32) -> bool {
+        x >= 0.0 && y >= 0.0 && x <= self.bounds.width && y <= self.bounds.height
+    }
+
+    pub(crate) fn cursor_inside(&self) -> bool {
+        self.point_inside(self.cursor_position.x, self.cursor_position.y)
+    }
+
+    pub(crate) fn handle_mouse_event(
+        &mut self,
+        event: Event,
+        widget: &PlotWidget,
+        publish_hover_pick: &mut Option<HoverPickEvent>,
+    ) -> bool {
         const SELECTION_DELTA_THRESHOLD: f32 = 4.0; // pixels
         const SELECTION_PADDING: f32 = 0.02; // fractional padding in world units relative to selection size
 
@@ -310,10 +345,7 @@ impl PlotState {
         match event {
             Event::CursorMoved { position } => {
                 // Check if the cursor is inside this widget's bounds in window space
-                let inside = position.x >= self.bounds.x
-                    && position.x <= (self.bounds.x + self.bounds.width)
-                    && position.y >= self.bounds.y
-                    && position.y <= (self.bounds.y + self.bounds.height);
+                let inside = self.point_inside(position.x, position.y);
 
                 // Store cursor in local coordinates (relative to bounds)
                 self.cursor_position =
@@ -350,9 +382,8 @@ impl PlotState {
                 if !self.pan.active && !self.selection.active && self.hover_enabled {
                     if !inside {
                         // If cursor leaves this widget, clear hover state for this widget only
-                        if self.last_hover_cache.is_some() || self.hovered_world.is_some() {
+                        if self.last_hover_cache.is_some() {
                             self.last_hover_cache = None;
-                            self.hovered_world = None;
                             self.hover_version = self.hover_version.wrapping_add(1);
                             // Redraw once to clear hover halo overlay
                             needs_redraw = true;
@@ -367,9 +398,8 @@ impl PlotState {
             }
             Event::CursorLeft => {
                 // Clear hover state on leave and request a redraw to clear hover halo
-                if self.last_hover_cache.is_some() || self.hovered_world.is_some() {
+                if self.last_hover_cache.is_some() {
                     self.last_hover_cache = None;
-                    self.hovered_world = None;
                     self.hover_version = self.hover_version.wrapping_add(1);
                     needs_redraw = true;
                 }
@@ -377,10 +407,7 @@ impl PlotState {
             Event::ButtonPressed(mouse::Button::Left) => {
                 // Only start panning if the press started inside our bounds
                 // (Drags will continue even if the cursor leaves later)
-                let inside = self.cursor_position.x >= 0.0
-                    && self.cursor_position.y >= 0.0
-                    && self.cursor_position.x <= self.bounds.width
-                    && self.cursor_position.y <= self.bounds.height;
+                let inside = self.cursor_inside();
                 if !inside {
                     return needs_redraw;
                 }
@@ -395,6 +422,20 @@ impl PlotState {
                     self.autoscale();
                     needs_redraw = true;
                 } else {
+                    if self.hover_enabled && !self.pan.active && !self.selection.active {
+                        // check if the cursor is hovering over a point
+                        let picked =
+                            if let Some(HoverPickEvent::Hover(point_id)) = *publish_hover_pick {
+                                Some(point_id)
+                            } else {
+                                widget.pick_hit(self)
+                            };
+
+                        if let Some(point_id) = picked {
+                            // Upgrade the "hover" to a "pick".
+                            *publish_hover_pick = Some(HoverPickEvent::Pick(point_id));
+                        }
+                    }
                     // Start panning
                     self.pan.active = true;
                     self.pan.start_cursor = self.cursor_position.into();
@@ -408,10 +449,7 @@ impl PlotState {
             }
             Event::ButtonPressed(mouse::Button::Right) => {
                 // Only start selection if inside our bounds
-                let inside = self.cursor_position.x >= 0.0
-                    && self.cursor_position.y >= 0.0
-                    && self.cursor_position.x <= self.bounds.width
-                    && self.cursor_position.y <= self.bounds.height;
+                let inside = self.cursor_inside();
                 if !inside {
                     return needs_redraw;
                 }
@@ -530,9 +568,9 @@ impl PlotState {
         needs_redraw
     }
 
-    pub(crate) fn handle_keyboard_event(&mut self, event: keyboard::Event) -> bool {
+    pub(crate) fn handle_keyboard_event(&mut self, event: &keyboard::Event) -> bool {
         if let keyboard::Event::ModifiersChanged(modifiers) = event {
-            self.modifiers = modifiers;
+            self.modifiers = *modifiers;
         }
         false // No need to redraw
     }
@@ -551,7 +589,7 @@ impl PlotState {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SeriesSpan {
-    pub(crate) label: String,
+    pub(crate) id: ShapeId,
     pub(crate) start: usize,
     pub(crate) len: usize,
     pub(crate) line_style: Option<LineStyle>,
@@ -572,18 +610,4 @@ pub(crate) struct PanState {
     pub(crate) active: bool,
     pub(crate) start_cursor: DVec2,
     pub(crate) start_camera_center: DVec2,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct HoverHit {
-    pub(crate) series_label: String,
-    pub(crate) point_index: usize,
-    pub(crate) _world: DVec2,
-    pub(crate) _size_px: f32,
-}
-
-impl HoverHit {
-    pub(crate) fn key(&self) -> (String, usize) {
-        (self.series_label.clone(), self.point_index)
-    }
 }

@@ -1,8 +1,9 @@
 //! Super simple plot with a few series types.
+use iced_plot::HoverPickEvent;
 use iced_plot::PlotUiMessage;
 use iced_plot::PlotWidget;
 use iced_plot::PlotWidgetBuilder;
-use iced_plot::{Color, LineStyle, MarkerStyle, Series, TooltipContext};
+use iced_plot::{Color, LineStyle, MarkerStyle, Series};
 
 use iced::Element;
 
@@ -14,7 +15,34 @@ fn main() -> iced::Result {
 }
 
 fn update(widget: &mut PlotWidget, message: PlotUiMessage) {
+    let hover_pick_event = message.get_hover_pick_event();
     widget.update(message);
+    // after PlotWidget's update, update the hover and pick points for the other series
+    match hover_pick_event {
+        Some(HoverPickEvent::Hover(point_id)) => {
+            if let Some([x, _]) = widget.point_position(point_id) {
+                for series_id in widget.series_ids() {
+                    if series_id != point_id.series_id
+                        && let Some(p) = widget.nearest_point_horizontal(series_id, x)
+                    {
+                        widget.add_hover_point(p);
+                    }
+                }
+            }
+        }
+        Some(HoverPickEvent::Pick(point_id)) => {
+            if let Some([x, _]) = widget.point_position(point_id) {
+                for series_id in widget.series_ids() {
+                    if series_id != point_id.series_id
+                        && let Some(p) = widget.nearest_point_horizontal(series_id, x)
+                    {
+                        widget.add_pick_point(p);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn view(widget: &PlotWidget) -> Element<'_, PlotUiMessage> {
@@ -61,12 +89,27 @@ fn new() -> PlotWidget {
     .with_color(Color::from_rgb(0.3, 0.9, 0.3));
 
     PlotWidgetBuilder::new()
-        .with_tooltips(true)
-        .with_tooltip_provider(|ctx: &TooltipContext| {
-            format!(
-                "{}\nIndex: {}\nX: {:.2}\nY: {:.2}",
-                ctx.series_label, ctx.point_index, ctx.x, ctx.y
-            )
+        .with_hover_highlight_provider(|context, point| {
+            if point.marker_style.is_none() {
+                point.marker_style = Some(MarkerStyle::circle(6.0));
+            }
+            Some(format!(
+                "Index: {}\nX: {:.2}\nY: {:.2}",
+                context.point_index, point.x, point.y
+            ))
+        })
+        .with_pick_highlight_provider(|ctx, point| {
+            if point.marker_style.is_none() {
+                // set plot 1 to star in pick highlight
+                point.marker_style = Some(MarkerStyle::triangle(6.0));
+            }
+            point.mask_padding = None;
+            point.resize_marker(1.5);
+            point.color = Color::from_rgb(1.0, 0.0, 0.0);
+            Some(format!(
+                "Index: {}\nX: {:.2}\nY: {:.2}\n(Selected)",
+                ctx.point_index, point.x, point.y
+            ))
         })
         .add_series(s1)
         .add_series(s2)

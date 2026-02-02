@@ -1,9 +1,11 @@
-use crate::{series::ShapeId, ticks::PositionedTick};
+use iced::Rectangle;
 
-#[derive(Debug, Clone)]
+use crate::{camera::Camera, series::ShapeId, ticks::PositionedTick};
+
 /// Messages sent by the plot widget to the application.
 ///
 /// These messages are generated in response to user interactions with the plot.
+#[derive(Debug, Clone)]
 pub enum PlotUiMessage {
     /// Toggle the legend visibility.
     ToggleLegend,
@@ -13,25 +15,36 @@ pub enum PlotUiMessage {
     RenderUpdate(PlotRenderUpdate),
 }
 
-/// Context passed to a tooltip formatting callback.
-///
-/// Contains information about the point being hovered over.
-#[derive(Debug, Clone)]
-pub struct TooltipContext {
-    /// Label of the series, if any (empty string means none)
-    pub series_label: String,
-    /// Index within the series [0..len)
-    pub point_index: usize,
-    /// Data-space coordinates
-    pub x: f64,
-    /// Data-space coordinates
-    pub y: f64,
+impl PlotUiMessage {
+    /// Get the hover or pick event from the render update.
+    /// If the plot widget is not in hover or pick mode, this will return None.
+    pub fn get_hover_pick_event(&self) -> Option<HoverPickEvent> {
+        if let PlotUiMessage::RenderUpdate(update) = self {
+            update.hover_pick
+        } else {
+            None
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
+/// Context passed to hover/pick highlight callbacks.
+///
+/// Contains information identifying the point being highlighted.
+#[derive(Debug, Clone, Copy)]
+pub struct TooltipContext<'a> {
+    /// ID of the series
+    pub series_id: ShapeId,
+    /// Label of the series, if any (empty string means none)
+    pub series_label: &'a str,
+    /// Index within the series [0..len)
+    pub point_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TooltipUiPayload {
-    pub x: f32,
-    pub y: f32,
+    /// screen coordinates of the tooltip.
+    /// `screen_xy = None` means the tooltip is outside of the plot widget
+    pub screen_xy: Option<[f32; 2]>,
     pub text: String,
 }
 
@@ -48,10 +61,33 @@ pub struct CursorPositionUiPayload {
 #[derive(Debug, Clone)]
 #[doc(hidden)]
 pub struct PlotRenderUpdate {
-    pub clear_tooltip: bool,
-    pub tooltip_ui: Option<TooltipUiPayload>,
+    pub hover_pick: Option<HoverPickEvent>,
     pub clear_cursor_position: bool,
     pub cursor_position_ui: Option<CursorPositionUiPayload>,
     pub x_ticks: Option<Vec<PositionedTick>>,
     pub y_ticks: Option<Vec<PositionedTick>>,
+    /// Internal: Camera and bounds for coordinate conversion (only used internally, not part of public API)
+    pub(crate) camera_bounds: Option<(Camera, Rectangle)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Identifier for a point in a series.
+pub struct PointId {
+    /// ID of the series
+    pub series_id: ShapeId,
+    /// Index within the series [0..len)
+    pub point_index: usize,
+}
+
+/// The hover or pick event.
+#[derive(Debug, Clone, Copy)]
+pub enum HoverPickEvent {
+    /// Hover a point.
+    Hover(PointId),
+    /// Clear all hovered points.
+    ClearHover,
+    /// Pick a point.
+    Pick(PointId),
+    /// Clear all picked points.
+    ClearPick,
 }

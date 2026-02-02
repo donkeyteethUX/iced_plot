@@ -10,6 +10,7 @@ use glam::{DVec2, Vec2};
 use iced::{
     Color, Element, Length, Rectangle, Theme,
     alignment::{self, Horizontal},
+    keyboard,
     mouse::{self, Interaction},
     padding,
     wgpu::TextureFormat,
@@ -22,20 +23,27 @@ use iced::{
 use indexmap::IndexMap;
 
 use crate::{
-    HLine, PlotUiMessage, Point, Series, TooltipContext, VLine, axes_labels,
+    HLine, HoverPickEvent, MarkerSize, MarkerStyle, PlotUiMessage, Point, PointId, Series,
+    TooltipContext, VLine, axes_labels,
     axis_link::AxisLink,
     camera::Camera,
     legend::{self, LegendEntry},
     message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
     picking,
     plot_renderer::{PlotRenderer, RenderParams},
-    plot_state::{HoverHit, PlotState},
+    plot_state::PlotState,
     series::{SeriesError, ShapeId},
     ticks::{self, PositionedTick, TickFormatter, TickProducer},
 };
 
-pub type TooltipProvider = Arc<dyn Fn(&TooltipContext) -> String + Send + Sync>;
 pub type CursorProvider = Arc<dyn Fn(f64, f64) -> String + Send + Sync>;
+/// Provider for highlighting a point.
+///
+/// Modifies the highlight point in mutable reference.
+///
+/// Returns the tooltip text to display for the point, if any.
+pub type HighlightPointProvider =
+    Arc<dyn Fn(TooltipContext<'_>, &mut HighlightPoint) -> Option<String> + Send + Sync>;
 
 /// A plot widget that renders data series with interactive features.
 pub struct PlotWidget {
@@ -46,6 +54,7 @@ pub struct PlotWidget {
     pub(crate) hlines: IndexMap<ShapeId, HLine>,
     pub(crate) hidden_shapes: HashSet<ShapeId>,
     pub(crate) data_version: u64,
+    pub(crate) highlight_version: u64,
     // Configuration
     pub(crate) autoscale_on_updates: bool,
     pub(crate) legend_collapsed: bool,
@@ -55,9 +64,9 @@ pub struct PlotWidget {
     pub(crate) y_lim: Option<(f64, f64)>,
     pub(crate) x_axis_link: Option<AxisLink>,
     pub(crate) y_axis_link: Option<AxisLink>,
-    pub(crate) tooltips_enabled: bool,
     pub(crate) hover_radius_px: f32,
-    pub(crate) tooltip_provider: Option<TooltipProvider>,
+    pub(crate) pick_highlight_provider: Option<HighlightPointProvider>,
+    pub(crate) hover_highlight_provider: Option<HighlightPointProvider>,
     pub(crate) cursor_overlay: bool,
     pub(crate) cursor_provider: Option<CursorProvider>,
     pub(crate) crosshairs_enabled: bool,
@@ -69,10 +78,15 @@ pub struct PlotWidget {
     pub(crate) axis_label_size: f32,
     pub(crate) data_aspect: Option<f64>,
     // UI state
-    pub(crate) tooltip_ui: Option<TooltipUiPayload>,
+    /// Map of picked point id to highlight point data & tooltip text.
+    pub(crate) picked_points: IndexMap<PointId, (HighlightPoint, Option<TooltipUiPayload>)>,
+    /// Map of hovered point id to highlight point data & tooltip text.
+    pub(crate) hovered_points: IndexMap<PointId, (HighlightPoint, Option<TooltipUiPayload>)>,
     pub(crate) cursor_ui: Option<CursorPositionUiPayload>,
     pub(crate) x_ticks: Vec<PositionedTick>,
     pub(crate) y_ticks: Vec<PositionedTick>,
+    // Camera and bounds for coordinate conversion (updated when ticks are updated)
+    pub(crate) camera_bounds: Option<(Camera, Rectangle)>,
 }
 
 impl Default for PlotWidget {
@@ -91,6 +105,7 @@ impl PlotWidget {
             hlines: IndexMap::new(),
             hidden_shapes: HashSet::new(),
             data_version: 0,
+            highlight_version: 0,
             autoscale_on_updates: false,
             legend_collapsed: false,
             x_axis_label: String::new(),
@@ -99,9 +114,9 @@ impl PlotWidget {
             y_lim: None,
             x_axis_link: None,
             y_axis_link: None,
-            tooltips_enabled: true,
             hover_radius_px: 8.0,
-            tooltip_provider: None,
+            pick_highlight_provider: None,
+            hover_highlight_provider: None,
             cursor_overlay: true,
             cursor_provider: None,
             crosshairs_enabled: false,
@@ -114,8 +129,10 @@ impl PlotWidget {
             data_aspect: None,
             x_ticks: Vec::new(),
             y_ticks: Vec::new(),
-            tooltip_ui: None,
+            picked_points: IndexMap::new(),
+            hovered_points: IndexMap::new(),
             cursor_ui: None,
+            camera_bounds: None,
         }
     }
 
@@ -214,6 +231,213 @@ impl PlotWidget {
         self.y_axis_link = Some(link);
     }
 
+    /// Convert world position to screen position using camera and bounds
+    /// Similar to how PositionedTick calculates screen position
+    fn world_to_screen_position(
+        world: [f64; 2],
+        camera_bounds: &(Camera, Rectangle),
+    ) -> Option<[f32; 2]> {
+        let (camera, bounds) = camera_bounds;
+        if let (Some(screen_x), Some(screen_y)) = (
+            world_to_screen_position_x(world[0], camera, bounds),
+            world_to_screen_position_y(world[1], camera, bounds),
+        ) {
+            Some([screen_x, screen_y])
+        } else {
+            None
+        }
+    }
+
+    /// Compute the world-space anchor point for a tooltip.
+    ///
+    /// For pixel-sized markers (or no markers), this is the point's (x, y).
+    /// For world-sized square markers, the marker is effectively bottom-left anchored,
+    /// so we anchor the tooltip at the marker's center (x + size/2, y + size/2).
+    fn tooltip_anchor_world(point: &HighlightPoint) -> [f64; 2] {
+        if let Some(marker_style) = point.marker_style
+            && let MarkerSize::World(size) = marker_style.size
+        {
+            let half = size * 0.5;
+            [point.x + half, point.y + half]
+        } else {
+            [point.x, point.y]
+        }
+    }
+
+    /// Update tooltip positions for all hovered and picked points
+    /// This should be called when the plot canvas position changes
+    fn update_tooltip_positions(&mut self) {
+        if let Some(camera_bounds) = &self.camera_bounds {
+            for (highlight_point, tooltip) in self
+                .hovered_points
+                .values_mut()
+                .chain(self.picked_points.values_mut())
+            {
+                if let Some(tooltip) = tooltip {
+                    tooltip.screen_xy = Self::world_to_screen_position(
+                        Self::tooltip_anchor_world(highlight_point),
+                        camera_bounds,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Get an iterator over the series ids in the plot.
+    pub fn series_ids(&self) -> Vec<ShapeId> {
+        self.series.keys().copied().collect()
+    }
+    /// Get the position of a point in the plot.
+    pub fn point_position(&self, point_id: PointId) -> Option<[f64; 2]> {
+        self.series
+            .get(&point_id.series_id)?
+            .positions
+            .get(point_id.point_index)
+            .copied()
+    }
+
+    /// Find the nearest point to a given position in the plot.
+    pub fn nearest_point(&self, series_id: ShapeId, x: f64, y: f64) -> Option<PointId> {
+        let series = self.series.get(&series_id)?;
+        let mut min_distance = f64::INFINITY;
+        let mut nearest_point = None;
+        for (i, position) in series.positions.iter().enumerate() {
+            let distance = (position[0] - x).powi(2) + (position[1] - y).powi(2);
+            if distance < min_distance {
+                min_distance = distance;
+                nearest_point = Some(PointId {
+                    series_id,
+                    point_index: i,
+                });
+            }
+        }
+        nearest_point
+    }
+
+    /// Find the nearest point to a given x-coordinate in the plot.
+    pub fn nearest_point_horizontal(&self, series_id: ShapeId, x: f64) -> Option<PointId> {
+        let series = self.series.get(&series_id)?;
+        let mut min_distance = f64::INFINITY;
+        let mut nearest_point = None;
+        for (i, position) in series.positions.iter().enumerate() {
+            let distance = (position[0] - x).abs();
+            if distance < min_distance {
+                min_distance = distance;
+                nearest_point = Some(PointId {
+                    series_id,
+                    point_index: i,
+                });
+            }
+        }
+        nearest_point
+    }
+
+    /// Find the nearest point to a given y-coordinate in the plot.
+    pub fn nearest_point_vertical(&self, series_id: ShapeId, y: f64) -> Option<PointId> {
+        let series = self.series.get(&series_id)?;
+        let mut min_distance = f64::INFINITY;
+        let mut nearest_point = None;
+        for (i, position) in series.positions.iter().enumerate() {
+            let distance = (position[1] - y).abs();
+            if distance < min_distance {
+                min_distance = distance;
+                nearest_point = Some(PointId {
+                    series_id,
+                    point_index: i,
+                });
+            }
+        }
+        nearest_point
+    }
+
+    /// Add a hover point to the plot.
+    pub fn add_hover_point(&mut self, point_id: PointId) {
+        if self.handle_hover_pick::<false>(point_id) {
+            self.highlight_version = self.highlight_version.wrapping_add(1);
+        }
+    }
+    /// Add a pick point to the plot.
+    pub fn add_pick_point(&mut self, point_id: PointId) {
+        if self.handle_hover_pick::<true>(point_id) {
+            self.highlight_version = self.highlight_version.wrapping_add(1);
+        }
+    }
+    /// Clear all hover points from the plot.
+    pub fn clear_hover(&mut self) {
+        if !self.hovered_points.is_empty() {
+            self.hovered_points.clear();
+            self.highlight_version = self.highlight_version.wrapping_add(1);
+        }
+    }
+    /// Clear all pick points from the plot.
+    pub fn clear_pick(&mut self) {
+        if !self.picked_points.is_empty() {
+            self.picked_points.clear();
+            self.highlight_version = self.highlight_version.wrapping_add(1);
+        }
+    }
+    fn handle_hover_pick<const PICK: bool>(&mut self, point_id: PointId) -> bool {
+        let mut changed = false;
+        let (highlight_provider, points) = if PICK {
+            // Clicking an already-picked point deselects it.
+            if self.picked_points.shift_remove(&point_id).is_some() {
+                return true;
+            }
+            changed |= self.hovered_points.shift_remove(&point_id).is_some();
+            (&self.pick_highlight_provider, &mut self.picked_points)
+        } else {
+            if self.picked_points.contains_key(&point_id) {
+                return false;
+            }
+            (&self.hover_highlight_provider, &mut self.hovered_points)
+        };
+        if let Some(highlight_provider) = highlight_provider
+            && let Some(series) = self.series.get(&point_id.series_id)
+            && let Some(position) = series.positions.get(point_id.point_index)
+            && let Some(camera_bounds) = &self.camera_bounds
+        {
+            let mut highlight_point = HighlightPoint {
+                x: position[0],
+                y: position[1],
+                color: series
+                    .point_colors
+                    .as_ref()
+                    .map(|colors| colors[point_id.point_index])
+                    .unwrap_or(series.color),
+                marker_style: series.marker_style,
+                mask_padding: Some(3.0),
+            };
+            let tooltip_text = highlight_provider(
+                TooltipContext {
+                    series_id: series.id,
+                    series_label: series.label.as_deref().unwrap_or(""),
+                    point_index: point_id.point_index,
+                },
+                &mut highlight_point,
+            );
+            let tooltip = tooltip_text.map(|text| TooltipUiPayload {
+                screen_xy: Self::world_to_screen_position(
+                    Self::tooltip_anchor_world(&highlight_point),
+                    camera_bounds,
+                ),
+                text,
+            });
+            let new_payload = (highlight_point, tooltip);
+            match points.entry(point_id) {
+                indexmap::map::Entry::Occupied(mut occupied) => {
+                    if PartialEq::ne(occupied.get(), &new_payload) {
+                        occupied.insert(new_payload);
+                        changed = true;
+                    }
+                }
+                indexmap::map::Entry::Vacant(vacant) => {
+                    vacant.insert(new_payload);
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
     /// Handle a message sent to the plot widget.
     pub fn update(&mut self, msg: PlotUiMessage) {
         match msg {
@@ -224,14 +448,42 @@ impl PlotWidget {
                 self.toggle_visibility(&id);
             }
             PlotUiMessage::RenderUpdate(payload) => {
-                if payload.clear_tooltip {
-                    self.tooltip_ui = None;
+                // Update camera and bounds when ticks are updated (camera changed)
+                if let Some(camera_bounds) = payload.camera_bounds
+                    && self.camera_bounds != Some(camera_bounds)
+                {
+                    self.camera_bounds = Some(camera_bounds);
+                    // Update tooltip positions when camera/bounds change
+                    self.update_tooltip_positions();
+                }
+
+                let highlight_changed = match payload.hover_pick {
+                    Some(HoverPickEvent::Hover(point_id)) => {
+                        self.hovered_points.clear();
+                        self.handle_hover_pick::<false>(point_id)
+                    }
+                    Some(HoverPickEvent::Pick(point_id)) => {
+                        self.handle_hover_pick::<true>(point_id)
+                    }
+                    Some(HoverPickEvent::ClearHover) => {
+                        let highlight_changed = !self.hovered_points.is_empty();
+                        self.hovered_points.clear();
+                        highlight_changed
+                    }
+                    Some(HoverPickEvent::ClearPick) => {
+                        let highlight_changed = !self.picked_points.is_empty();
+                        self.picked_points.clear();
+                        highlight_changed
+                    }
+                    _ => false,
+                };
+
+                // Trigger data version update to rebuild highlighted_points in PlotState
+                if highlight_changed {
+                    self.highlight_version = self.highlight_version.wrapping_add(1);
                 }
                 if payload.clear_cursor_position {
                     self.cursor_ui = None;
-                }
-                if let Some(t) = payload.tooltip_ui {
-                    self.tooltip_ui = Some(t);
                 }
                 if let Some(c) = payload.cursor_position_ui {
                     self.cursor_ui = Some(c);
@@ -258,7 +510,14 @@ impl PlotWidget {
 
         let elements = stack![
             inner_container,
-            self.view_tooltip_overlay(),
+            stack(
+                self.hovered_points
+                    .values()
+                    .chain(self.picked_points.values())
+                    .filter_map(|(_, tooltip)| tooltip.as_ref().and_then(|tooltip| {
+                        Self::view_tooltip_overlay(tooltip, &self.camera_bounds)
+                    }))
+            ),
             self.view_cursor_overlay(),
             self.view_tick_labels(),
             legend::legend(self, self.legend_collapsed),
@@ -275,11 +534,6 @@ impl PlotWidget {
         .into()
     }
 
-    /// Enable or disable hover tooltips (default: enabled)
-    pub fn tooltips(&mut self, enabled: bool) {
-        self.tooltips_enabled = enabled;
-    }
-
     /// Enable or disable autoscaling on updates (default: enabled)
     pub fn autoscale_on_updates(&mut self, enabled: bool) {
         self.autoscale_on_updates = enabled;
@@ -290,10 +544,14 @@ impl PlotWidget {
         self.hover_radius_px = radius.max(0.0);
     }
 
-    /// Set a custom tooltip text formatter.
-    /// The formatter receives series label, point index, and data coordinates.
-    pub fn set_tooltip_provider(&mut self, provider: TooltipProvider) {
-        self.tooltip_provider = Some(provider);
+    /// Set a custom highlighter for picked point.
+    pub fn set_pick_highlight_provider(&mut self, provider: HighlightPointProvider) {
+        self.pick_highlight_provider = Some(provider);
+    }
+
+    /// Set a custom highlighter for hovered point.
+    pub fn set_hover_highlight_provider(&mut self, provider: HighlightPointProvider) {
+        self.hover_highlight_provider = Some(provider);
     }
 
     /// Enable or disable the small cursor-position overlay shown in the
@@ -422,47 +680,83 @@ impl PlotWidget {
         out
     }
 
-    fn view_tooltip_overlay(&self) -> Option<Element<'_, PlotUiMessage>> {
-        let Some(payload) = &self.tooltip_ui else {
-            return None;
-        };
+    fn view_tooltip_overlay<'a>(
+        payload: &'a TooltipUiPayload,
+        camera_bounds: &Option<(Camera, Rectangle)>,
+    ) -> Option<Element<'a, PlotUiMessage>> {
+        use container::Style;
+        const TOOLTIP_ALPHA: f32 = 0.7;
+        fn tooltip_style(theme: &Theme) -> container::Style {
+            let palette = theme.extended_palette();
 
-        // Offset a bit from cursor
-        let offset_x = payload.x + 8.0;
-        let offset_y = payload.y + 8.0;
+            Style {
+                background: Some(
+                    palette
+                        .background
+                        .weak
+                        .color
+                        .scale_alpha(TOOLTIP_ALPHA)
+                        .into(),
+                ),
+                text_color: Some(palette.background.weak.text.scale_alpha(TOOLTIP_ALPHA)),
+                border: iced::border::rounded(2),
+                ..Style::default()
+            }
+        }
 
-        let overlay = widget::responsive(move |size| {
-            let tooltip_bubble = container(widget::text(payload.text.clone()).size(14.0))
-                .padding(6.0)
-                .style(container::rounded_box);
+        // Offset a bit from point position
+        const OFFSET: f32 = 8.0;
+        let [screen_x, screen_y] = payload.screen_xy?;
 
-            let hotspot = widget::space()
-                .width(Length::Fixed(1.0))
-                .height(Length::Fixed(1.0));
+        // default: top-left aligned
+        let mut top = screen_y + OFFSET;
+        let mut right = 0.0;
+        let mut bottom = 0.0;
+        let mut left = screen_x + OFFSET;
+        let mut align_x = alignment::Horizontal::Left;
+        let mut align_y = alignment::Vertical::Top;
 
-            let max_left = (size.width - 1.0).max(0.0);
-            let max_top = (size.height - 1.0).max(0.0);
+        // flip the tooltip if the point is outside this percentage of the bounds
+        const FLIP_PCT: f32 = 0.8;
+        if let Some((_, bounds)) = &camera_bounds {
+            if screen_y > bounds.height * FLIP_PCT {
+                // flip the tooltip to the bottom aligned
+                top = 0.0;
+                bottom = bounds.height - screen_y + OFFSET;
+                align_y = alignment::Vertical::Bottom;
+            }
+            if screen_x > bounds.width * FLIP_PCT {
+                // flip the tooltip to the right aligned
+                left = 0.0;
+                right = bounds.width - screen_x + OFFSET;
+                align_x = alignment::Horizontal::Right;
+            }
+        }
 
-            let positioned_hotspot = container(hotspot)
+        let tooltip_bubble = container(
+            widget::text(&payload.text)
+                .size(14.0)
+                .wrapping(widget::text::Wrapping::None),
+        )
+        .padding(6.0)
+        .style(tooltip_style);
+
+        // Position tooltip at fixed location relative to point, not following cursor
+        Some(
+            container(tooltip_bubble)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .padding(padding::left(offset_x.min(max_left)))
-                .padding(padding::top(offset_y.min(max_top)))
-                .align_x(Horizontal::Left)
-                .align_y(alignment::Vertical::Top);
-
-            widget::tooltip(
-                positioned_hotspot,
-                tooltip_bubble,
-                widget::tooltip::Position::FollowCursor,
-            )
-            .gap(8.0)
-            .snap_within_viewport(true)
-            .into()
-        })
-        .into();
-
-        Some(overlay)
+                .padding(padding::Padding {
+                    top,
+                    right,
+                    bottom,
+                    left,
+                })
+                .align_x(align_x)
+                .align_y(align_y)
+                .style(container::transparent)
+                .into(),
+        )
     }
 
     fn view_cursor_overlay(&self) -> Option<Element<'_, PlotUiMessage>> {
@@ -581,7 +875,6 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             plot_widget: state.clone(),
         }
     }
-
     fn update(
         &self,
         state: &mut Self::State,
@@ -590,44 +883,39 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         _cursor: mouse::Cursor,
     ) -> Option<shader::Action<PlotUiMessage>> {
         let mut needs_redraw = false;
-        let mut clear_tooltip = false;
-        let mut publish_tooltip: Option<TooltipUiPayload> = None;
+        let mut publish_hover_pick: Option<HoverPickEvent> = None;
         let mut publish_cursor: Option<CursorPositionUiPayload> = None;
         let mut clear_cursor_position = false;
 
-        if self.data_version != state.src_version {
+        // Sync highlight overlay data without rebuilding plot geometry.
+        if self.highlight_version != state.highlight_src_version {
+            let changed = state.sync_highlighted_points_from_widget(self);
+            state.highlight_src_version = self.highlight_version;
+            needs_redraw |= changed;
+        }
+
+        if self.data_version != state.data_src_version {
             // Rebuild derived state from widget data
             state.rebuild_from_widget(self);
 
-            // Invalidate hover cache when data changes so tooltips update
+            // Invalidate hover cache when data changes so hover/pick can be recomputed
             state.last_hover_cache = None;
-            state.hovered_world = None;
             state.hover_version = state.hover_version.wrapping_add(1);
-            clear_tooltip = true;
 
             // Submit a picking request if we have a cursor position and hover is enabled
             if state.hover_enabled && !state.pan.active && !state.selection.active {
-                let inside = state.cursor_position.x >= 0.0
-                    && state.cursor_position.y >= 0.0
-                    && state.cursor_position.x <= state.bounds.width
-                    && state.cursor_position.y <= state.bounds.height;
+                let inside = state.cursor_inside();
                 if inside {
-                    state.pick_seq = state.pick_seq.wrapping_add(1);
                     if state.points.len() < CPU_PICK_THRESHOLD {
-                        let hit = cpu_pick_hit(state);
-                        let (tooltip, cleared, _redraw) = apply_pick_result(
-                            state,
-                            self.tooltip_provider.as_ref(),
-                            state.pick_seq,
-                            hit,
-                        );
-                        if tooltip.is_some() {
-                            publish_tooltip = tooltip;
-                        }
-                        if cleared {
-                            clear_tooltip = true;
+                        if let Some(point) = cpu_pick_hit(state)
+                            && self.valid_point_id(&point)
+                        {
+                            publish_hover_pick = Some(HoverPickEvent::Hover(point));
+                        } else if !self.hovered_points.is_empty() {
+                            publish_hover_pick = Some(HoverPickEvent::ClearHover);
                         }
                     } else {
+                        state.pick_seq = state.pick_seq.wrapping_add(1);
                         picking::submit_request(
                             self.instance_id,
                             crate::picking::PickRequest {
@@ -642,11 +930,11 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             }
 
             // Autoscale on first update or always if autoscale_on_updates is enabled.
-            if state.src_version == 0 || self.autoscale_on_updates {
+            if state.data_src_version == 0 || self.autoscale_on_updates {
                 state.autoscale();
             }
 
-            state.src_version = self.data_version;
+            state.data_src_version = self.data_version;
             state.legend_collapsed = self.legend_collapsed;
             state.x_lim = self.x_lim;
             state.y_lim = self.y_lim;
@@ -678,7 +966,8 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         }
 
         state.bounds = bounds;
-        state.hover_enabled = self.tooltips_enabled;
+        state.hover_enabled =
+            self.hover_highlight_provider.is_some() || self.pick_highlight_provider.is_some();
         state.hover_radius_px = self.hover_radius_px;
         state.crosshairs_enabled = self.crosshairs_enabled;
 
@@ -687,8 +976,9 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
 
         match event {
             iced::Event::Mouse(mouse_event) => {
-                let before = state.last_hover_cache.clone().map(|h| h.key());
-                needs_redraw |= state.handle_mouse_event(*mouse_event);
+                needs_redraw |=
+                    state.handle_mouse_event(*mouse_event, self, &mut publish_hover_pick);
+
                 // If cursor moved and hover enabled, submit a GPU pick request
                 if let iced::mouse::Event::CursorMoved { .. } = mouse_event
                     && state.hover_enabled
@@ -696,28 +986,16 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                     && !state.selection.active
                 {
                     // Only submit pick request if cursor is within widget bounds
-                    let inside = state.cursor_position.x >= 0.0
-                        && state.cursor_position.y >= 0.0
-                        && state.cursor_position.x <= state.bounds.width
-                        && state.cursor_position.y <= state.bounds.height;
+                    let inside = state.cursor_inside();
                     if inside {
-                        state.pick_seq = state.pick_seq.wrapping_add(1);
                         if state.points.len() < CPU_PICK_THRESHOLD {
-                            let hit = cpu_pick_hit(state);
-                            let (tooltip, cleared, redraw) = apply_pick_result(
-                                state,
-                                self.tooltip_provider.as_ref(),
-                                state.pick_seq,
-                                hit,
-                            );
-                            if tooltip.is_some() {
-                                publish_tooltip = tooltip;
-                            }
-                            if cleared {
-                                clear_tooltip = true;
-                            }
-                            if redraw {
-                                needs_redraw = true;
+                            if let Some(point) = cpu_pick_hit(state)
+                                && self.valid_point_id(&point)
+                            {
+                                publish_hover_pick = Some(HoverPickEvent::Hover(point));
+                            } else if !self.hovered_points.is_empty() {
+                                // Moved but not over any point - clear hover
+                                publish_hover_pick = Some(HoverPickEvent::ClearHover);
                             }
                         } else {
                             picking::submit_request(
@@ -729,7 +1007,13 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                                     seq: state.pick_seq,
                                 },
                             );
+
+                            // Increment pick sequence number to track the outstanding request.
+                            state.pick_seq = state.pick_seq.wrapping_add(1);
                         }
+                    } else if !self.hovered_points.is_empty() {
+                        // Cursor left bounds - clear hover
+                        publish_hover_pick = Some(HoverPickEvent::ClearHover);
                     }
                     // Publish cursor overlay updates when enabled
                     if self.cursor_overlay {
@@ -757,14 +1041,24 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                         }
                     }
                 }
-                // If hover was cleared due to cursor leave or disabled bounds, clear tooltip immediately
-                if before.is_some() && state.last_hover_cache.is_none() {
-                    clear_tooltip = true;
+
+                // Handle cursor leave
+                if let iced::mouse::Event::CursorLeft = mouse_event
+                    && !self.hovered_points.is_empty()
+                {
+                    publish_hover_pick = Some(HoverPickEvent::ClearHover);
                 }
             }
             // CursorLeft is handled inside the Mouse(...) branch above via state.handle_mouse_event
             iced::Event::Keyboard(keyboard_event) => {
-                needs_redraw |= state.handle_keyboard_event(keyboard_event.clone());
+                if let keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                } = keyboard_event
+                {
+                    publish_hover_pick = Some(HoverPickEvent::ClearPick);
+                }
+                needs_redraw |= state.handle_keyboard_event(keyboard_event);
             }
             _ => {}
         }
@@ -779,23 +1073,46 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         if state.hover_enabled && state.points.len() >= CPU_PICK_THRESHOLD {
             // Try to consume a GPU pick result for this instance
             if let Some(res) = picking::take_result(self.instance_id) {
-                let (tooltip, cleared, redraw) =
-                    apply_pick_result(state, self.tooltip_provider.as_ref(), res.seq, res.hit);
-                if tooltip.is_some() {
-                    publish_tooltip = tooltip;
-                }
-                if cleared {
-                    clear_tooltip = true;
-                }
-                if redraw {
-                    needs_redraw = true;
+                // Only process if this result is newer than the last processed one
+                if res.seq > state.pick_result_seq {
+                    // Only process GPU pick results if we haven't already set publish_hover_pick (e.g., from ESC key)
+                    if publish_hover_pick.is_none() {
+                        // Check if this is a select request
+                        if state.pending_gpu_pick_seq == Some(res.seq) {
+                            state.pending_gpu_pick_seq = None;
+                            // Process as select
+                            if let Some(point) = res.hit
+                                && self.valid_point_id(&point)
+                            {
+                                publish_hover_pick = Some(HoverPickEvent::Pick(point));
+                            }
+                        } else {
+                            // Process as hover
+                            if let Some(point) = res.hit
+                                && self.valid_point_id(&point)
+                            {
+                                // Update hover cache
+                                state.last_hover_cache = Some(point);
+                                publish_hover_pick = Some(HoverPickEvent::Hover(point));
+                            } else {
+                                // Moved but not over any point - clear hover
+                                if state.last_hover_cache.is_some()
+                                    || !self.hovered_points.is_empty()
+                                {
+                                    state.last_hover_cache = None;
+                                    publish_hover_pick = Some(HoverPickEvent::ClearHover);
+                                }
+                            }
+                        }
+                    }
+                    // Always update pick_result_seq to mark this result as processed, even if we skipped processing
+                    state.pick_result_seq = res.seq;
                 }
             }
         }
 
-        if state.hover_enabled && state.pick_seq > state.pick_result_seq {
-            needs_redraw = true;
-        }
+        // If we have an outstanding GPU pick request, keep drawing until the result arrives.
+        needs_redraw |= state.pick_seq > state.pick_result_seq;
 
         let mut publish_x_ticks = None;
         let mut publish_y_ticks = None;
@@ -807,22 +1124,31 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             publish_y_ticks = Some(state.y_ticks.clone());
         }
 
-        let needs_publish = publish_tooltip.is_some()
+        let needs_publish = publish_hover_pick.is_some()
             || publish_cursor.is_some()
             || publish_x_ticks.is_some()
             || publish_y_ticks.is_some()
-            || clear_tooltip
             || clear_cursor_position;
 
         if needs_publish {
+            // Include camera and bounds info when we have a hover/pick event or when ticks are updated
+            let camera_bounds = if publish_hover_pick.is_some()
+                || publish_x_ticks.is_some()
+                || publish_y_ticks.is_some()
+            {
+                Some((state.camera, state.bounds))
+            } else {
+                None
+            };
+
             return Some(shader::Action::publish(PlotUiMessage::RenderUpdate(
                 PlotRenderUpdate {
-                    clear_tooltip,
+                    hover_pick: publish_hover_pick,
                     clear_cursor_position,
-                    tooltip_ui: publish_tooltip,
                     cursor_position_ui: publish_cursor,
                     x_ticks: publish_x_ticks,
                     y_ticks: publish_y_ticks,
+                    camera_bounds,
                 },
             )));
         }
@@ -896,7 +1222,7 @@ impl shader::Primitive for Primitive {
 /// Threshold for number of points above which GPU picking is used instead of CPU picking.
 const CPU_PICK_THRESHOLD: usize = 5000;
 
-fn cpu_pick_hit(state: &PlotState) -> Option<picking::Hit> {
+fn cpu_pick_hit(state: &PlotState) -> Option<PointId> {
     if state.points.is_empty() || state.series.is_empty() {
         return None;
     }
@@ -928,7 +1254,8 @@ fn cpu_pick_hit(state: &PlotState) -> Option<picking::Hit> {
         let dx = screen_x - cursor_x;
         let dy = screen_y - cursor_y;
         let d2 = dx * dx + dy * dy;
-        let marker_px = marker_size_px(pt.size, pt.size_mode, &state.camera, &state.bounds) as f64;
+        let marker_px =
+            MarkerSize::marker_size_px(pt.size, pt.size_mode, &state.camera, &state.bounds) as f64;
         let radius = state.hover_radius_px as f64 + marker_px * 0.5;
         if d2 <= radius * radius {
             if let Some((_, best_d2)) = best {
@@ -950,93 +1277,20 @@ fn cpu_pick_hit(state: &PlotState) -> Option<picking::Hit> {
     }
     let span = state.series.get(span_idx)?;
     let local_idx = best_idx - span_start;
-    let pt = &state.points[best_idx];
-    Some(picking::Hit {
-        series_label: span.label.clone(),
+    Some(PointId {
+        series_id: span.id,
         point_index: local_idx,
-        world: [pt.position[0], pt.position[1]],
-        size: pt.size,
-        size_mode: pt.size_mode,
     })
 }
 
-fn apply_pick_result(
-    state: &mut PlotState,
-    tooltip_provider: Option<&TooltipProvider>,
-    seq: u64,
-    hit: Option<picking::Hit>,
-) -> (Option<TooltipUiPayload>, bool, bool) {
-    match hit {
-        Some(hit) => {
-            let size_px = marker_size_px(hit.size, hit.size_mode, &state.camera, &state.bounds);
-            let world_v = DVec2::new(hit.world[0], hit.world[1]);
-            let hover_world = if hit.size_mode == crate::point::MARKER_SIZE_WORLD {
-                let half = hit.size as f64 * 0.5;
-                [hit.world[0] + half, hit.world[1] + half]
-            } else {
-                hit.world
-            };
-            state.hovered_world = Some(hover_world);
-            state.hovered_size_px = size_px;
-            let ctx = TooltipContext {
-                series_label: hit.series_label.clone(),
-                point_index: hit.point_index,
-                x: hit.world[0],
-                y: hit.world[1],
-            };
-            let text = if let Some(p) = tooltip_provider {
-                (p)(&ctx)
-            } else {
-                format!("{:.4}, {:.4}", ctx.x, ctx.y)
-            };
-            let hover_hit = HoverHit {
-                series_label: hit.series_label,
-                point_index: hit.point_index,
-                _world: world_v,
-                _size_px: size_px,
-            };
-            state.last_hover_cache = Some(hover_hit);
-            state.hover_version = state.hover_version.wrapping_add(1);
-            state.pick_result_seq = seq;
-            (
-                Some(TooltipUiPayload {
-                    x: state.cursor_position.x,
-                    y: state.cursor_position.y,
-                    text,
-                }),
-                false,
-                true,
-            )
-        }
-        None => {
-            let mut cleared = false;
-            let mut redraw = false;
-            if state.last_hover_cache.is_some() {
-                state.hovered_world = None;
-                state.last_hover_cache = None;
-                state.hover_version = state.hover_version.wrapping_add(1);
-                cleared = true;
-                redraw = true;
-            }
-            state.pick_result_seq = seq;
-            (None, cleared, redraw)
-        }
+impl PlotWidget {
+    /// Check if the point index is valid for the series
+    fn valid_point_id(&self, point_id: &PointId) -> bool {
+        self.series
+            .get(&point_id.series_id)
+            .map(|series| point_id.point_index < series.positions.len())
+            .unwrap_or(false)
     }
-}
-
-fn marker_size_px(size: f32, size_mode: u32, camera: &Camera, bounds: &Rectangle) -> f32 {
-    if size_mode != crate::point::MARKER_SIZE_WORLD {
-        return size;
-    }
-    let width = bounds.width.max(1.0) as f64;
-    let height = bounds.height.max(1.0) as f64;
-    let world_per_px_x = (2.0 * camera.half_extents.x) / width;
-    let world_per_px_y = (2.0 * camera.half_extents.y) / height;
-    let world_per_px_x = world_per_px_x.max(1e-12);
-    let world_per_px_y = world_per_px_y.max(1e-12);
-    let px_x = size as f64 / world_per_px_x;
-    let px_y = size as f64 / world_per_px_y;
-    px_x.max(px_y) as f32
 }
 
 fn marker_center_world(pt: &Point) -> DVec2 {
@@ -1060,6 +1314,37 @@ fn apply_data_aspect(camera: &mut Camera, bounds: &Rectangle, aspect: f64) -> bo
     false
 }
 
+impl PlotWidget {
+    pub(crate) fn pick_hit(&self, state: &mut PlotState) -> Option<PointId> {
+        if let Some(point) = state.last_hover_cache
+            && self.valid_point_id(&point)
+        {
+            return Some(point);
+        }
+        if state.points.len() < CPU_PICK_THRESHOLD {
+            if let Some(point) = cpu_pick_hit(state)
+                && self.valid_point_id(&point)
+            {
+                return Some(point);
+            }
+        } else {
+            state.pick_seq = state.pick_seq.wrapping_add(1);
+            let seq = state.pick_seq;
+            state.pending_gpu_pick_seq = Some(seq);
+            picking::submit_request(
+                self.instance_id,
+                crate::picking::PickRequest {
+                    cursor_x: state.cursor_position.x,
+                    cursor_y: state.cursor_position.y,
+                    radius_px: state.hover_radius_px,
+                    seq,
+                },
+            );
+        }
+        None
+    }
+}
+
 impl Pipeline for PlotRendererState {
     fn new(
         _device: &iced::wgpu::Device,
@@ -1078,3 +1363,73 @@ impl Pipeline for PlotRendererState {
 
 // Global unique ID generator for widget instances
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// The highlight context for a point. You can modify
+///
+/// + `x` and `y` to change the position of the highlight point (not recommended);
+/// + `color` to change the color of the highlight point;
+/// + `marker_style` to change the marker style of the highlight point;
+/// + `mask_padding` to change the mask padding of the highlight point;
+///
+///  to change the highlight point.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HighlightPoint {
+    /// Data-space coordinates
+    pub x: f64,
+    /// Data-space coordinates
+    pub y: f64,
+    pub color: Color,
+    /// Optional marker style for the series. If None, no markers are drawn.
+    pub marker_style: Option<MarkerStyle>,
+    /// Mask padding in pixels. If None, no mask is drawn.
+    pub mask_padding: Option<f32>,
+}
+
+impl HighlightPoint {
+    /// Resize the marker of the highlight point.
+    /// For both pixel-based and world-based markers, the size will be multiplied by the factor.
+    pub fn resize_marker(&mut self, factor: f64) {
+        if let Some(marker_style) = &mut self.marker_style {
+            match &mut marker_style.size {
+                MarkerSize::Pixels(size) => {
+                    *size *= factor as f32;
+                }
+                MarkerSize::World(size) => {
+                    *size *= factor;
+                }
+            }
+        }
+    }
+}
+
+/// Convert world position to screen position
+pub(crate) fn world_to_screen_position_x(
+    x: f64,
+    camera: &Camera,
+    bounds: &Rectangle,
+) -> Option<f32> {
+    let ndc_x = (x - camera.position.x) / camera.half_extents.x;
+    let screen_x = (ndc_x as f32 + 1.0) * 0.5 * bounds.width;
+
+    if screen_x < 0.0 || screen_x > bounds.width {
+        None
+    } else {
+        Some(screen_x)
+    }
+}
+
+/// Convert world position to screen position
+pub(crate) fn world_to_screen_position_y(
+    y: f64,
+    camera: &Camera,
+    bounds: &Rectangle,
+) -> Option<f32> {
+    let ndc_y = (y - camera.position.y) / camera.half_extents.y;
+    let screen_y = (1.0 - ndc_y as f32) * 0.5 * bounds.height;
+
+    if screen_y < 0.0 || screen_y > bounds.height {
+        None
+    } else {
+        Some(screen_y)
+    }
+}

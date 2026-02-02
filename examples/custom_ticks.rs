@@ -118,6 +118,27 @@ fn new() -> PlotWidget {
             let minutes = (x as i64 % 3600) / 60;
             format!("Time: {:02}:{:02}\nTemp: {:.1}°C", hours, minutes, y)
         })
+        .with_hover_highlight_provider(|context, point| {
+            point.color = Color::from_rgb(1.0, 0.5, 0.2);
+            point.resize_marker(1.5);
+            let hours = (point.x as i64 / 3600) % 24;
+            let minutes = (point.x as i64 % 3600) / 60;
+            Some(format!(
+                "{}\nTime: {:02}:{:02}\nTemp: {:.1}°C",
+                context.series_label, hours, minutes, point.y
+            ))
+        })
+        .with_pick_highlight_provider(|context, point| {
+            point.color = Color::from_rgb(1.0, 0.0, 0.0);
+            point.resize_marker(3.0);
+            point.mask_padding = None;
+            let hours = (point.x as i64 / 3600) % 24;
+            let minutes = (point.x as i64 % 3600) / 60;
+            Some(format!(
+                "{}\nTime: {:02}:{:02}\nTemp: {:.1}°C",
+                context.series_label, hours, minutes, point.y
+            ))
+        })
         .build()
         .unwrap()
 }

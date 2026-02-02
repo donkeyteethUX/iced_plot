@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::axis_link::AxisLink;
 use crate::message::TooltipContext;
-use crate::plot_widget::{CursorProvider, PlotWidget, TooltipProvider};
+use crate::plot_widget::{CursorProvider, HighlightPoint, HighlightPointProvider, PlotWidget};
 use crate::reference_lines::{HLine, VLine};
 use crate::series::{Series, SeriesError};
 use crate::ticks::{Tick, TickFormatter, TickProducer};
@@ -15,7 +15,6 @@ use crate::ticks::{Tick, TickFormatter, TickProducer};
 /// let plot = PlotWidgetBuilder::new()
 ///     .with_x_label("Time (s)")
 ///     .with_y_label("Value (V)")
-///     .with_tooltips(true)
 ///     .with_autoscale_on_updates(false)
 ///     .with_x_lim(0.0, 10.0)
 ///     .with_y_lim(-1.0, 1.0)
@@ -26,10 +25,10 @@ use crate::ticks::{Tick, TickFormatter, TickProducer};
 pub struct PlotWidgetBuilder {
     x_label: Option<String>,
     y_label: Option<String>,
-    tooltips: Option<bool>,
     autoscale_on_updates: Option<bool>,
     hover_radius_px: Option<f32>,
-    tooltip_provider: Option<TooltipProvider>,
+    pick_highlight_provider: Option<HighlightPointProvider>,
+    hover_highlight_provider: Option<HighlightPointProvider>,
     cursor_overlay: Option<bool>,
     cursor_provider: Option<CursorProvider>,
     crosshairs: Option<bool>,
@@ -75,30 +74,36 @@ impl PlotWidgetBuilder {
         self
     }
 
-    /// Enable or disable tooltips for the plot. Tooltips are enabled by default.
-    pub fn with_tooltips(mut self, enabled: bool) -> Self {
-        self.tooltips = Some(enabled);
-        self
-    }
-
     /// Enable or disable autoscaling of the plot when new data is added.
     pub fn with_autoscale_on_updates(mut self, enabled: bool) -> Self {
         self.autoscale_on_updates = Some(enabled);
         self
     }
 
-    /// Set the hover radius in pixels for detecting nearby points for tooltips.
+    /// Set the hover radius in pixels for detecting nearby points for highlighting.
     pub fn with_hover_radius_px(mut self, radius: f32) -> Self {
         self.hover_radius_px = Some(radius.max(0.0));
         self
     }
 
-    /// Provide a custom tooltip text formatter. Passing `None` disables formatting.
-    pub fn with_tooltip_provider<F>(mut self, provider: F) -> Self
+    /// Provide a custom highlighter for pick point.
+    pub fn with_pick_highlight_provider<F>(mut self, provider: F) -> Self
     where
-        F: Fn(&TooltipContext) -> String + Send + Sync + 'static,
+        F: Fn(TooltipContext<'_>, &mut HighlightPoint) -> Option<String> + Send + Sync + 'static,
     {
-        self.tooltip_provider = Some(Arc::new(provider));
+        self.pick_highlight_provider = Some(Arc::new(provider));
+        self
+    }
+
+    /// Provide a custom highlighter for hovered point.
+    ///
+    /// If not provided, a default hover highlight provider will be used that shows the tooltip text with
+    /// series label, x and y coordinates of the point ([`PlotWidgetBuilder::default_hover_highlight_provider`]).
+    pub fn with_hover_highlight_provider<F>(mut self, provider: F) -> Self
+    where
+        F: Fn(TooltipContext<'_>, &mut HighlightPoint) -> Option<String> + Send + Sync + 'static,
+    {
+        self.hover_highlight_provider = Some(Arc::new(provider));
         self
     }
 
@@ -249,6 +254,18 @@ impl PlotWidgetBuilder {
             .with_y_tick_producer(|_, _| Vec::new())
     }
 
+    /// Default hover highlight provider that shows the tooltip text with
+    /// series label, x and y coordinates of the point.
+    pub fn default_hover_highlight_provider(
+        ctx: TooltipContext<'_>,
+        point: &mut HighlightPoint,
+    ) -> Option<String> {
+        Some(format!(
+            "{}\nx: {:.2}, y: {:.2}",
+            ctx.series_label, point.x, point.y
+        ))
+    }
+
     /// Build the PlotWidget; validates series and duplicate labels via PlotWidget::add_series.
     pub fn build(self) -> Result<PlotWidget, SeriesError> {
         if let (Some((x_min, x_max)), Some((y_min, y_max))) = (self.x_lim, self.y_lim)
@@ -258,9 +275,6 @@ impl PlotWidgetBuilder {
         }
         let mut w = PlotWidget::new();
 
-        if let Some(enabled) = self.tooltips {
-            w.tooltips(enabled);
-        }
         if let Some(enabled) = self.autoscale_on_updates {
             w.autoscale_on_updates(enabled);
         }
@@ -279,14 +293,19 @@ impl PlotWidgetBuilder {
         if let Some((min, max)) = self.y_lim {
             w.set_y_lim(min, max);
         }
-        if let Some(p) = self.tooltip_provider {
-            w.set_tooltip_provider(p.clone());
-        }
         if let Some(c) = self.cursor_overlay {
             w.set_cursor_overlay(c);
         }
+        if let Some(p) = self.pick_highlight_provider {
+            w.set_pick_highlight_provider(p);
+        }
+        if let Some(p) = self.hover_highlight_provider {
+            w.set_hover_highlight_provider(p);
+        } else {
+            w.set_hover_highlight_provider(Arc::new(Self::default_hover_highlight_provider));
+        }
         if let Some(p) = self.cursor_provider {
-            w.set_cursor_provider(p.clone());
+            w.set_cursor_provider(p);
         }
         if let Some(enabled) = self.crosshairs {
             w.set_crosshairs(enabled);

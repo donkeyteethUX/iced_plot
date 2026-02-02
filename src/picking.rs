@@ -14,7 +14,7 @@ use std::{
 
 use iced::wgpu::*;
 
-use crate::{Point, plot_state::SeriesSpan};
+use crate::{Point, PointId, plot_state::SeriesSpan};
 
 // ---- Public API to the widget ----
 
@@ -29,16 +29,7 @@ pub(crate) struct PickRequest {
 #[derive(Debug, Clone)]
 pub(crate) struct PickResult {
     pub seq: u64,
-    pub hit: Option<Hit>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct Hit {
-    pub series_label: String,
-    pub point_index: usize, // index within its series span
-    pub world: [f64; 2],
-    pub size: f32,
-    pub size_mode: u32,
+    pub hit: Option<PointId>,
 }
 
 #[derive(Default)]
@@ -517,7 +508,12 @@ impl PickingPass {
         self.pipeline = Some(pipeline);
     }
 
-    fn decode_id_to_hit(&self, id: u32, points: &[Point], series: &[SeriesSpan]) -> Option<Hit> {
+    fn decode_id_to_hit(
+        &self,
+        id: u32,
+        points: &[Point],
+        series: &[SeriesSpan],
+    ) -> Option<PointId> {
         // IDs are 1-based instance index
         let idx = (id as usize).saturating_sub(1);
 
@@ -540,15 +536,9 @@ impl PickingPass {
             return None;
         }
 
-        let pt = &points[point_idx];
-        let world = [pt.position[0], pt.position[1]];
-
-        Some(Hit {
-            series_label: span.label.clone(),
+        Some(PointId {
+            series_id: span.id,
             point_index: local_idx,
-            world,
-            size: pt.size,
-            size_mode: pt.size_mode,
         })
     }
 }
