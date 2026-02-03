@@ -360,7 +360,10 @@ impl PlotState {
                 self.cursor_position =
                     Vec2::new(position.x - self.bounds.x, position.y - self.bounds.y);
                 // Update crosshairs position when enabled
-                self.crosshairs_position = self.cursor_position;
+                if self.crosshairs_enabled {
+                    needs_redraw = true;
+                    self.crosshairs_position = self.cursor_position;
+                }
 
                 // Handle selection (right click drag)
                 if self.selection.active {
