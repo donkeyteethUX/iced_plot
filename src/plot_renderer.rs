@@ -700,7 +700,7 @@ impl PlotRenderer {
 
             for (local_i, p) in state.points[s.start..end].iter().enumerate() {
                 // Subtract render_offset for high-precision rendering near zero
-                let render_pos = self.world_to_render_pos(p.position, &cropped_camera);
+                let render_pos = self.world_to_render_pos(p.position, cropped_camera);
                 let color_idx = s.start + local_i;
                 let color = state.point_colors.get(color_idx).unwrap_or(&s.color);
                 writer.write_position(render_pos);
