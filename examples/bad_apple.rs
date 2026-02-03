@@ -69,8 +69,6 @@ impl App {
             .with_cursor_overlay(false)
             .add_series(series)
             .disable_controls_help()
-            // no need to disable legend here, legend is disabled by default when no labeled series are added
-            // .disable_legend()
             .build()
             .unwrap();
 

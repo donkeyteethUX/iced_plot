@@ -34,7 +34,7 @@ pub struct PlotWidgetBuilder {
     crosshairs: Option<bool>,
     disable_controls_help: bool,
     disable_legend: bool,
-    disable_scroll: bool,
+    disable_scroll_to_pan: bool,
     x_lim: Option<(f64, f64)>,
     y_lim: Option<(f64, f64)>,
     x_axis_link: Option<AxisLink>,
@@ -143,8 +143,6 @@ impl PlotWidgetBuilder {
 
     /// Disable the legend.
     ///
-    /// Useful if your application provides its own help UI or you want a cleaner canvas.
-    ///
     /// By default, when plot contains at least one labeled series, the legend is enabled.
     pub fn disable_legend(mut self) -> Self {
         self.disable_legend = true;
@@ -154,8 +152,8 @@ impl PlotWidgetBuilder {
     /// Disable the scroll to pan.
     ///
     /// Useful if your application embeds plot widget inside a scrollable container.
-    pub fn disable_scroll(mut self) -> Self {
-        self.disable_scroll = true;
+    pub fn disable_scroll_to_pan(mut self) -> Self {
+        self.disable_scroll_to_pan = true;
         self
     }
 
@@ -310,8 +308,8 @@ impl PlotWidgetBuilder {
         if self.disable_legend {
             w.legend_enabled = false;
         }
-        if self.disable_scroll {
-            w.scroll_enabled = false;
+        if self.disable_scroll_to_pan {
+            w.scroll_to_pan_enabled = false;
         }
 
         if let Some(enabled) = self.autoscale_on_updates {

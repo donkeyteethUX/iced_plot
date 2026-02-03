@@ -492,9 +492,6 @@ impl PlotState {
                 }
             }
             Event::WheelScrolled { delta } => {
-                if !widget.scroll_enabled {
-                    return needs_redraw;
-                }
                 // Only respond to wheel when cursor is inside our bounds
                 let inside = self.cursor_inside();
                 if !inside {
@@ -533,7 +530,7 @@ impl PlotState {
 
                     self.update_axis_links();
                     needs_redraw = true;
-                } else {
+                } else if widget.scroll_to_pan_enabled {
                     let scroll_ratio = y / x;
 
                     if scroll_ratio.abs() > 2.0 {

@@ -57,7 +57,7 @@ pub struct PlotWidget {
     pub(crate) highlight_version: u64,
     // Configuration
     pub(crate) autoscale_on_updates: bool,
-    pub(crate) scroll_enabled: bool,
+    pub(crate) scroll_to_pan_enabled: bool,
     pub(crate) legend_enabled: bool,
     pub(crate) legend_collapsed: bool,
     pub(crate) x_axis_label: String,
@@ -111,7 +111,7 @@ impl PlotWidget {
             data_version: 0,
             highlight_version: 0,
             autoscale_on_updates: false,
-            scroll_enabled: true,
+            scroll_to_pan_enabled: true,
             legend_enabled: true,
             legend_collapsed: false,
             x_axis_label: String::new(),
@@ -536,7 +536,7 @@ impl PlotWidget {
                         })
                     })
             ),
-            self.view_top_right_overlay(legend.is_some(), self.scroll_enabled),
+            self.view_top_right_overlay(legend.is_some(), self.scroll_to_pan_enabled),
             self.view_tick_labels(),
             legend,
         ];
