@@ -240,6 +240,11 @@ impl PlotState {
         self.hlines = hlines.into();
         self.data_min = data_min;
         self.data_max = data_max;
+        self.legend_collapsed = widget.legend_collapsed;
+        self.x_lim = widget.x_lim;
+        self.y_lim = widget.y_lim;
+        self.x_axis_link = widget.x_axis_link.clone();
+        self.y_axis_link = widget.y_axis_link.clone();
 
         // highlighted_points
         self.sync_highlighted_points_from_widget(widget);
@@ -256,23 +261,27 @@ impl PlotState {
     }
 
     pub(crate) fn autoscale(&mut self) {
+        // Use user-specified limits if available, otherwise use data bounds
+        let mut min_v = DVec2::new(-1.0, -1.0);
+        let mut max_v = DVec2::new(1.0, 1.0);
+
         if let (Some(data_min), Some(data_max)) = (self.data_min, self.data_max) {
-            // Use user-specified limits if available, otherwise use data bounds
-            let mut min_v = data_min;
-            let mut max_v = data_max;
-
-            if let Some((x_min, x_max)) = self.x_lim {
-                min_v.x = x_min;
-                max_v.x = x_max;
-            }
-            if let Some((y_min, y_max)) = self.y_lim {
-                min_v.y = y_min;
-                max_v.y = y_max;
-            }
-
-            self.camera.set_bounds(min_v, max_v, 0.05);
-            self.update_axis_links();
+            min_v = data_min;
+            max_v = data_max;
         }
+
+        if let Some((y_min, y_max)) = self.y_lim {
+            min_v.y = y_min;
+            max_v.y = y_max;
+        }
+
+        if let Some((x_min, x_max)) = self.x_lim {
+            min_v.x = x_min;
+            max_v.x = x_max;
+        }
+
+        self.camera.set_bounds(min_v, max_v, 0.05);
+        self.update_axis_links();
     }
 
     pub(crate) fn update_ticks(

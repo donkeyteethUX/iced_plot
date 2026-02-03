@@ -992,17 +992,22 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                 }
             }
 
-            // Autoscale on first update or always if autoscale_on_updates is enabled.
-            if state.data_src_version == 0 || self.autoscale_on_updates {
+            // Data has changed, so we may need to autoscale.
+            //
+            // We do so on the first update, or always if autoscale_on_updates is enabled.
+            if self.autoscale_on_updates || state.data_src_version == 0 {
                 state.autoscale();
             }
 
             state.data_src_version = self.data_version;
-            state.legend_collapsed = self.legend_collapsed;
+            needs_redraw = true;
+        }
+
+        // Check if limits have been updated (even if data has not changed).
+        if self.x_lim != state.x_lim || self.y_lim != state.y_lim {
             state.x_lim = self.x_lim;
             state.y_lim = self.y_lim;
-            state.x_axis_link = self.x_axis_link.clone();
-            state.y_axis_link = self.y_axis_link.clone();
+            state.autoscale();
             needs_redraw = true;
         }
 
