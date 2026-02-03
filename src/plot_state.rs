@@ -40,6 +40,8 @@ pub struct PlotState {
     // UI / camera
     pub(crate) camera: Camera,
     pub(crate) bounds: Rectangle,
+    pub(crate) container_bounds: Option<Rectangle>,
+    pub(crate) container_version: u64,
     pub(crate) x_ticks: Vec<PositionedTick>,
     pub(crate) y_ticks: Vec<PositionedTick>,
     // Interaction state
@@ -93,6 +95,8 @@ impl Default for PlotState {
             y_link_version: 0,
             camera: Camera::new(1000, 600),
             bounds: Rectangle::default(),
+            container_bounds: None,
+            container_version: 0,
             cursor_position: Vec2::ZERO,
             last_click_time: None,
             legend_collapsed: false,

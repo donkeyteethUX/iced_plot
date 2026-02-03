@@ -83,8 +83,6 @@ struct VersionTracker {
     lines: u64,
     highlight: u64,
     render_offset: glam::DVec2,
-    camera: Camera,
-    bounds_px: (u32, u32),
 }
 
 impl VersionTracker {
@@ -94,8 +92,6 @@ impl VersionTracker {
             lines: 0,
             highlight: 0,
             render_offset: glam::DVec2::ZERO,
-            camera: Camera::default(),
-            bounds_px: (0, 0),
         }
     }
 }
@@ -283,29 +279,33 @@ impl PlotRenderer {
         self.scale_factor = scale;
     }
 
-    fn sync(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
+    fn sync(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        state: &PlotState,
+        cropped_bounds: Rectangle,
+        cropped_camera: Camera,
+    ) {
         // Check if render offset changed - if so, we need to rebuild vertex buffers
         // since positions are stored relative to render_offset
-        let offset_changed = self.versions.render_offset != state.camera.render_offset;
-        let camera_changed = self.versions.camera != state.camera;
-        let bounds_changed = self.versions.bounds_px != (self.bounds_w, self.bounds_h);
+        let offset_changed = self.versions.render_offset != cropped_camera.render_offset;
+        let highlight_changed = state.highlight_version != self.versions.highlight;
+
+        // Update cached render offset
+        self.versions.render_offset = cropped_camera.render_offset;
 
         if state.markers_version != self.versions.markers || offset_changed {
-            self.rebuild_markers(device, queue, state);
+            self.rebuild_markers(device, queue, state, &cropped_camera);
             self.versions.markers = state.markers_version;
         }
         if state.lines_version != self.versions.lines || offset_changed {
-            self.rebuild_lines(device, queue, state);
+            self.rebuild_lines(device, queue, state, &cropped_camera);
             self.versions.lines = state.lines_version;
         }
 
         // Rebuild reference lines whenever camera changes
-        self.rebuild_reflines(device, queue, state);
-
-        // Update cached render offset
-        self.versions.render_offset = state.camera.render_offset;
-        self.versions.camera = state.camera;
-        self.versions.bounds_px = (self.bounds_w, self.bounds_h);
+        self.rebuild_reflines(device, queue, state, &cropped_camera);
 
         // Selection is rebuilt whenever it's active.
         self.rebuild_selection(device, queue, state);
@@ -313,12 +313,8 @@ impl PlotRenderer {
         // Hover/pick highlight mask boxes are baked in clip space, so they must be rebuilt
         // whenever the camera or viewport changes (zoom/pan/resize), not only when the
         // highlighted points change.
-        if state.highlight_version != self.versions.highlight
-            || offset_changed
-            || camera_changed
-            || bounds_changed
-        {
-            self.rebuild_highlight(device, queue, state);
+        if highlight_changed || offset_changed {
+            self.rebuild_highlight(device, queue, state, &cropped_bounds, &cropped_camera);
             self.versions.highlight = state.highlight_version;
         }
 
@@ -337,8 +333,10 @@ impl PlotRenderer {
         state: &PlotState,
     ) {
         let scale_factor = viewport.scale_factor();
-        let bounds_width = (bounds.width * scale_factor) as u32;
-        let bounds_height = (bounds.height * scale_factor) as u32;
+        let (cropped_bounds, cropped_camera) =
+            crop_bounds(bounds, &state.container_bounds, &state.camera);
+        let bounds_width = (cropped_bounds.width * scale_factor) as u32;
+        let bounds_height = (cropped_bounds.height * scale_factor) as u32;
 
         self.set_bounds(bounds_width, bounds_height);
         self.set_scale_factor(scale_factor);
@@ -352,9 +350,9 @@ impl PlotRenderer {
 
         // Upload camera uniform based on current camera and bounds dimensions
         let mut cam_u = CameraUniform::default();
-        cam_u.update(&state.camera, bounds_width, bounds_height);
+        cam_u.update(&cropped_camera, bounds_width, bounds_height);
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&cam_u));
-        self.sync(device, queue, state);
+        self.sync(device, queue, state, cropped_bounds, cropped_camera);
     }
 
     pub(crate) fn service_picking(
@@ -664,7 +662,13 @@ impl PlotRenderer {
         self.pipelines.line_overlay = Some(pipeline);
     }
 
-    fn rebuild_markers(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
+    fn rebuild_markers(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        state: &PlotState,
+        cropped_camera: &Camera,
+    ) {
         // Only include series that have markers (marker != u32::MAX)
         let marker_series_count: usize = state
             .series
@@ -696,7 +700,7 @@ impl PlotRenderer {
 
             for (local_i, p) in state.points[s.start..end].iter().enumerate() {
                 // Subtract render_offset for high-precision rendering near zero
-                let render_pos = self.world_to_render_pos(p.position, &state.camera);
+                let render_pos = self.world_to_render_pos(p.position, &cropped_camera);
                 let color_idx = s.start + local_i;
                 let color = state.point_colors.get(color_idx).unwrap_or(&s.color);
                 writer.write_position(render_pos);
@@ -737,7 +741,13 @@ impl PlotRenderer {
         self.picking.set_id_map(id_map);
     }
 
-    fn rebuild_lines(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
+    fn rebuild_lines(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        state: &PlotState,
+        cropped_camera: &Camera,
+    ) {
         self.buffers.lines = None;
         if state.series.iter().all(|s| s.line_style.is_none()) {
             return;
@@ -764,7 +774,7 @@ impl PlotRenderer {
                     cumulative_distance += (dx * dx + dy * dy).sqrt() as f32;
                 }
 
-                let render_pos = self.world_to_render_pos(p.position, &state.camera);
+                let render_pos = self.world_to_render_pos(p.position, cropped_camera);
                 let color_idx = s.start + i;
                 let color = state.point_colors.get(color_idx).unwrap_or(&s.color);
                 writer.write_line_vertex(
@@ -805,7 +815,13 @@ impl PlotRenderer {
         }
     }
 
-    fn rebuild_reflines(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
+    fn rebuild_reflines(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        state: &PlotState,
+        cropped_camera: &Camera,
+    ) {
         self.buffers.reflines = None;
 
         if state.vlines.is_empty() && state.hlines.is_empty() {
@@ -816,7 +832,7 @@ impl PlotRenderer {
         let mut segs: Vec<LineSegment> = Vec::new();
 
         // Get visible viewport bounds in world coordinates
-        let cam = &state.camera;
+        let cam = cropped_camera;
         let left = cam.position.x - cam.half_extents.x;
         let right = cam.position.x + cam.half_extents.x;
         let bottom = cam.position.y - cam.half_extents.y;
@@ -834,7 +850,7 @@ impl PlotRenderer {
 
             // Create two vertices: bottom and top of viewport
             for (idx, y) in [bottom, top].iter().enumerate() {
-                let render_pos = self.world_to_render_pos([vline.x, *y], &state.camera);
+                let render_pos = self.world_to_render_pos([vline.x, *y], cropped_camera);
                 let distance = if idx == 0 { 0.0 } else { (top - bottom) as f32 };
                 writer.write_line_vertex(
                     render_pos,
@@ -863,7 +879,7 @@ impl PlotRenderer {
 
             // Create two vertices: left and right of viewport
             for (idx, x) in [left, right].iter().enumerate() {
-                let render_pos = self.world_to_render_pos([*x, hline.y], &state.camera);
+                let render_pos = self.world_to_render_pos([*x, hline.y], cropped_camera);
                 let distance = if idx == 0 { 0.0 } else { (right - left) as f32 };
                 writer.write_line_vertex(
                     render_pos,
@@ -941,7 +957,14 @@ impl PlotRenderer {
         }
     }
 
-    fn rebuild_highlight(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
+    fn rebuild_highlight(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        state: &PlotState,
+        cropped_bounds: &Rectangle,
+        cropped_camera: &Camera,
+    ) {
         self.buffers.highlight = None;
         self.buffers.highlight_markers = None;
 
@@ -974,10 +997,10 @@ impl PlotRenderer {
                 }
 
                 // Convert world coordinates to NDC
-                let ndc = self.world_to_ndc(world_pos, &state.camera);
+                let ndc = self.world_to_ndc(world_pos, cropped_camera);
                 // Calculate mask box size based on marker_size
                 let mask_box_size_px =
-                    marker_style.size.to_px(&state.camera, &state.bounds) + mask_padding;
+                    marker_style.size.to_px(cropped_camera, cropped_bounds) + mask_padding;
 
                 let (dx, dy) = self.pixels_to_clip_delta(mask_box_size_px.max(1.0));
 
@@ -1000,8 +1023,8 @@ impl PlotRenderer {
 
             // Build marker if marker_style is Some
             if let Some(marker_style) = highlight_point.marker_style {
-                let render_pos =
-                    self.world_to_render_pos([highlight_point.x, highlight_point.y], &state.camera);
+                let render_pos = self
+                    .world_to_render_pos([highlight_point.x, highlight_point.y], cropped_camera);
                 let (size, size_mode) = marker_style.size.to_raw();
                 marker_writer.write_position(render_pos);
                 marker_writer.write_color(&highlight_point.color);
@@ -1275,5 +1298,80 @@ fn line_style_params(style: LineStyle) -> (u32, f32) {
         LineStyle::Solid => (0u32, 0.0f32),
         LineStyle::Dotted { spacing } => (1u32, spacing),
         LineStyle::Dashed { length } => (2u32, length),
+    }
+}
+
+// Helper to crop the bounds to the container bounds
+fn crop_bounds(
+    bounds: &Rectangle,
+    container_bounds: &Option<Rectangle>,
+    camera: &Camera,
+) -> (Rectangle, Camera) {
+    if let Some(container_bounds) = container_bounds {
+        // calculate the intersection of bounds and container_bounds (cropped visible area)
+        let plot_x_min = bounds.x;
+        let plot_x_max = bounds.x + bounds.width;
+        let plot_y_min = bounds.y;
+        let plot_y_max = bounds.y + bounds.height;
+        let container_x_min = container_bounds.x;
+        let container_x_max = container_bounds.x + container_bounds.width;
+        let container_y_min = container_bounds.y;
+        let container_y_max = container_bounds.y + container_bounds.height;
+
+        // calculate the intersection
+        let new_x = plot_x_min.max(container_x_min);
+        let new_y = plot_y_min.max(container_y_min);
+        let new_x_max = plot_x_max.min(container_x_max);
+        let new_y_max = plot_y_max.min(container_y_max);
+        let new_width = (new_x_max - new_x).max(0.0);
+        let new_height = (new_y_max - new_y).max(0.0);
+
+        // create new bounds (cropped visible area)
+        let new_bounds = Rectangle {
+            x: new_x,
+            y: new_y,
+            width: new_width,
+            height: new_height,
+        };
+
+        // calculate the offset between the original bounds and the new bounds (screen space)
+        // dx, dy is the offset of the cropped bounds relative to the original bounds (screen space)
+        let dx = new_x - plot_x_min;
+        let dy = new_y - plot_y_min;
+
+        // calculate the offset between the original bounds center and the new bounds center (world space)
+        // original bounds center: (plot_x_min + bounds.width/2, plot_y_min + bounds.height/2)
+        // new bounds center: (new_x + new_width/2, new_y + new_height/2)
+        // center offset: (dx + new_width/2 - bounds.width/2, dy + new_height/2 - bounds.height/2)
+        let center_offset_x = dx + new_width / 2.0 - bounds.width / 2.0;
+        let center_offset_y = dy + new_height / 2.0 - bounds.height / 2.0;
+
+        let mut new_camera = *camera;
+        // convert the screen space offset to the world space offset
+        // screen space to world space conversion: world = camera.position + (screen_offset / bounds_size) * (2 * half_extents)
+        // X direction: screen X increase -> world X increase (no flip)
+        // Y direction: screen Y increase -> world Y decrease (flip)
+        if bounds.width > 0.0 {
+            new_camera.position[0] +=
+                2.0 * center_offset_x as f64 / bounds.width as f64 * camera.half_extents.x;
+        }
+        if bounds.height > 0.0 {
+            new_camera.position[1] -=
+                2.0 * center_offset_y as f64 / bounds.height as f64 * camera.half_extents.y;
+        }
+
+        // adjust camera: keep the world space content unchanged, only adjust the display area
+        // camera.position needs to be adjusted according to the center offset
+        // camera.half_extents needs to be adjusted according to the new bounds size
+        if bounds.width > 0.0 {
+            new_camera.half_extents[0] *= new_width as f64 / bounds.width as f64;
+        }
+        if bounds.height > 0.0 {
+            new_camera.half_extents[1] *= new_height as f64 / bounds.height as f64;
+        }
+
+        (new_bounds, new_camera)
+    } else {
+        (*bounds, *camera)
     }
 }
