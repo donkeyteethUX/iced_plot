@@ -986,7 +986,12 @@ impl PlotRenderer {
                 let tr = [ndc[0] + dx, ndc[1] + dy];
                 let bl = [ndc[0] - dx, ndc[1] - dy];
                 let br = [ndc[0] + dx, ndc[1] - dy];
-                let color = [1.0, 1.0, 1.0, 0.25];
+                let point_is_very_bright = highlight_point.color.relative_luminance() > 0.9;
+                let color = if point_is_very_bright {
+                    [0.0, 0.0, 0.0, 0.25]
+                } else {
+                    [1.0, 1.0, 1.0, 0.25]
+                };
                 for v in [tl, tr, bl, br] {
                     mask_box_data.extend_from_slice(&v);
                     mask_box_data.extend_from_slice(&color);

@@ -17,13 +17,13 @@ pub(crate) struct LegendEntry {
     pub(crate) hidden: bool,
 }
 
-pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Element<'_, PlotUiMessage> {
+pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Option<Element<'_, PlotUiMessage>> {
     let entries: Vec<LegendEntry> = widget.legend_entries();
 
     if entries.is_empty() {
-        return legend_container(label_button("Legend")).into();
+        return None;
     } else if collapsed {
-        return legend_container(label_button("▶ Legend")).into();
+        return Some(legend_container(label_button("▶ Legend")).into());
     }
 
     let mut col = column![label_button("▼ Legend")]
@@ -56,9 +56,8 @@ pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Element<'_, PlotUi
         col = col.push(row);
     }
 
-    legend_container(col).style(container::bordered_box).into()
+    Some(legend_container(col).style(container::bordered_box).into())
 }
-
 fn label_button(label: &str) -> Element<'_, PlotUiMessage> {
     button(text(label).size(12.0))
         .on_press(PlotUiMessage::ToggleLegend)

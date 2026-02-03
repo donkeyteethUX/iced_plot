@@ -57,6 +57,8 @@ pub struct PlotWidget {
     pub(crate) highlight_version: u64,
     // Configuration
     pub(crate) autoscale_on_updates: bool,
+    pub(crate) scroll_to_pan_enabled: bool,
+    pub(crate) legend_enabled: bool,
     pub(crate) legend_collapsed: bool,
     pub(crate) x_axis_label: String,
     pub(crate) y_axis_label: String,
@@ -109,6 +111,8 @@ impl PlotWidget {
             data_version: 0,
             highlight_version: 0,
             autoscale_on_updates: false,
+            scroll_to_pan_enabled: true,
+            legend_enabled: true,
             legend_collapsed: false,
             x_axis_label: String::new(),
             y_axis_label: String::new(),
@@ -517,19 +521,24 @@ impl PlotWidget {
             .padding(2.0)
             .style(|theme: &Theme| container::background(theme.palette().background));
 
+        let legend = if self.legend_enabled {
+            legend::legend(self, self.legend_collapsed)
+        } else {
+            None
+        };
         let elements = stack![
             inner_container,
             stack(
-                self.hovered_points
-                    .values()
-                    .chain(self.picked_points.values())
-                    .filter_map(|(_, tooltip)| tooltip.as_ref().and_then(|tooltip| {
-                        Self::view_tooltip_overlay(tooltip, &self.camera_bounds)
-                    }))
+                self.visible_highlighted_points()
+                    .filter_map(|(_, tooltip)| {
+                        tooltip.as_ref().and_then(|tooltip| {
+                            Self::view_tooltip_overlay(tooltip, &self.camera_bounds)
+                        })
+                    })
             ),
-            self.view_top_right_overlay(),
+            self.view_top_right_overlay(legend.is_some(), self.scroll_to_pan_enabled),
             self.view_tick_labels(),
-            legend::legend(self, self.legend_collapsed),
+            legend,
         ];
 
         container(axes_labels::stack_with_labels(
@@ -784,7 +793,11 @@ impl PlotWidget {
         Some(bubble.into())
     }
 
-    fn view_top_right_overlay(&self) -> Element<'_, PlotUiMessage> {
+    fn view_top_right_overlay(
+        &self,
+        has_legend: bool,
+        scroll_enabled: bool,
+    ) -> Element<'_, PlotUiMessage> {
         let help_btn = self.controls_help_enabled.then(|| {
             let help_label = if self.controls_overlay_open {
                 "×"
@@ -798,11 +811,14 @@ impl PlotWidget {
         });
 
         let top_row = widget::row![self.view_cursor_overlay(), help_btn].spacing(6.0);
-        let col = widget::column![top_row, self.view_controls_overlay_panel()]
-            .spacing(6.0)
-            .width(Length::Shrink)
-            .height(Length::Shrink)
-            .align_x(Horizontal::Right);
+        let col = widget::column![
+            top_row,
+            self.view_controls_overlay_panel(has_legend, scroll_enabled)
+        ]
+        .spacing(6.0)
+        .width(Length::Shrink)
+        .height(Length::Shrink)
+        .align_x(Horizontal::Right);
 
         container(col)
             .width(Length::Fill)
@@ -818,7 +834,11 @@ impl PlotWidget {
             .into()
     }
 
-    fn view_controls_overlay_panel(&self) -> Option<Element<'_, PlotUiMessage>> {
+    fn view_controls_overlay_panel(
+        &self,
+        has_legend: bool,
+        scroll_enabled: bool,
+    ) -> Option<Element<'_, PlotUiMessage>> {
         if !self.controls_help_enabled || !self.controls_overlay_open {
             return None;
         }
@@ -829,11 +849,11 @@ impl PlotWidget {
             txt("Left-drag: pan"),
             txt("Right-drag: box zoom"),
             txt("Ctrl + scroll: zoom at cursor"),
-            txt("Scroll: pan (vertical/horizontal)"),
+            scroll_enabled.then(|| txt("Scroll: pan (vertical/horizontal)")),
             txt("Double-click: reset / autoscale"),
             txt("Left-click point: pick"),
             txt("Esc: clear picked points"),
-            txt("Click icon in legend to toggle visibility."),
+            has_legend.then(|| txt("Click icon in legend to toggle visibility.")),
         ]
         .spacing(2.0);
 
@@ -891,6 +911,17 @@ impl PlotWidget {
         Some(stack(tick_elements).into())
     }
 
+    pub(crate) fn visible_highlighted_points(
+        &self,
+    ) -> impl Iterator<Item = &(HighlightPoint, Option<TooltipUiPayload>)> {
+        self.hovered_points
+            .iter()
+            .chain(self.picked_points.iter())
+            .filter_map(|(point_id, point_ctx)| {
+                (!self.hidden_shapes.contains(&point_id.series_id)).then_some(point_ctx)
+            })
+    }
+
     fn toggle_visibility(&mut self, id: &ShapeId) {
         let exists = self.series.contains_key(id)
             || self.vlines.contains_key(id)
@@ -900,10 +931,17 @@ impl PlotWidget {
             println!("Toggle visibility: series not found: {id}");
             return;
         }
-        if self.hidden_shapes.contains(id) {
-            self.hidden_shapes.remove(id);
-        } else {
+        // toggle the visibility of the shape
+        if !self.hidden_shapes.remove(id) {
             self.hidden_shapes.insert(*id);
+        }
+        let contains_highlight = self
+            .hovered_points
+            .keys()
+            .chain(self.picked_points.keys())
+            .any(|point_id| point_id.series_id == *id);
+        if contains_highlight {
+            self.highlight_version += 1;
         }
         self.data_version += 1;
     }
@@ -1440,7 +1478,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// + `mask_padding` to change the mask padding of the highlight point;
 ///
 ///  to change the highlight point.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HighlightPoint {
     /// Data-space coordinates
     pub x: f64,
