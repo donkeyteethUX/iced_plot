@@ -108,7 +108,7 @@ impl PlotWidget {
             vlines: IndexMap::new(),
             hlines: IndexMap::new(),
             hidden_shapes: HashSet::new(),
-            data_version: 0,
+            data_version: 1,
             highlight_version: 0,
             autoscale_on_updates: false,
             scroll_to_pan_enabled: true,
@@ -995,6 +995,10 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             needs_redraw |= changed;
         }
 
+        // Check if limits have been manually set. This will always trigger an "autoscale"
+        // to apply the new limits.
+        let limits_changed = self.x_lim != state.x_lim || self.y_lim != state.y_lim;
+
         if self.data_version != state.data_src_version {
             // Rebuild derived state from widget data
             state.rebuild_from_widget(self);
@@ -1032,17 +1036,15 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
 
             // Data has changed, so we may need to autoscale.
             //
-            // We do so on the first update, or always if autoscale_on_updates is enabled.
-            if self.autoscale_on_updates || state.data_src_version == 0 {
+            // We do so on the first update, if autoscale_on_updates is enabled, or if
+            // limits have been manually set.
+            if self.autoscale_on_updates || state.data_src_version == 0 || limits_changed {
                 state.autoscale();
             }
 
             state.data_src_version = self.data_version;
             needs_redraw = true;
-        }
-
-        // Check if limits have been updated (even if data has not changed).
-        if self.x_lim != state.x_lim || self.y_lim != state.y_lim {
+        } else if limits_changed {
             state.x_lim = self.x_lim;
             state.y_lim = self.y_lim;
             state.autoscale();
