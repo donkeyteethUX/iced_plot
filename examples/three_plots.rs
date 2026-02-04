@@ -1,6 +1,7 @@
 //! Show multiple plot widgets in a single application.
 //! All three plots have their x-axes linked, so panning or zooming the x-axis
 //! on one plot will synchronize the others.
+use iced::padding;
 use iced_plot::HighlightPoint;
 use iced_plot::HoverPickEvent;
 use iced_plot::PlotUiMessage;
@@ -31,125 +32,118 @@ struct App {
 }
 
 #[derive(Debug)]
-enum Message {
-    Plot { msg: PlotUiMessage, plot_id: usize },
-    Scroll(scrollable::Viewport),
+struct Message {
+    msg: PlotUiMessage,
+    plot_id: usize,
 }
 
 impl App {
-    fn update(&mut self, msg: Message) {
-        match msg {
-            Message::Plot { msg, plot_id } => match plot_id {
-                1 => {
-                    match msg.get_hover_pick_event() {
-                        Some(HoverPickEvent::Hover(p1)) => {
-                            if let Some([x, _]) = self.w1.point_position(p1) {
-                                if let Some(p2) = self.w2.nearest_point_horizontal(self.s2_id, x) {
-                                    self.w2.add_hover_point(p2);
-                                }
-                                if let Some(p3) = self.w3.nearest_point_horizontal(self.s3_id, x) {
-                                    self.w3.add_hover_point(p3);
-                                }
+    fn update(&mut self, Message { msg, plot_id }: Message) {
+        match plot_id {
+            1 => {
+                match msg.get_hover_pick_event() {
+                    Some(HoverPickEvent::Hover(p1)) => {
+                        if let Some([x, _]) = self.w1.point_position(p1) {
+                            if let Some(p2) = self.w2.nearest_point_horizontal(self.s2_id, x) {
+                                self.w2.add_hover_point(p2);
+                            }
+                            if let Some(p3) = self.w3.nearest_point_horizontal(self.s3_id, x) {
+                                self.w3.add_hover_point(p3);
                             }
                         }
-                        Some(HoverPickEvent::Pick(p1)) => {
-                            if let Some([x, _]) = self.w1.point_position(p1) {
-                                if let Some(p2) = self.w2.nearest_point_horizontal(self.s2_id, x) {
-                                    self.w2.add_pick_point(p2);
-                                }
-                                if let Some(p3) = self.w3.nearest_point_horizontal(self.s3_id, x) {
-                                    self.w3.add_pick_point(p3);
-                                }
-                            }
-                        }
-                        Some(HoverPickEvent::ClearPick) => {
-                            self.w2.clear_pick();
-                            self.w3.clear_pick();
-                        }
-                        _ => {}
                     }
-                    self.w1.update(msg);
-                }
-                2 => {
-                    match msg.get_hover_pick_event() {
-                        Some(HoverPickEvent::Hover(p2)) => {
-                            if let Some([x, _]) = self.w2.point_position(p2) {
-                                if let Some(p1) = self.w1.nearest_point_horizontal(self.s1_id, x) {
-                                    self.w1.add_hover_point(p1);
-                                }
-                                if let Some(p3) = self.w3.nearest_point_horizontal(self.s3_id, x) {
-                                    self.w3.add_hover_point(p3);
-                                }
+                    Some(HoverPickEvent::Pick(p1)) => {
+                        if let Some([x, _]) = self.w1.point_position(p1) {
+                            if let Some(p2) = self.w2.nearest_point_horizontal(self.s2_id, x) {
+                                self.w2.add_pick_point(p2);
+                            }
+                            if let Some(p3) = self.w3.nearest_point_horizontal(self.s3_id, x) {
+                                self.w3.add_pick_point(p3);
                             }
                         }
-                        Some(HoverPickEvent::Pick(p2)) => {
-                            if let Some([x, _]) = self.w2.point_position(p2) {
-                                if let Some(p1) = self.w1.nearest_point_horizontal(self.s1_id, x) {
-                                    self.w1.add_pick_point(p1);
-                                }
-                                if let Some(p3) = self.w3.nearest_point_horizontal(self.s3_id, x) {
-                                    self.w3.add_pick_point(p3);
-                                }
-                            }
-                        }
-                        Some(HoverPickEvent::ClearPick) => {
-                            self.w1.clear_pick();
-                            self.w3.clear_pick();
-                        }
-                        _ => {}
                     }
-                    self.w2.update(msg);
-                }
-                3 => {
-                    match msg.get_hover_pick_event() {
-                        Some(HoverPickEvent::Hover(p3)) => {
-                            if let Some([x, _]) = self.w3.point_position(p3) {
-                                if let Some(p1) = self.w1.nearest_point_horizontal(self.s1_id, x) {
-                                    self.w1.add_hover_point(p1);
-                                }
-                                if let Some(p2) = self.w2.nearest_point_horizontal(self.s2_id, x) {
-                                    self.w2.add_hover_point(p2);
-                                }
-                            }
-                        }
-                        Some(HoverPickEvent::Pick(p3)) => {
-                            if let Some([x, _]) = self.w3.point_position(p3) {
-                                if let Some(p1) = self.w1.nearest_point_horizontal(self.s1_id, x) {
-                                    self.w1.add_pick_point(p1);
-                                }
-                                if let Some(p2) = self.w2.nearest_point_horizontal(self.s2_id, x) {
-                                    self.w2.add_pick_point(p2);
-                                }
-                            }
-                        }
-                        Some(HoverPickEvent::ClearPick) => {
-                            self.w1.clear_pick();
-                            self.w2.clear_pick();
-                        }
-                        _ => {}
+                    Some(HoverPickEvent::ClearPick) => {
+                        self.w2.clear_pick();
+                        self.w3.clear_pick();
                     }
-                    self.w3.update(msg)
+                    _ => {}
                 }
-                _ => {}
-            },
-            Message::Scroll(viewport) => {
-                self.w1.update_container_viewport(viewport);
-                self.w2.update_container_viewport(viewport);
-                self.w3.update_container_viewport(viewport);
+                self.w1.update(msg);
             }
+            2 => {
+                match msg.get_hover_pick_event() {
+                    Some(HoverPickEvent::Hover(p2)) => {
+                        if let Some([x, _]) = self.w2.point_position(p2) {
+                            if let Some(p1) = self.w1.nearest_point_horizontal(self.s1_id, x) {
+                                self.w1.add_hover_point(p1);
+                            }
+                            if let Some(p3) = self.w3.nearest_point_horizontal(self.s3_id, x) {
+                                self.w3.add_hover_point(p3);
+                            }
+                        }
+                    }
+                    Some(HoverPickEvent::Pick(p2)) => {
+                        if let Some([x, _]) = self.w2.point_position(p2) {
+                            if let Some(p1) = self.w1.nearest_point_horizontal(self.s1_id, x) {
+                                self.w1.add_pick_point(p1);
+                            }
+                            if let Some(p3) = self.w3.nearest_point_horizontal(self.s3_id, x) {
+                                self.w3.add_pick_point(p3);
+                            }
+                        }
+                    }
+                    Some(HoverPickEvent::ClearPick) => {
+                        self.w1.clear_pick();
+                        self.w3.clear_pick();
+                    }
+                    _ => {}
+                }
+                self.w2.update(msg);
+            }
+            3 => {
+                match msg.get_hover_pick_event() {
+                    Some(HoverPickEvent::Hover(p3)) => {
+                        if let Some([x, _]) = self.w3.point_position(p3) {
+                            if let Some(p1) = self.w1.nearest_point_horizontal(self.s1_id, x) {
+                                self.w1.add_hover_point(p1);
+                            }
+                            if let Some(p2) = self.w2.nearest_point_horizontal(self.s2_id, x) {
+                                self.w2.add_hover_point(p2);
+                            }
+                        }
+                    }
+                    Some(HoverPickEvent::Pick(p3)) => {
+                        if let Some([x, _]) = self.w3.point_position(p3) {
+                            if let Some(p1) = self.w1.nearest_point_horizontal(self.s1_id, x) {
+                                self.w1.add_pick_point(p1);
+                            }
+                            if let Some(p2) = self.w2.nearest_point_horizontal(self.s2_id, x) {
+                                self.w2.add_pick_point(p2);
+                            }
+                        }
+                    }
+                    Some(HoverPickEvent::ClearPick) => {
+                        self.w1.clear_pick();
+                        self.w2.clear_pick();
+                    }
+                    _ => {}
+                }
+                self.w3.update(msg)
+            }
+            _ => {}
         }
     }
 
     fn view(&self) -> Element<'_, Message> {
         scrollable(
             column![
-                self.w1.view().map(|msg| Message::Plot { msg, plot_id: 1 }),
-                self.w2.view().map(|msg| Message::Plot { msg, plot_id: 2 }),
-                self.w3.view().map(|msg| Message::Plot { msg, plot_id: 3 }),
+                self.w1.view().map(|msg| Message { msg, plot_id: 1 }),
+                self.w2.view().map(|msg| Message { msg, plot_id: 2 }),
+                self.w3.view().map(|msg| Message { msg, plot_id: 3 }),
             ]
+            .padding(padding::right(10.0))
             .height(Length::Fixed(1200.0)),
         )
-        .on_scroll(Message::Scroll)
         .into()
     }
 

@@ -7,7 +7,7 @@ use crate::{
     plot_state::PlotState,
 };
 use iced::widget::shader::Viewport;
-use iced::{Rectangle, wgpu::*};
+use iced::{Rectangle, Size, wgpu::*};
 
 pub struct RenderParams<'a> {
     pub encoder: &'a mut CommandEncoder,
@@ -334,7 +334,8 @@ impl PlotRenderer {
     ) {
         let scale_factor = viewport.scale_factor();
         let (cropped_bounds, cropped_camera) =
-            crop_bounds(bounds, &state.container_bounds, &state.camera);
+            crop_bounds(bounds, &viewport.logical_size(), &state.camera);
+
         let bounds_width = (cropped_bounds.width * scale_factor) as u32;
         let bounds_height = (cropped_bounds.height * scale_factor) as u32;
 
@@ -1301,77 +1302,66 @@ fn line_style_params(style: LineStyle) -> (u32, f32) {
     }
 }
 
-// Helper to crop the bounds to the container bounds
-fn crop_bounds(
-    bounds: &Rectangle,
-    container_bounds: &Option<Rectangle>,
-    camera: &Camera,
-) -> (Rectangle, Camera) {
-    if let Some(container_bounds) = container_bounds {
-        // calculate the intersection of bounds and container_bounds (cropped visible area)
-        let plot_x_min = bounds.x;
-        let plot_x_max = bounds.x + bounds.width;
-        let plot_y_min = bounds.y;
-        let plot_y_max = bounds.y + bounds.height;
-        let container_x_min = container_bounds.x;
-        let container_x_max = container_bounds.x + container_bounds.width;
-        let container_y_min = container_bounds.y;
-        let container_y_max = container_bounds.y + container_bounds.height;
+/// Helper to crop the bounds to the container bounds.
+/// When the plot is inside a scrollable container, `bounds` represents the widget's
+/// position which may extend outside the container size. This function
+/// computes the intersection and adjusts the camera accordingly.
+fn crop_bounds(bounds: &Rectangle, container_size: &Size, camera: &Camera) -> (Rectangle, Camera) {
+    // Calculate the intersection of bounds and container_bounds (cropped visible area)
+    let new_x = bounds.x.max(0.0);
+    let new_y = bounds.y.max(0.0);
+    let new_x_max = (bounds.x + bounds.width).min(container_size.width);
+    let new_y_max = (bounds.y + bounds.height).min(container_size.height);
+    let new_width = (new_x_max - new_x).max(0.0);
+    let new_height = (new_y_max - new_y).max(0.0);
 
-        // calculate the intersection
-        let new_x = plot_x_min.max(container_x_min);
-        let new_y = plot_y_min.max(container_y_min);
-        let new_x_max = plot_x_max.min(container_x_max);
-        let new_y_max = plot_y_max.min(container_y_max);
-        let new_width = (new_x_max - new_x).max(0.0);
-        let new_height = (new_y_max - new_y).max(0.0);
+    // Create new bounds (cropped visible area)
+    let new_bounds = Rectangle {
+        x: new_x,
+        y: new_y,
+        width: new_width,
+        height: new_height,
+    };
 
-        // create new bounds (cropped visible area)
-        let new_bounds = Rectangle {
-            x: new_x,
-            y: new_y,
-            width: new_width,
-            height: new_height,
-        };
-
-        // calculate the offset between the original bounds and the new bounds (screen space)
-        // dx, dy is the offset of the cropped bounds relative to the original bounds (screen space)
-        let dx = new_x - plot_x_min;
-        let dy = new_y - plot_y_min;
-
-        // calculate the offset between the original bounds center and the new bounds center (world space)
-        // original bounds center: (plot_x_min + bounds.width/2, plot_y_min + bounds.height/2)
-        // new bounds center: (new_x + new_width/2, new_y + new_height/2)
-        // center offset: (dx + new_width/2 - bounds.width/2, dy + new_height/2 - bounds.height/2)
-        let center_offset_x = dx + new_width / 2.0 - bounds.width / 2.0;
-        let center_offset_y = dy + new_height / 2.0 - bounds.height / 2.0;
-
-        let mut new_camera = *camera;
-        // convert the screen space offset to the world space offset
-        // screen space to world space conversion: world = camera.position + (screen_offset / bounds_size) * (2 * half_extents)
-        // X direction: screen X increase -> world X increase (no flip)
-        // Y direction: screen Y increase -> world Y decrease (flip)
-        if bounds.width > 0.0 {
-            new_camera.position[0] +=
-                2.0 * center_offset_x as f64 / bounds.width as f64 * camera.half_extents.x;
-        }
-        if bounds.height > 0.0 {
-            new_camera.position[1] -=
-                2.0 * center_offset_y as f64 / bounds.height as f64 * camera.half_extents.y;
-        }
-
-        // adjust camera: keep the world space content unchanged, only adjust the display area
-        // camera.position needs to be adjusted according to the center offset
-        // camera.half_extents needs to be adjusted according to the new bounds size
-        if bounds.width > 0.0 {
-            new_camera.half_extents[0] *= new_width as f64 / bounds.width as f64;
-        }
-        if bounds.height > 0.0 {
-            new_camera.half_extents[1] *= new_height as f64 / bounds.height as f64;
-        }
-
-        (new_bounds, new_camera)
-    } else {
-        (*bounds, *camera)
+    // If bounds are fully within container, no adjustment needed
+    if new_width == bounds.width
+        && new_height == bounds.height
+        && new_x == bounds.x
+        && new_y == bounds.y
+    {
+        return (*bounds, *camera);
     }
+
+    // Calculate the offset between the original bounds and the new bounds (screen space)
+    // dx, dy is the offset of the cropped bounds relative to the original bounds
+    let dx = new_x - bounds.x;
+    let dy = new_y - bounds.y;
+
+    // Calculate the offset between the original bounds center and the new bounds center
+    let center_offset_x = dx + new_width / 2.0 - bounds.width / 2.0;
+    let center_offset_y = dy + new_height / 2.0 - bounds.height / 2.0;
+
+    let mut new_camera = *camera;
+
+    // Convert the screen space offset to the world space offset
+    // X direction: screen X increase -> world X increase (no flip)
+    // Y direction: screen Y increase -> world Y decrease (flip)
+    if bounds.width > 0.0 {
+        new_camera.position[0] +=
+            2.0 * center_offset_x as f64 / bounds.width as f64 * camera.half_extents.x;
+    }
+    if bounds.height > 0.0 {
+        new_camera.position[1] -=
+            2.0 * center_offset_y as f64 / bounds.height as f64 * camera.half_extents.y;
+    }
+
+    // Adjust camera half_extents according to the new bounds size
+    if bounds.width > 0.0 {
+        new_camera.half_extents[0] *= new_width as f64 / bounds.width as f64;
+    }
+    if bounds.height > 0.0 {
+        new_camera.half_extents[1] *= new_height as f64 / bounds.height as f64;
+    }
+
+    (new_bounds, new_camera)
 }

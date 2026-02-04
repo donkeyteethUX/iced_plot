@@ -15,7 +15,7 @@ use iced::{
     padding::{self, Padding},
     wgpu::TextureFormat,
     widget::{
-        self, container, scrollable,
+        self, container,
         shader::{self, Pipeline, Viewport},
         stack,
     },
@@ -91,8 +91,6 @@ pub struct PlotWidget {
     pub(crate) y_ticks: Vec<PositionedTick>,
     // Camera and bounds for coordinate conversion (updated when ticks are updated)
     pub(crate) camera_bounds: Option<(Camera, Rectangle)>,
-    pub(crate) container_viewport: Option<scrollable::Viewport>,
-    pub(crate) container_version: u64,
 }
 
 impl Default for PlotWidget {
@@ -143,8 +141,6 @@ impl PlotWidget {
             hovered_points: IndexMap::new(),
             cursor_ui: None,
             camera_bounds: None,
-            container_viewport: None,
-            container_version: 0,
         }
     }
 
@@ -450,12 +446,7 @@ impl PlotWidget {
         }
         changed
     }
-    /// Update the container viewport.
-    /// This should be called when the scrollable container viewport changes.
-    pub fn update_container_viewport(&mut self, viewport: scrollable::Viewport) {
-        self.container_viewport = Some(viewport);
-        self.container_version = self.container_version.wrapping_add(1);
-    }
+
     /// Handle a message sent to the plot widget.
     pub fn update(&mut self, msg: PlotUiMessage) {
         match msg {
@@ -1005,13 +996,6 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             needs_redraw |= changed;
         }
 
-        // Update the container bounds if the container viewport has changed.
-        if self.container_version != state.container_version {
-            state.container_bounds = self.container_viewport.map(|viewport| viewport.bounds());
-            state.container_version = self.container_version;
-            needs_redraw = true;
-        }
-
         if self.data_version != state.data_src_version {
             // Rebuild derived state from widget data
             state.rebuild_from_widget(self);
@@ -1089,10 +1073,6 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         }
 
         state.bounds = bounds;
-        if let Some(viewport) = &self.container_viewport {
-            state.bounds.x -= viewport.absolute_offset().x;
-            state.bounds.y -= viewport.absolute_offset().y;
-        }
         state.hover_enabled =
             self.hover_highlight_provider.is_some() || self.pick_highlight_provider.is_some();
         state.hover_radius_px = self.hover_radius_px;
