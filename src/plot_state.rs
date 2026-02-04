@@ -335,6 +335,7 @@ impl PlotState {
     pub(crate) fn handle_mouse_event(
         &mut self,
         event: Event,
+        cursor: mouse::Cursor,
         widget: &PlotWidget,
         publish_hover_pick: &mut Option<HoverPickEvent>,
     ) -> bool {
@@ -348,7 +349,11 @@ impl PlotState {
         let viewport: DVec2 = Vec2::new(self.bounds.width, self.bounds.height).into();
 
         match event {
-            Event::CursorMoved { position } => {
+            Event::CursorMoved { mut position } => {
+                if let mouse::Cursor::Available(p) | mouse::Cursor::Levitating(p) = cursor {
+                    // cursor position can consider the scrolled offset
+                    position = p;
+                }
                 // Check if the cursor is inside this widget's bounds in window space
                 let inside = self.point_inside(position.x, position.y);
 

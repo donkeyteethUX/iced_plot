@@ -1,18 +1,15 @@
 //! GPU renderer for PlotWidget.
 use crate::LineStyle;
 use crate::picking::PickingPass;
-use crate::{
-    camera::{Camera, CameraUniform},
-    grid::Grid,
-    plot_state::PlotState,
-};
+use crate::{camera::CameraUniform, grid::Grid, plot_state::PlotState};
 use iced::widget::shader::Viewport;
 use iced::{Rectangle, wgpu::*};
 
 pub struct RenderParams<'a> {
     pub encoder: &'a mut CommandEncoder,
     pub target: &'a TextureView,
-    pub bounds: Rectangle<u32>,
+    /// clip_bounds considers crop in scrollable viewport
+    pub clip_bounds: &'a Rectangle<u32>,
 }
 
 #[derive(Default, Clone)]
@@ -83,8 +80,6 @@ struct VersionTracker {
     lines: u64,
     highlight: u64,
     render_offset: glam::DVec2,
-    camera: Camera,
-    bounds_px: (u32, u32),
 }
 
 impl VersionTracker {
@@ -94,8 +89,6 @@ impl VersionTracker {
             lines: 0,
             highlight: 0,
             render_offset: glam::DVec2::ZERO,
-            camera: Camera::default(),
-            bounds_px: (0, 0),
         }
     }
 }
@@ -179,6 +172,7 @@ pub struct PlotRenderer {
     scale_factor: f32,
     bounds_w: u32,
     bounds_h: u32,
+    bounds: Rectangle,
 }
 
 impl PlotRenderer {
@@ -222,6 +216,7 @@ impl PlotRenderer {
             picking: PickingPass::default(),
             bounds_w: 0,
             bounds_h: 0,
+            bounds: Rectangle::default(),
             scale_factor: 1.0,
         }
     }
@@ -287,8 +282,6 @@ impl PlotRenderer {
         // Check if render offset changed - if so, we need to rebuild vertex buffers
         // since positions are stored relative to render_offset
         let offset_changed = self.versions.render_offset != state.camera.render_offset;
-        let camera_changed = self.versions.camera != state.camera;
-        let bounds_changed = self.versions.bounds_px != (self.bounds_w, self.bounds_h);
 
         if state.markers_version != self.versions.markers || offset_changed {
             self.rebuild_markers(device, queue, state);
@@ -304,8 +297,6 @@ impl PlotRenderer {
 
         // Update cached render offset
         self.versions.render_offset = state.camera.render_offset;
-        self.versions.camera = state.camera;
-        self.versions.bounds_px = (self.bounds_w, self.bounds_h);
 
         // Selection is rebuilt whenever it's active.
         self.rebuild_selection(device, queue, state);
@@ -313,11 +304,7 @@ impl PlotRenderer {
         // Hover/pick highlight mask boxes are baked in clip space, so they must be rebuilt
         // whenever the camera or viewport changes (zoom/pan/resize), not only when the
         // highlighted points change.
-        if state.highlight_version != self.versions.highlight
-            || offset_changed
-            || camera_changed
-            || bounds_changed
-        {
+        if state.highlight_version != self.versions.highlight || offset_changed {
             self.rebuild_highlight(device, queue, state);
             self.versions.highlight = state.highlight_version;
         }
@@ -336,6 +323,7 @@ impl PlotRenderer {
         bounds: &Rectangle,
         state: &PlotState,
     ) {
+        self.bounds = *bounds;
         let scale_factor = viewport.scale_factor();
         let bounds_width = (bounds.width * scale_factor) as u32;
         let bounds_height = (bounds.height * scale_factor) as u32;
@@ -1111,10 +1099,10 @@ impl PlotRenderer {
 
     pub fn encode(&self, params: RenderParams) {
         // Convert bounds to viewport coordinates
-        let x = params.bounds.x as f32;
-        let y = params.bounds.y as f32;
-        let width = params.bounds.width as f32;
-        let height = params.bounds.height as f32;
+        let x = self.bounds.x * self.scale_factor;
+        let y = self.bounds.y * self.scale_factor;
+        let width = self.bounds.width * self.scale_factor;
+        let height = self.bounds.height * self.scale_factor;
 
         // Main pass (grid, lines, markers)
         {
@@ -1137,10 +1125,10 @@ impl PlotRenderer {
             // Set viewport and scissor to respect bounds
             pass.set_viewport(x, y, width, height, 0.0, 1.0);
             pass.set_scissor_rect(
-                params.bounds.x,
-                params.bounds.y,
-                params.bounds.width,
-                params.bounds.height,
+                params.clip_bounds.x,
+                params.clip_bounds.y,
+                params.clip_bounds.width,
+                params.clip_bounds.height,
             );
 
             // grid
@@ -1208,10 +1196,10 @@ impl PlotRenderer {
             // Set viewport and scissor for selection overlay as well
             pass.set_viewport(x, y, width, height, 0.0, 1.0);
             pass.set_scissor_rect(
-                params.bounds.x,
-                params.bounds.y,
-                params.bounds.width,
-                params.bounds.height,
+                params.clip_bounds.x,
+                params.clip_bounds.y,
+                params.clip_bounds.width,
+                params.clip_bounds.height,
             );
 
             pass.set_pipeline(pipeline);
@@ -1256,10 +1244,10 @@ impl PlotRenderer {
             // Set viewport and scissor for crosshairs overlay
             pass.set_viewport(x, y, width, height, 0.0, 1.0);
             pass.set_scissor_rect(
-                params.bounds.x,
-                params.bounds.y,
-                params.bounds.width,
-                params.bounds.height,
+                params.clip_bounds.x,
+                params.clip_bounds.y,
+                params.clip_bounds.width,
+                params.clip_bounds.height,
             );
 
             pass.set_pipeline(pipeline);
