@@ -136,6 +136,8 @@ impl PlotWidgetBuilder {
     /// Disable the in-canvas controls/help UI (`?` button + panel).
     ///
     /// Useful if your application provides its own help UI or you want a cleaner canvas.
+    ///
+    /// When controls/help UI is disabled, you still can toggle help overlay by calling `PlotWidget.update(PlotUiMessage::ToggleControlsOverlay)`
     pub fn disable_controls_help(mut self) -> Self {
         self.disable_controls_help = true;
         self
@@ -303,7 +305,6 @@ impl PlotWidgetBuilder {
         let mut w = PlotWidget::new();
         if self.disable_controls_help {
             w.controls_help_enabled = false;
-            w.controls_overlay_open = false;
         }
         if self.disable_legend {
             w.legend_enabled = false;

@@ -453,9 +453,7 @@ impl PlotWidget {
                 self.legend_collapsed = !self.legend_collapsed;
             }
             PlotUiMessage::ToggleControlsOverlay => {
-                if self.controls_help_enabled {
-                    self.controls_overlay_open = !self.controls_overlay_open;
-                }
+                self.controls_overlay_open = !self.controls_overlay_open;
             }
             PlotUiMessage::ToggleSeriesVisibility(id) => {
                 self.toggle_visibility(&id);
@@ -839,7 +837,7 @@ impl PlotWidget {
         has_legend: bool,
         scroll_enabled: bool,
     ) -> Option<Element<'_, PlotUiMessage>> {
-        if !self.controls_help_enabled || !self.controls_overlay_open {
+        if !self.controls_overlay_open {
             return None;
         }
 
