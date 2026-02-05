@@ -1188,8 +1188,10 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             //
             // We do so on the first update, if autoscale_on_updates is enabled, or if
             // limits have been manually set.
-            if self.autoscale_on_updates || state.data_src_version == 0 || limits_changed {
-                state.autoscale();
+            let init_axis_links = state.data_src_version == 0;
+            if self.autoscale_on_updates || init_axis_links || limits_changed {
+                // Initial autoscale shouldn't update axis links.
+                state.autoscale(!init_axis_links);
             }
 
             state.data_src_version = self.data_version;
@@ -1197,7 +1199,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         } else if limits_changed {
             state.x_lim = self.x_lim;
             state.y_lim = self.y_lim;
-            state.autoscale();
+            state.autoscale(true);
             effects.needs_redraw = true;
         }
 

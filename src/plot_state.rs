@@ -247,7 +247,7 @@ impl PlotState {
         self.lines_version = self.lines_version.wrapping_add(1);
     }
 
-    pub(crate) fn autoscale(&mut self) {
+    pub(crate) fn autoscale(&mut self, update_axis_links: bool) {
         // Use user-specified limits if available, otherwise use data bounds
         let mut min_v = DVec2::new(-1.0, -1.0);
         let mut max_v = DVec2::new(1.0, 1.0);
@@ -268,7 +268,9 @@ impl PlotState {
         }
 
         self.camera.set_bounds(min_v, max_v, 0.05);
-        self.update_axis_links();
+        if update_axis_links {
+            self.update_axis_links();
+        }
     }
 
     pub(crate) fn update_ticks(
@@ -421,7 +423,7 @@ impl PlotState {
                 };
                 self.last_click_time = Some(now);
                 if double {
-                    self.autoscale();
+                    self.autoscale(true);
                     needs_redraw = true;
                 } else {
                     if self.hover_enabled && !self.pan.active && !self.selection.active {
