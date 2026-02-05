@@ -847,7 +847,7 @@ impl PlotWidget {
             txt("Left-drag: pan"),
             txt("Right-drag: box zoom"),
             txt("Ctrl + scroll: zoom at cursor"),
-            scroll_enabled.then(|| txt("Scroll: pan (vertical/horizontal)")),
+            scroll_enabled.then(|| txt("Scroll: pan")),
             txt("Double-click: reset / autoscale"),
             txt("Left-click point: pick"),
             txt("Esc: clear picked points"),
