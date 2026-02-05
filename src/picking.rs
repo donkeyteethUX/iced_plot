@@ -1,25 +1,254 @@
-//! GPU-based hover picking using an offscreen ID buffer and tiny readback.
-//!
-//! This module owns the picking render pipeline, ID render target, and a small
-//! request/result registry keyed by widget instance_id. The flow is:
-//! - The widget submits a PickRequest on cursor move.
-//! - During renderer prepare_frame, we render marker IDs into an R32Uint texture,
-//!   copy a tiny region around the cursor into a staging buffer, map and scan it,
-//!   then publish a PickResult.
-
+//! Implements picking for the plot widget.
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, OnceLock},
 };
 
+use glam::{DVec2, Vec2};
+use iced::Rectangle;
 use iced::wgpu::*;
 
-use crate::{Point, PointId, plot_state::SeriesSpan};
+use crate::{MarkerSize, Point, PointId, camera::Camera, plot_state::SeriesSpan};
 
-// ---- Public API to the widget ----
+/// Threshold for number of points above which GPU picking is used instead of CPU picking.
+pub(crate) const CPU_PICK_THRESHOLD: usize = 5000;
+
+// ---- API to the plot widget ----
+
+/// Tracks CPU/GPU picking state for a plot widget.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PickingState {
+    /// Last hover hit, if any.
+    pub(crate) last_hover_cache: Option<PointId>,
+
+    /// When set, the matching GPU result is interpreted as a *pick* (click)
+    /// instead of a hover.
+    pending_gpu_pick_seq: Option<u64>,
+
+    /// Last submitted GPU request sequence number
+    pick_seq: u64,
+
+    /// Last processed GPU result sequence number
+    pick_result_seq: u64,
+}
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PickRequest {
+pub(crate) enum HoverRequest {
+    /// Immediate CPU result.
+    CpuHit(PointId),
+    /// Immediate CPU miss.
+    CpuMiss,
+    /// GPU request was submitted; result will arrive in a later frame.
+    RequestedGpu,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum GpuResultEvent {
+    Hover(PointId),
+    HoverMiss,
+    Pick(PointId),
+}
+
+impl PickingState {
+    fn submit_gpu_request(&mut self, instance_id: u64, cursor: Vec2, radius_px: f32) {
+        self.pick_seq = self.pick_seq.wrapping_add(1);
+        submit_request(
+            instance_id,
+            GpuPickRequest {
+                cursor_x: cursor.x,
+                cursor_y: cursor.y,
+                radius_px,
+                seq: self.pick_seq,
+            },
+        );
+    }
+
+    /// Request hover picking for the current cursor position.
+    ///
+    /// CPU vs GPU is decided internally based on point count.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn request_hover(
+        &mut self,
+        instance_id: u64,
+        cursor: Vec2,
+        hover_radius_px: f32,
+        points: &[Point],
+        series: &[SeriesSpan],
+        camera: &Camera,
+        bounds: &Rectangle,
+        valid_point_id: impl Fn(&PointId) -> bool,
+    ) -> HoverRequest {
+        if points.len() < CPU_PICK_THRESHOLD {
+            if let Some(point) =
+                cpu_pick_hit(points, series, camera, bounds, cursor, hover_radius_px)
+                && valid_point_id(&point)
+            {
+                self.last_hover_cache = Some(point);
+                HoverRequest::CpuHit(point)
+            } else {
+                HoverRequest::CpuMiss
+            }
+        } else {
+            self.submit_gpu_request(instance_id, cursor, hover_radius_px);
+            HoverRequest::RequestedGpu
+        }
+    }
+
+    /// Request a click-to-pick hit at the current cursor position.
+    ///
+    /// Returns an immediate hit when using cache/CPU. For GPU, submits a request and returns None.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn request_pick_hit(
+        &mut self,
+        instance_id: u64,
+        cursor: Vec2,
+        hover_radius_px: f32,
+        points: &[Point],
+        series: &[SeriesSpan],
+        camera: &Camera,
+        bounds: &Rectangle,
+        valid_point_id: impl Fn(&PointId) -> bool,
+    ) -> Option<PointId> {
+        if let Some(point) = self.last_hover_cache
+            && valid_point_id(&point)
+        {
+            return Some(point);
+        }
+
+        if points.len() < CPU_PICK_THRESHOLD {
+            if let Some(point) =
+                cpu_pick_hit(points, series, camera, bounds, cursor, hover_radius_px)
+                && valid_point_id(&point)
+            {
+                return Some(point);
+            }
+        } else {
+            self.submit_gpu_request(instance_id, cursor, hover_radius_px);
+            // Mark this seq as a pick request.
+            self.pending_gpu_pick_seq = Some(self.pick_seq);
+        }
+        None
+    }
+
+    /// Consume and interpret a GPU pick result (if available).
+    pub(crate) fn consume_gpu_result(
+        &mut self,
+        instance_id: u64,
+        valid_point_id: impl Fn(&PointId) -> bool,
+    ) -> Option<GpuResultEvent> {
+        let res = take_result(instance_id)?;
+        if res.seq <= self.pick_result_seq {
+            return None;
+        }
+
+        let mut out = None;
+
+        if self.pending_gpu_pick_seq == Some(res.seq) {
+            self.pending_gpu_pick_seq = None;
+            if let Some(point) = res.hit
+                && valid_point_id(&point)
+            {
+                out = Some(GpuResultEvent::Pick(point));
+            }
+        } else if let Some(point) = res.hit
+            && valid_point_id(&point)
+        {
+            self.last_hover_cache = Some(point);
+            out = Some(GpuResultEvent::Hover(point));
+        } else {
+            out = Some(GpuResultEvent::HoverMiss);
+        }
+
+        self.pick_result_seq = res.seq;
+        out
+    }
+
+    pub(crate) fn has_outstanding_gpu_request(&self) -> bool {
+        self.pick_seq > self.pick_result_seq
+    }
+}
+
+fn marker_center_world(pt: &Point) -> DVec2 {
+    let mut world = DVec2::new(pt.position[0], pt.position[1]);
+    if pt.size_mode == crate::point::MARKER_SIZE_WORLD {
+        let half = pt.size as f64 * 0.5;
+        world.x += half;
+        world.y += half;
+    }
+    world
+}
+
+fn cpu_pick_hit(
+    points: &[Point],
+    series: &[SeriesSpan],
+    camera: &Camera,
+    bounds: &Rectangle,
+    cursor: Vec2,
+    hover_radius_px: f32,
+) -> Option<PointId> {
+    if points.is_empty() || series.is_empty() {
+        return None;
+    }
+
+    let width = bounds.width.max(1.0) as f64;
+    let height = bounds.height.max(1.0) as f64;
+    let cursor_x = cursor.x as f64;
+    let cursor_y = cursor.y as f64;
+
+    let mut span_idx = 0usize;
+    let mut span_start = 0usize;
+    let mut best: Option<(usize, f64)> = None;
+
+    for (idx, pt) in points.iter().enumerate() {
+        while span_idx < series.len() && idx >= span_start + series[span_idx].len {
+            span_start += series[span_idx].len;
+            span_idx += 1;
+        }
+        if span_idx >= series.len() {
+            break;
+        }
+
+        let world = marker_center_world(pt);
+        let ndc_x = (world.x - camera.position.x) / camera.half_extents.x;
+        let ndc_y = (world.y - camera.position.y) / camera.half_extents.y;
+        let screen_x = (ndc_x + 1.0) * 0.5 * width;
+        let screen_y = (1.0 - ndc_y) * 0.5 * height;
+
+        let dx = screen_x - cursor_x;
+        let dy = screen_y - cursor_y;
+        let d2 = dx * dx + dy * dy;
+        let marker_px = MarkerSize::marker_size_px(pt.size, pt.size_mode, camera, bounds) as f64;
+        let radius = hover_radius_px as f64 + marker_px * 0.5;
+        if d2 <= radius * radius {
+            if let Some((_, best_d2)) = best {
+                if d2 < best_d2 {
+                    best = Some((idx, d2));
+                }
+            } else {
+                best = Some((idx, d2));
+            }
+        }
+    }
+
+    let (best_idx, _) = best?;
+    let mut span_idx = 0usize;
+    let mut span_start = 0usize;
+    while span_idx < series.len() && best_idx >= span_start + series[span_idx].len {
+        span_start += series[span_idx].len;
+        span_idx += 1;
+    }
+    let span = series.get(span_idx)?;
+    let local_idx = best_idx - span_start;
+    Some(PointId {
+        series_id: span.id,
+        point_index: local_idx,
+    })
+}
+
+// ---- GPU picking ----
+
+#[derive(Debug, Clone, Copy)]
+struct GpuPickRequest {
     pub cursor_x: f32,  // logical px in widget local coordinates
     pub cursor_y: f32,  // logical px in widget local coordinates
     pub radius_px: f32, // logical px
@@ -27,15 +256,15 @@ pub(crate) struct PickRequest {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct PickResult {
+struct GpuPickResult {
     pub seq: u64,
     pub hit: Option<PointId>,
 }
 
 #[derive(Default)]
 struct InstanceEntry {
-    latest_req: Option<PickRequest>,
-    latest_res: Option<PickResult>,
+    latest_req: Option<GpuPickRequest>,
+    latest_res: Option<GpuPickResult>,
 }
 
 static REGISTRY: OnceLock<Mutex<HashMap<u64, InstanceEntry>>> = OnceLock::new();
@@ -44,7 +273,7 @@ fn registry() -> &'static Mutex<HashMap<u64, InstanceEntry>> {
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub(crate) fn submit_request(instance_id: u64, req: PickRequest) {
+fn submit_request(instance_id: u64, req: GpuPickRequest) {
     let mut map = registry().lock().unwrap();
     let entry = map.entry(instance_id).or_default();
     // Replace if newer
@@ -53,17 +282,17 @@ pub(crate) fn submit_request(instance_id: u64, req: PickRequest) {
     }
 }
 
-pub(crate) fn take_result(instance_id: u64) -> Option<PickResult> {
+fn take_result(instance_id: u64) -> Option<GpuPickResult> {
     let mut map = registry().lock().unwrap();
     map.get_mut(&instance_id).and_then(|e| e.latest_res.take())
 }
 
-fn take_latest_request(instance_id: u64) -> Option<PickRequest> {
+fn take_latest_request(instance_id: u64) -> Option<GpuPickRequest> {
     let mut map = registry().lock().unwrap();
     map.get_mut(&instance_id).and_then(|e| e.latest_req.take())
 }
 
-fn publish_result(instance_id: u64, res: PickResult) {
+fn publish_result(instance_id: u64, res: GpuPickResult) {
     let mut map = registry().lock().unwrap();
     let entry = map.entry(instance_id).or_default();
     if entry.latest_res.as_ref().is_none_or(|r| r.seq < res.seq) {
@@ -157,7 +386,7 @@ impl PickingPass {
         if marker_vb.is_none() || marker_instances == 0 {
             publish_result(
                 instance_id,
-                PickResult {
+                GpuPickResult {
                     seq: req.seq,
                     hit: None,
                 },
@@ -332,7 +561,7 @@ impl PickingPass {
 
         publish_result(
             pending.instance_id,
-            PickResult {
+            GpuPickResult {
                 seq: pending.seq,
                 hit,
             },

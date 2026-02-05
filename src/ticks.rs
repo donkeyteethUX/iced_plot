@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::grid::TickWeight;
 
 /// A tick with an assigned screen position.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PositionedTick {
     /// Screen position (x for vertical ticks, y for horizontal ticks)
     pub screen_pos: f32,
@@ -12,7 +12,7 @@ pub struct PositionedTick {
 }
 
 /// A position along an axis where a grid line and tick label is placed.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tick {
     /// The value at this tick in world coordinates
     pub value: f64,

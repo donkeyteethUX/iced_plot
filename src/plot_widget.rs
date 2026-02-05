@@ -23,8 +23,8 @@ use iced::{
 use indexmap::IndexMap;
 
 use crate::{
-    HLine, HoverPickEvent, MarkerSize, MarkerStyle, PlotUiMessage, Point, PointId, Series,
-    TooltipContext, VLine, axes_labels,
+    HLine, HoverPickEvent, MarkerSize, MarkerStyle, PlotUiMessage, PointId, Series, TooltipContext,
+    VLine, axes_labels,
     axis_link::AxisLink,
     camera::Camera,
     legend::{self, LegendEntry},
@@ -36,13 +36,14 @@ use crate::{
     ticks::{self, PositionedTick, TickFormatter, TickProducer},
 };
 
-pub type CursorProvider = Arc<dyn Fn(f64, f64) -> String + Send + Sync>;
+pub(crate) type CursorProvider = Arc<dyn Fn(f64, f64) -> String + Send + Sync>;
+
 /// Provider for highlighting a point.
 ///
 /// Modifies the highlight point in mutable reference.
 ///
 /// Returns the tooltip text to display for the point, if any.
-pub type HighlightPointProvider =
+pub(crate) type HighlightPointProvider =
     Arc<dyn Fn(TooltipContext<'_>, &mut HighlightPoint) -> Option<String> + Send + Sync>;
 
 /// A plot widget that renders data series with interactive features.
@@ -148,7 +149,7 @@ impl PlotWidget {
     /// If there exists a series with the same `item.id` ([ShapeId]), the old one will be replaced.
     pub fn add_series(&mut self, item: Series) -> Result<(), SeriesError> {
         item.validate()?;
-        _ = self.series.insert(item.id, item);
+        self.series.insert(item.id, item);
         self.data_version += 1;
         Ok(())
     }
@@ -959,6 +960,181 @@ impl std::fmt::Debug for Primitive {
     }
 }
 
+#[derive(Default, Debug)]
+struct UpdateEffects {
+    needs_redraw: bool,
+    hover_pick: Option<HoverPickEvent>,
+    cursor_ui: Option<CursorPositionUiPayload>,
+    clear_cursor_position: bool,
+    /// Request publishing `camera_bounds` even when ticks didn't change.
+    /// This is used to keep tooltip overlays in sync when tick producers are disabled.
+    publish_camera_bounds: bool,
+}
+
+fn widget_has_any_tooltips(widget: &PlotWidget) -> bool {
+    widget
+        .hovered_points
+        .values()
+        .chain(widget.picked_points.values())
+        .any(|(_, tooltip)| tooltip.is_some())
+}
+
+fn clear_hover_effect(widget: &PlotWidget, state: &mut PlotState, effects: &mut UpdateEffects) {
+    let should_clear_hover =
+        state.picking.last_hover_cache.is_some() || !widget.hovered_points.is_empty();
+
+    if effects.hover_pick.is_none() && should_clear_hover {
+        state.picking.last_hover_cache = None;
+        effects.hover_pick = Some(HoverPickEvent::ClearHover);
+    }
+}
+
+fn maybe_submit_hover_request(
+    widget: &PlotWidget,
+    state: &mut PlotState,
+    effects: &mut UpdateEffects,
+) {
+    if !state.hover_enabled || state.pan.active || state.selection.active {
+        return;
+    }
+    if !state.cursor_inside() {
+        clear_hover_effect(widget, state, effects);
+        return;
+    }
+
+    if effects.hover_pick.is_some() {
+        return;
+    }
+
+    let PlotState {
+        picking: pick_state,
+        cursor_position,
+        hover_radius_px,
+        points,
+        series,
+        camera,
+        bounds,
+        ..
+    } = state;
+
+    match pick_state.request_hover(
+        widget.instance_id,
+        *cursor_position,
+        *hover_radius_px,
+        points.as_ref(),
+        series.as_ref(),
+        camera,
+        bounds,
+        |pid| widget.valid_point_id(pid),
+    ) {
+        picking::HoverRequest::CpuHit(point) => {
+            effects.hover_pick = Some(HoverPickEvent::Hover(point));
+        }
+        picking::HoverRequest::CpuMiss => {
+            clear_hover_effect(widget, state, effects);
+        }
+        picking::HoverRequest::RequestedGpu => {
+            // Keep drawing until the result arrives.
+            effects.needs_redraw = true;
+        }
+    }
+}
+
+fn update_cursor_overlay_on_move(
+    widget: &PlotWidget,
+    state: &PlotState,
+    effects: &mut UpdateEffects,
+) {
+    if !widget.cursor_overlay {
+        return;
+    }
+    if state.cursor_inside() {
+        let viewport = Vec2::new(state.bounds.width, state.bounds.height);
+        let world = state.camera.screen_to_world(
+            DVec2::new(
+                state.cursor_position.x as f64,
+                state.cursor_position.y as f64,
+            ),
+            DVec2::new(viewport.x as f64, viewport.y as f64),
+        );
+        let text = if let Some(p) = &widget.cursor_provider {
+            (p)(world.x, world.y)
+        } else {
+            format!("{:.4}, {:.4}", world.x, world.y)
+        };
+
+        effects.cursor_ui = Some(CursorPositionUiPayload {
+            x: world.x,
+            y: world.y,
+            text,
+        });
+    } else {
+        effects.clear_cursor_position = true;
+    }
+}
+
+fn consume_gpu_pick_results(
+    widget: &PlotWidget,
+    state: &mut PlotState,
+    effects: &mut UpdateEffects,
+) {
+    if !state.hover_enabled || state.points.len() < picking::CPU_PICK_THRESHOLD {
+        return;
+    }
+
+    if effects.hover_pick.is_some() {
+        return;
+    }
+
+    match state
+        .picking
+        .consume_gpu_result(widget.instance_id, |pid| widget.valid_point_id(pid))
+    {
+        Some(picking::GpuResultEvent::Pick(point)) => {
+            effects.hover_pick = Some(HoverPickEvent::Pick(point));
+        }
+        Some(picking::GpuResultEvent::Hover(point)) => {
+            effects.hover_pick = Some(HoverPickEvent::Hover(point));
+        }
+        Some(picking::GpuResultEvent::HoverMiss) => {
+            clear_hover_effect(widget, state, effects);
+        }
+        None => {}
+    }
+}
+
+fn update_ticks_and_build_payload(
+    widget: &PlotWidget,
+    state: &mut PlotState,
+    effects: &mut UpdateEffects,
+) -> (Option<Vec<PositionedTick>>, Option<Vec<PositionedTick>>) {
+    if !effects.needs_redraw {
+        return (None, None);
+    }
+
+    let old_x = state.x_ticks.clone();
+    let old_y = state.y_ticks.clone();
+    state.update_ticks(
+        widget.x_tick_producer.as_ref(),
+        widget.y_tick_producer.as_ref(),
+    );
+
+    let publish_x = (state.x_ticks != old_x).then(|| state.x_ticks.clone());
+    let publish_y = (state.y_ticks != old_y).then(|| state.y_ticks.clone());
+
+    // If tick producers are disabled, ticks might never change. Still publish camera/bounds
+    // when tooltips exist so the widget can keep tooltip screen positions in sync.
+    if publish_x.is_none()
+        && publish_y.is_none()
+        && widget_has_any_tooltips(widget)
+        && widget.camera_bounds != Some((state.camera, state.bounds))
+    {
+        effects.publish_camera_bounds = true;
+    }
+
+    (publish_x, publish_y)
+}
+
 impl shader::Program<PlotUiMessage> for PlotWidget {
     type State = PlotState;
     type Primitive = Primitive;
@@ -981,16 +1157,20 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<shader::Action<PlotUiMessage>> {
-        let mut needs_redraw = false;
-        let mut publish_hover_pick: Option<HoverPickEvent> = None;
-        let mut publish_cursor: Option<CursorPositionUiPayload> = None;
-        let mut clear_cursor_position = false;
+        let mut effects = UpdateEffects::default();
+
+        // Keep these in sync early, since other phases depend on them.
+        state.bounds = bounds;
+        state.hover_enabled =
+            self.hover_highlight_provider.is_some() || self.pick_highlight_provider.is_some();
+        state.hover_radius_px = self.hover_radius_px;
+        state.crosshairs_enabled = self.crosshairs_enabled;
 
         // Sync highlight overlay data without rebuilding plot geometry.
         if self.highlight_version != state.highlight_src_version {
             let changed = state.sync_highlighted_points_from_widget(self);
             state.highlight_src_version = self.highlight_version;
-            needs_redraw |= changed;
+            effects.needs_redraw |= changed;
         }
 
         // Check if limits have been manually set. This will always trigger an "autoscale"
@@ -1001,32 +1181,8 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             // Rebuild derived state from widget data
             state.rebuild_from_widget(self);
 
-            // Submit a picking request if we have a cursor position and hover is enabled
-            if state.hover_enabled && !state.pan.active && !state.selection.active {
-                let inside = state.cursor_inside();
-                if inside {
-                    if state.points.len() < CPU_PICK_THRESHOLD {
-                        if let Some(point) = cpu_pick_hit(state)
-                            && self.valid_point_id(&point)
-                        {
-                            publish_hover_pick = Some(HoverPickEvent::Hover(point));
-                        } else if !self.hovered_points.is_empty() {
-                            publish_hover_pick = Some(HoverPickEvent::ClearHover);
-                        }
-                    } else {
-                        state.pick_seq = state.pick_seq.wrapping_add(1);
-                        picking::submit_request(
-                            self.instance_id,
-                            crate::picking::PickRequest {
-                                cursor_x: state.cursor_position.x,
-                                cursor_y: state.cursor_position.y,
-                                radius_px: state.hover_radius_px,
-                                seq: state.pick_seq,
-                            },
-                        );
-                    }
-                }
-            }
+            // Refresh hover after data updates when appropriate.
+            maybe_submit_hover_request(self, state, &mut effects);
 
             // Data has changed, so we may need to autoscale.
             //
@@ -1037,12 +1193,12 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             }
 
             state.data_src_version = self.data_version;
-            needs_redraw = true;
+            effects.needs_redraw = true;
         } else if limits_changed {
             state.x_lim = self.x_lim;
             state.y_lim = self.y_lim;
             state.autoscale();
-            needs_redraw = true;
+            effects.needs_redraw = true;
         }
 
         // Check if axis links have been updated by other plots
@@ -1053,7 +1209,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                 state.camera.position.x = position;
                 state.camera.half_extents.x = half_extent;
                 state.x_link_version = version;
-                needs_redraw = true;
+                effects.needs_redraw = true;
             }
         }
         if let Some(ref link) = state.y_axis_link {
@@ -1063,104 +1219,35 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                 state.camera.position.y = position;
                 state.camera.half_extents.y = half_extent;
                 state.y_link_version = version;
-                needs_redraw = true;
+                effects.needs_redraw = true;
             }
         }
 
-        state.bounds = bounds;
-        state.hover_enabled =
-            self.hover_highlight_provider.is_some() || self.pick_highlight_provider.is_some();
-        state.hover_radius_px = self.hover_radius_px;
-        state.crosshairs_enabled = self.crosshairs_enabled;
-
-        // viewport size (screen pixels for this widget)
-        let viewport = Vec2::new(state.bounds.width, state.bounds.height);
-
         match event {
             iced::Event::Mouse(mouse_event) => {
-                needs_redraw |=
-                    state.handle_mouse_event(*mouse_event, cursor, self, &mut publish_hover_pick);
+                effects.needs_redraw |=
+                    state.handle_mouse_event(*mouse_event, cursor, self, &mut effects.hover_pick);
 
-                // If cursor moved and hover enabled, submit a GPU pick request
-                if let iced::mouse::Event::CursorMoved { .. } = mouse_event
-                    && state.hover_enabled
-                    && !state.pan.active
-                    && !state.selection.active
-                {
-                    // Only submit pick request if cursor is within widget bounds
-                    let inside = state.cursor_inside();
-                    if inside {
-                        if state.points.len() < CPU_PICK_THRESHOLD {
-                            if let Some(point) = cpu_pick_hit(state)
-                                && self.valid_point_id(&point)
-                            {
-                                publish_hover_pick = Some(HoverPickEvent::Hover(point));
-                            } else if !self.hovered_points.is_empty() {
-                                // Moved but not over any point - clear hover
-                                publish_hover_pick = Some(HoverPickEvent::ClearHover);
-                            }
-                        } else {
-                            picking::submit_request(
-                                self.instance_id,
-                                crate::picking::PickRequest {
-                                    cursor_x: state.cursor_position.x,
-                                    cursor_y: state.cursor_position.y,
-                                    radius_px: state.hover_radius_px,
-                                    seq: state.pick_seq,
-                                },
-                            );
-
-                            // Increment pick sequence number to track the outstanding request.
-                            state.pick_seq = state.pick_seq.wrapping_add(1);
-                        }
-                    } else if !self.hovered_points.is_empty() {
-                        // Cursor left bounds - clear hover
-                        publish_hover_pick = Some(HoverPickEvent::ClearHover);
+                match mouse_event {
+                    iced::mouse::Event::CursorMoved { .. } => {
+                        maybe_submit_hover_request(self, state, &mut effects);
+                        update_cursor_overlay_on_move(self, state, &mut effects);
                     }
-                    // Publish cursor overlay updates when enabled
-                    if self.cursor_overlay {
-                        if inside {
-                            let world = state.camera.screen_to_world(
-                                DVec2::new(
-                                    state.cursor_position.x as f64,
-                                    state.cursor_position.y as f64,
-                                ),
-                                DVec2::new(viewport.x as f64, viewport.y as f64),
-                            );
-                            let text = if let Some(p) = &self.cursor_provider {
-                                (p)(world.x, world.y)
-                            } else {
-                                format!("{:.4}, {:.4}", world.x, world.y)
-                            };
-
-                            publish_cursor = Some(CursorPositionUiPayload {
-                                x: world.x,
-                                y: world.y,
-                                text,
-                            });
-                        } else {
-                            clear_cursor_position = true;
-                        }
+                    iced::mouse::Event::CursorLeft => {
+                        clear_hover_effect(self, state, &mut effects);
                     }
-                }
-
-                // Handle cursor leave
-                if let iced::mouse::Event::CursorLeft = mouse_event
-                    && !self.hovered_points.is_empty()
-                {
-                    publish_hover_pick = Some(HoverPickEvent::ClearHover);
+                    _ => {}
                 }
             }
-            // CursorLeft is handled inside the Mouse(...) branch above via state.handle_mouse_event
             iced::Event::Keyboard(keyboard_event) => {
                 if let keyboard::Event::KeyPressed {
                     key: keyboard::Key::Named(keyboard::key::Named::Escape),
                     ..
                 } = keyboard_event
                 {
-                    publish_hover_pick = Some(HoverPickEvent::ClearPick);
+                    effects.hover_pick = Some(HoverPickEvent::ClearPick);
                 }
-                needs_redraw |= state.handle_keyboard_event(keyboard_event);
+                effects.needs_redraw |= state.handle_keyboard_event(keyboard_event);
             }
             _ => {}
         }
@@ -1168,75 +1255,30 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         if let Some(aspect) = self.data_aspect
             && apply_data_aspect(&mut state.camera, &state.bounds, aspect)
         {
-            needs_redraw = true;
+            effects.needs_redraw = true;
         }
 
         // Process picking results after event handling (works for both mouse events and data updates)
-        if state.hover_enabled && state.points.len() >= CPU_PICK_THRESHOLD {
-            // Try to consume a GPU pick result for this instance
-            if let Some(res) = picking::take_result(self.instance_id) {
-                // Only process if this result is newer than the last processed one
-                if res.seq > state.pick_result_seq {
-                    // Only process GPU pick results if we haven't already set publish_hover_pick (e.g., from ESC key)
-                    if publish_hover_pick.is_none() {
-                        // Check if this is a select request
-                        if state.pending_gpu_pick_seq == Some(res.seq) {
-                            state.pending_gpu_pick_seq = None;
-                            // Process as select
-                            if let Some(point) = res.hit
-                                && self.valid_point_id(&point)
-                            {
-                                publish_hover_pick = Some(HoverPickEvent::Pick(point));
-                            }
-                        } else {
-                            // Process as hover
-                            if let Some(point) = res.hit
-                                && self.valid_point_id(&point)
-                            {
-                                // Update hover cache
-                                state.last_hover_cache = Some(point);
-                                publish_hover_pick = Some(HoverPickEvent::Hover(point));
-                            } else {
-                                // Moved but not over any point - clear hover
-                                if state.last_hover_cache.is_some()
-                                    || !self.hovered_points.is_empty()
-                                {
-                                    state.last_hover_cache = None;
-                                    publish_hover_pick = Some(HoverPickEvent::ClearHover);
-                                }
-                            }
-                        }
-                    }
-                    // Always update pick_result_seq to mark this result as processed, even if we skipped processing
-                    state.pick_result_seq = res.seq;
-                }
-            }
-        }
+        consume_gpu_pick_results(self, state, &mut effects);
 
         // If we have an outstanding GPU pick request, keep drawing until the result arrives.
-        needs_redraw |= state.pick_seq > state.pick_result_seq;
+        effects.needs_redraw |= state.picking.has_outstanding_gpu_request();
 
-        let mut publish_x_ticks = None;
-        let mut publish_y_ticks = None;
+        let (publish_x_ticks, publish_y_ticks) =
+            update_ticks_and_build_payload(self, state, &mut effects);
 
-        if needs_redraw {
-            // If we need to redraw, there's a good chance we need to update the ticks.
-            state.update_ticks(self.x_tick_producer.as_ref(), self.y_tick_producer.as_ref());
-            publish_x_ticks = Some(state.x_ticks.clone());
-            publish_y_ticks = Some(state.y_ticks.clone());
-        }
-
-        let needs_publish = publish_hover_pick.is_some()
-            || publish_cursor.is_some()
+        let needs_publish = effects.hover_pick.is_some()
+            || effects.cursor_ui.is_some()
             || publish_x_ticks.is_some()
             || publish_y_ticks.is_some()
-            || clear_cursor_position;
+            || effects.clear_cursor_position
+            || effects.publish_camera_bounds;
 
         if needs_publish {
-            // Include camera and bounds info when we have a hover/pick event or when ticks are updated
-            let camera_bounds = if publish_hover_pick.is_some()
+            let camera_bounds = if effects.hover_pick.is_some()
                 || publish_x_ticks.is_some()
                 || publish_y_ticks.is_some()
+                || effects.publish_camera_bounds
             {
                 Some((state.camera, state.bounds))
             } else {
@@ -1245,9 +1287,9 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
 
             return Some(shader::Action::publish(PlotUiMessage::RenderUpdate(
                 PlotRenderUpdate {
-                    hover_pick: publish_hover_pick,
-                    clear_cursor_position,
-                    cursor_position_ui: publish_cursor,
+                    hover_pick: effects.hover_pick,
+                    clear_cursor_position: effects.clear_cursor_position,
+                    cursor_position_ui: effects.cursor_ui,
                     x_ticks: publish_x_ticks,
                     y_ticks: publish_y_ticks,
                     camera_bounds,
@@ -1255,7 +1297,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             )));
         }
 
-        needs_redraw.then(shader::Action::request_redraw)
+        effects.needs_redraw.then(shader::Action::request_redraw)
     }
 
     fn mouse_interaction(
@@ -1269,7 +1311,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             Interaction::Grabbing
         } else if state.selection.active {
             Interaction::Crosshair
-        } else if state.last_hover_cache.is_some() {
+        } else if state.picking.last_hover_cache.is_some() {
             Interaction::Pointer
         } else {
             Interaction::None
@@ -1320,70 +1362,6 @@ impl shader::Primitive for Primitive {
     }
 }
 
-/// Threshold for number of points above which GPU picking is used instead of CPU picking.
-const CPU_PICK_THRESHOLD: usize = 5000;
-
-fn cpu_pick_hit(state: &PlotState) -> Option<PointId> {
-    if state.points.is_empty() || state.series.is_empty() {
-        return None;
-    }
-
-    let width = state.bounds.width.max(1.0) as f64;
-    let height = state.bounds.height.max(1.0) as f64;
-    let cursor_x = state.cursor_position.x as f64;
-    let cursor_y = state.cursor_position.y as f64;
-
-    let mut span_idx = 0usize;
-    let mut span_start = 0usize;
-    let mut best: Option<(usize, f64)> = None;
-
-    for (idx, pt) in state.points.iter().enumerate() {
-        while span_idx < state.series.len() && idx >= span_start + state.series[span_idx].len {
-            span_start += state.series[span_idx].len;
-            span_idx += 1;
-        }
-        if span_idx >= state.series.len() {
-            break;
-        }
-
-        let world = marker_center_world(pt);
-        let ndc_x = (world.x - state.camera.position.x) / state.camera.half_extents.x;
-        let ndc_y = (world.y - state.camera.position.y) / state.camera.half_extents.y;
-        let screen_x = (ndc_x + 1.0) * 0.5 * width;
-        let screen_y = (1.0 - ndc_y) * 0.5 * height;
-
-        let dx = screen_x - cursor_x;
-        let dy = screen_y - cursor_y;
-        let d2 = dx * dx + dy * dy;
-        let marker_px =
-            MarkerSize::marker_size_px(pt.size, pt.size_mode, &state.camera, &state.bounds) as f64;
-        let radius = state.hover_radius_px as f64 + marker_px * 0.5;
-        if d2 <= radius * radius {
-            if let Some((_, best_d2)) = best {
-                if d2 < best_d2 {
-                    best = Some((idx, d2));
-                }
-            } else {
-                best = Some((idx, d2));
-            }
-        }
-    }
-
-    let (best_idx, _) = best?;
-    let mut span_idx = 0usize;
-    let mut span_start = 0usize;
-    while span_idx < state.series.len() && best_idx >= span_start + state.series[span_idx].len {
-        span_start += state.series[span_idx].len;
-        span_idx += 1;
-    }
-    let span = state.series.get(span_idx)?;
-    let local_idx = best_idx - span_start;
-    Some(PointId {
-        series_id: span.id,
-        point_index: local_idx,
-    })
-}
-
 impl PlotWidget {
     /// Check if the point index is valid for the series
     fn valid_point_id(&self, point_id: &PointId) -> bool {
@@ -1392,16 +1370,6 @@ impl PlotWidget {
             .map(|series| point_id.point_index < series.positions.len())
             .unwrap_or(false)
     }
-}
-
-fn marker_center_world(pt: &Point) -> DVec2 {
-    let mut world = DVec2::new(pt.position[0], pt.position[1]);
-    if pt.size_mode == crate::point::MARKER_SIZE_WORLD {
-        let half = pt.size as f64 * 0.5;
-        world.x += half;
-        world.y += half;
-    }
-    world
 }
 
 fn apply_data_aspect(camera: &mut Camera, bounds: &Rectangle, aspect: f64) -> bool {
@@ -1417,32 +1385,27 @@ fn apply_data_aspect(camera: &mut Camera, bounds: &Rectangle, aspect: f64) -> bo
 
 impl PlotWidget {
     pub(crate) fn pick_hit(&self, state: &mut PlotState) -> Option<PointId> {
-        if let Some(point) = state.last_hover_cache
-            && self.valid_point_id(&point)
-        {
-            return Some(point);
-        }
-        if state.points.len() < CPU_PICK_THRESHOLD {
-            if let Some(point) = cpu_pick_hit(state)
-                && self.valid_point_id(&point)
-            {
-                return Some(point);
-            }
-        } else {
-            state.pick_seq = state.pick_seq.wrapping_add(1);
-            let seq = state.pick_seq;
-            state.pending_gpu_pick_seq = Some(seq);
-            picking::submit_request(
-                self.instance_id,
-                crate::picking::PickRequest {
-                    cursor_x: state.cursor_position.x,
-                    cursor_y: state.cursor_position.y,
-                    radius_px: state.hover_radius_px,
-                    seq,
-                },
-            );
-        }
-        None
+        let PlotState {
+            picking: pick_state,
+            cursor_position,
+            hover_radius_px,
+            points,
+            series,
+            camera,
+            bounds,
+            ..
+        } = state;
+
+        pick_state.request_pick_hit(
+            self.instance_id,
+            *cursor_position,
+            *hover_radius_px,
+            points.as_ref(),
+            series.as_ref(),
+            camera,
+            bounds,
+            |pid| self.valid_point_id(pid),
+        )
     }
 }
 

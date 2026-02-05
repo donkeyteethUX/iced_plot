@@ -8,9 +8,9 @@ use iced::{
 };
 
 use crate::{
-    AxisLink, HLine, HoverPickEvent, LineStyle, MarkerSize, PlotWidget, Point, PointId, ShapeId,
-    VLine,
+    AxisLink, HLine, HoverPickEvent, LineStyle, MarkerSize, PlotWidget, Point, ShapeId, VLine,
     camera::Camera,
+    picking::PickingState,
     plot_widget::{HighlightPoint, world_to_screen_position_x, world_to_screen_position_y},
     ticks::{PositionedTick, TickFormatter, TickProducer},
 };
@@ -60,11 +60,7 @@ pub struct PlotState {
     // Hover/picking internals
     pub(crate) hover_enabled: bool,
     pub(crate) hover_radius_px: f32,
-    pub(crate) last_hover_cache: Option<PointId>,
-    // Track if we're waiting for a select picking result
-    pub(crate) pending_gpu_pick_seq: Option<u64>,
-    pub(crate) pick_seq: u64,
-    pub(crate) pick_result_seq: u64,
+    pub(crate) picking: PickingState,
     pub(crate) crosshairs_enabled: bool,
     pub(crate) crosshairs_position: Vec2,
     pub(crate) x_axis_formatter: Option<TickFormatter>,
@@ -103,10 +99,7 @@ impl Default for PlotState {
             highlight_version: 0,
             hover_enabled: true,
             hover_radius_px: 8.0,
-            last_hover_cache: None,
-            pending_gpu_pick_seq: None,
-            pick_seq: 0,
-            pick_result_seq: 0,
+            picking: PickingState::default(),
             crosshairs_enabled: false,
             crosshairs_position: Vec2::ZERO,
             x_axis_formatter: None,
@@ -393,8 +386,8 @@ impl PlotState {
                 if !self.pan.active && !self.selection.active && self.hover_enabled {
                     if !inside {
                         // If cursor leaves this widget, clear hover state for this widget only
-                        if self.last_hover_cache.is_some() {
-                            self.last_hover_cache = None;
+                        if self.picking.last_hover_cache.is_some() {
+                            self.picking.last_hover_cache = None;
                             // Redraw once to clear hover halo overlay
                             needs_redraw = true;
                         }
@@ -408,8 +401,8 @@ impl PlotState {
             }
             Event::CursorLeft => {
                 // Clear hover state on leave and request a redraw to clear hover halo
-                if self.last_hover_cache.is_some() {
-                    self.last_hover_cache = None;
+                if self.picking.last_hover_cache.is_some() {
+                    self.picking.last_hover_cache = None;
                     needs_redraw = true;
                 }
             }
