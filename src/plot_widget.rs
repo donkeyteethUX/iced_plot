@@ -979,7 +979,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         state: &mut Self::State,
         event: &iced::Event,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> Option<shader::Action<PlotUiMessage>> {
         let mut needs_redraw = false;
         let mut publish_hover_pick: Option<HoverPickEvent> = None;
@@ -1083,7 +1083,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         match event {
             iced::Event::Mouse(mouse_event) => {
                 needs_redraw |=
-                    state.handle_mouse_event(*mouse_event, self, &mut publish_hover_pick);
+                    state.handle_mouse_event(*mouse_event, cursor, self, &mut publish_hover_pick);
 
                 // If cursor moved and hover enabled, submit a GPU pick request
                 if let iced::mouse::Event::CursorMoved { .. } = mouse_event
@@ -1303,7 +1303,6 @@ impl shader::Primitive for Primitive {
             .renderers
             .entry(self.instance_id)
             .or_insert_with(|| PlotRenderer::new(device, queue, renderer_state.format));
-
         renderer.prepare_frame(device, queue, viewport, bounds, &self.plot_widget);
         renderer.service_picking(self.instance_id, device, queue, &self.plot_widget);
     }
@@ -1319,7 +1318,7 @@ impl shader::Primitive for Primitive {
             renderer.encode(RenderParams {
                 encoder,
                 target,
-                bounds: *clip_bounds,
+                clip_bounds,
             });
         }
     }

@@ -11,7 +11,8 @@ use iced_plot::{AxisLink, LineStyle, MarkerStyle, Series, ShapeId};
 
 use iced::Color;
 use iced::Element;
-use iced::widget::column;
+use iced::Length;
+use iced::widget::{column, scrollable};
 
 fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
@@ -133,11 +134,14 @@ impl App {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        column![
-            self.w1.view().map(|msg| Message { msg, plot_id: 1 }),
-            self.w2.view().map(|msg| Message { msg, plot_id: 2 }),
-            self.w3.view().map(|msg| Message { msg, plot_id: 3 }),
-        ]
+        scrollable(
+            column![
+                self.w1.view().map(|msg| Message { msg, plot_id: 1 }),
+                self.w2.view().map(|msg| Message { msg, plot_id: 2 }),
+                self.w3.view().map(|msg| Message { msg, plot_id: 3 }),
+            ]
+            .height(Length::Fixed(1200.0)),
+        )
         .into()
     }
 
@@ -155,12 +159,14 @@ impl App {
         let s1 = Series::line_only(positions, LineStyle::Solid).with_label("sine_line_only");
         let s1_id = s1.id;
         let w1 = PlotWidgetBuilder::new()
+            .disable_scroll_to_pan()
             .with_hover_highlight_provider(Self::hover_highlight_provider)
             .with_pick_highlight_provider(Self::pick_highlight_provider)
             .with_x_lim(-1.0, 10.0) // Set x-axis limits
             .with_y_lim(-2.0, 2.0) // Set y-axis limits
             .with_x_axis_link(x_link.clone()) // Link the x-axis
             .add_series(s1)
+            .with_crosshairs(true)
             .build()
             .unwrap();
 
@@ -176,11 +182,13 @@ impl App {
             .with_color([0.9, 0.3, 0.3]);
         let s2_id = s2.id;
         let w2 = PlotWidgetBuilder::new()
+            .disable_scroll_to_pan()
             .with_hover_highlight_provider(Self::hover_highlight_provider)
             .with_pick_highlight_provider(Self::pick_highlight_provider)
             .with_x_axis_link(x_link.clone()) // Link the x-axis
             .with_x_tick_formatter(|_| String::new()) // Remove tick labels
             .with_y_tick_formatter(|_| String::new())
+            .with_crosshairs(true)
             .add_series(s2)
             .build()
             .unwrap();
@@ -201,9 +209,11 @@ impl App {
         .with_color([0.3, 0.9, 0.3]);
         let s3_id = s3.id;
         let w3 = PlotWidgetBuilder::new()
+            .disable_scroll_to_pan()
             .with_hover_highlight_provider(Self::hover_highlight_provider)
             .with_pick_highlight_provider(Self::pick_highlight_provider)
             .with_x_axis_link(x_link.clone()) // Link the x-axis
+            .with_crosshairs(true)
             .add_series(s3)
             .without_grid() // Disable grid lines and ticks
             .build()
