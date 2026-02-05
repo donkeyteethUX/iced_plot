@@ -61,7 +61,6 @@ pub struct PlotState {
     pub(crate) hover_enabled: bool,
     pub(crate) hover_radius_px: f32,
     pub(crate) last_hover_cache: Option<PointId>,
-    pub(crate) hover_version: u64,
     // Track if we're waiting for a select picking result
     pub(crate) pending_gpu_pick_seq: Option<u64>,
     pub(crate) pick_seq: u64,
@@ -105,7 +104,6 @@ impl Default for PlotState {
             hover_enabled: true,
             hover_radius_px: 8.0,
             last_hover_cache: None,
-            hover_version: 0,
             pending_gpu_pick_seq: None,
             pick_seq: 0,
             pick_result_seq: 0,
@@ -397,7 +395,6 @@ impl PlotState {
                         // If cursor leaves this widget, clear hover state for this widget only
                         if self.last_hover_cache.is_some() {
                             self.last_hover_cache = None;
-                            self.hover_version = self.hover_version.wrapping_add(1);
                             // Redraw once to clear hover halo overlay
                             needs_redraw = true;
                         }
@@ -413,7 +410,6 @@ impl PlotState {
                 // Clear hover state on leave and request a redraw to clear hover halo
                 if self.last_hover_cache.is_some() {
                     self.last_hover_cache = None;
-                    self.hover_version = self.hover_version.wrapping_add(1);
                     needs_redraw = true;
                 }
             }

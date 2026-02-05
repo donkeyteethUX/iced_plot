@@ -1001,10 +1001,6 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             // Rebuild derived state from widget data
             state.rebuild_from_widget(self);
 
-            // Invalidate hover cache when data changes so hover/pick can be recomputed
-            state.last_hover_cache = None;
-            state.hover_version = state.hover_version.wrapping_add(1);
-
             // Submit a picking request if we have a cursor position and hover is enabled
             if state.hover_enabled && !state.pan.active && !state.selection.active {
                 let inside = state.cursor_inside();
