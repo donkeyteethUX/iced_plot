@@ -1,6 +1,6 @@
 use iced::{Rectangle, keyboard, mouse};
 
-use crate::{series::ShapeId, ticks::PositionedTick};
+use crate::{camera::Camera, series::ShapeId, ticks::PositionedTick};
 
 /// Messages sent by the plot widget to the application.
 ///
@@ -160,39 +160,22 @@ pub struct PlotCoordinateSnapshot {
 impl PlotCoordinateSnapshot {
     /// Convert a plot-local screen position to world coordinates.
     pub fn screen_to_world(&self, screen: [f32; 2]) -> [f64; 2] {
-        let screen_size = [self.bounds.width as f64, self.bounds.height as f64];
-        let ndc_x = (screen[0] as f64 / screen_size[0]) * 2.0 - 1.0;
-        let ndc_y = -((screen[1] as f64 / screen_size[1]) * 2.0 - 1.0);
-        let effective_position = [
-            self.camera_position[0] - self.camera_render_offset[0],
-            self.camera_position[1] - self.camera_render_offset[1],
-        ];
-        let render_pos = [
-            effective_position[0] + ndc_x * self.camera_half_extents[0],
-            effective_position[1] + ndc_y * self.camera_half_extents[1],
-        ];
-        [
-            render_pos[0] + self.camera_render_offset[0],
-            render_pos[1] + self.camera_render_offset[1],
-        ]
+        let camera = Camera::from_parts(
+            self.camera_position,
+            self.camera_half_extents,
+            self.camera_render_offset,
+        );
+        camera.screen_to_world_from_bounds(screen, self.bounds)
     }
 
     /// Convert world coordinates to plot-local screen coordinates.
     pub fn world_to_screen(&self, world: [f64; 2]) -> Option<[f32; 2]> {
-        let ndc_x = (world[0] - self.camera_position[0]) / self.camera_half_extents[0];
-        let ndc_y = (world[1] - self.camera_position[1]) / self.camera_half_extents[1];
-        let screen_x = (ndc_x as f32 + 1.0) * 0.5 * self.bounds.width;
-        let screen_y = (1.0 - ndc_y as f32) * 0.5 * self.bounds.height;
-
-        if screen_x < 0.0
-            || screen_x > self.bounds.width
-            || screen_y < 0.0
-            || screen_y > self.bounds.height
-        {
-            None
-        } else {
-            Some([screen_x, screen_y])
-        }
+        let camera = Camera::from_parts(
+            self.camera_position,
+            self.camera_half_extents,
+            self.camera_render_offset,
+        );
+        camera.world_to_screen_with_bounds(world, self.bounds)
     }
 }
 

@@ -1680,35 +1680,3 @@ impl HighlightPoint {
         }
     }
 }
-
-/// Convert world position to screen position
-pub(crate) fn world_to_screen_position_x(
-    x: f64,
-    camera: &Camera,
-    bounds: &Rectangle,
-) -> Option<f32> {
-    let ndc_x = (x - camera.position.x) / camera.half_extents.x;
-    let screen_x = (ndc_x as f32 + 1.0) * 0.5 * bounds.width;
-
-    if screen_x < 0.0 || screen_x > bounds.width {
-        None
-    } else {
-        Some(screen_x)
-    }
-}
-
-/// Convert world position to screen position
-pub(crate) fn world_to_screen_position_y(
-    y: f64,
-    camera: &Camera,
-    bounds: &Rectangle,
-) -> Option<f32> {
-    let ndc_y = (y - camera.position.y) / camera.half_extents.y;
-    let screen_y = (1.0 - ndc_y as f32) * 0.5 * bounds.height;
-
-    if screen_y < 0.0 || screen_y > bounds.height {
-        None
-    } else {
-        Some(screen_y)
-    }
-}

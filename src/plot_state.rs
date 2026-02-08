@@ -8,7 +8,7 @@ use crate::{
     ShapeId, VLine,
     camera::Camera,
     picking::PickingState,
-    plot_widget::{HighlightPoint, world_to_screen_position_x, world_to_screen_position_y},
+    plot_widget::HighlightPoint,
     ticks::{PositionedTick, TickFormatter, TickProducer},
 };
 
@@ -287,10 +287,14 @@ impl PlotState {
         self.x_ticks.clear();
         for tick in x_tick_values {
             // Convert world position to screen position
-            if let Some(screen_pos) =
-                world_to_screen_position_x(tick.value, &self.camera, &self.bounds)
+            if let Some([screen_x, _]) = self
+                .camera
+                .world_to_screen_with_bounds([tick.value, self.camera.position.y], self.bounds)
             {
-                self.x_ticks.push(PositionedTick { screen_pos, tick });
+                self.x_ticks.push(PositionedTick {
+                    screen_pos: screen_x,
+                    tick,
+                });
             }
         }
 
@@ -306,10 +310,14 @@ impl PlotState {
         self.y_ticks.clear();
         for tick in y_tick_values {
             // Convert world position to screen position
-            if let Some(screen_pos) =
-                world_to_screen_position_y(tick.value, &self.camera, &self.bounds)
+            if let Some([_, screen_y]) = self
+                .camera
+                .world_to_screen_with_bounds([self.camera.position.x, tick.value], self.bounds)
             {
-                self.y_ticks.push(PositionedTick { screen_pos, tick });
+                self.y_ticks.push(PositionedTick {
+                    screen_pos: screen_y,
+                    tick,
+                });
             }
         }
     }

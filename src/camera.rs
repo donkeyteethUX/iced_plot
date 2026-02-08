@@ -1,4 +1,5 @@
 use glam::{DVec2, Mat4, Vec3};
+use iced::Rectangle;
 
 const EPSILON_SMALL: f64 = 1e-6;
 
@@ -58,6 +59,17 @@ pub(crate) struct Camera {
 }
 
 impl Camera {
+    pub(crate) fn from_parts(
+        position: [f64; 2],
+        half_extents: [f64; 2],
+        render_offset: [f64; 2],
+    ) -> Self {
+        Self {
+            position: DVec2::new(position[0], position[1]),
+            half_extents: DVec2::new(half_extents[0], half_extents[1]),
+            render_offset: DVec2::new(render_offset[0], render_offset[1]),
+        }
+    }
     pub(crate) fn new(width: u32, height: u32) -> Self {
         const INITIAL_ZOOM: f64 = 1.0;
         let aspect = width as f64 / height as f64;
@@ -101,6 +113,17 @@ impl Camera {
         render_pos + self.render_offset
     }
 
+    pub(crate) fn screen_to_world_from_bounds(
+        &self,
+        screen: [f32; 2],
+        bounds: Rectangle,
+    ) -> [f64; 2] {
+        let screen_pos = DVec2::new(screen[0] as f64, screen[1] as f64);
+        let screen_size = DVec2::new(bounds.width as f64, bounds.height as f64);
+        let world = self.screen_to_world(screen_pos, screen_size);
+        [world.x, world.y]
+    }
+
     /// Get the effective camera position relative to the render offset
     pub fn effective_position(&self) -> DVec2 {
         self.position - self.render_offset
@@ -114,6 +137,28 @@ impl Camera {
             self.effective_position().x + ndc_x * self.half_extents.x,
             self.effective_position().y + ndc_y * self.half_extents.y,
         )
+    }
+
+    pub(crate) fn world_to_screen_unclipped(&self, world: [f64; 2], bounds: Rectangle) -> [f32; 2] {
+        let ndc_x = (world[0] - self.position.x) / self.half_extents.x;
+        let ndc_y = (world[1] - self.position.y) / self.half_extents.y;
+        let screen_x = (ndc_x as f32 + 1.0) * 0.5 * bounds.width;
+        let screen_y = (1.0 - ndc_y as f32) * 0.5 * bounds.height;
+        [screen_x, screen_y]
+    }
+
+    pub(crate) fn world_to_screen_with_bounds(
+        &self,
+        world: [f64; 2],
+        bounds: Rectangle,
+    ) -> Option<[f32; 2]> {
+        let [screen_x, screen_y] = self.world_to_screen_unclipped(world, bounds);
+
+        if screen_x < 0.0 || screen_x > bounds.width || screen_y < 0.0 || screen_y > bounds.height {
+            None
+        } else {
+            Some([screen_x, screen_y])
+        }
     }
 
     /// Set camera bounds without changing the render offset
