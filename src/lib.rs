@@ -44,7 +44,10 @@ pub use iced::Color;
 // Re-exports of public types.
 pub use axis_link::AxisLink;
 pub use grid::TickWeight;
-pub use message::{HoverPickEvent, PlotUiMessage, PointId, TooltipContext};
+pub use message::{
+    HoverPickEvent, InputPolicy, PlotCommand, PlotCoordinateSnapshot, PlotEvent, PlotInputEvent,
+    PlotPointerEvent, PlotUiMessage, PointId, TooltipContext,
+};
 pub use plot_widget::{HighlightPoint, PlotWidget};
 pub use plot_widget_builder::PlotWidgetBuilder;
 pub use point::{MarkerType, Point};

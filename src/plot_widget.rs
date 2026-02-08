@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -23,12 +23,15 @@ use iced::{
 use indexmap::IndexMap;
 
 use crate::{
-    HLine, HoverPickEvent, MarkerSize, MarkerStyle, PlotUiMessage, PointId, Series, TooltipContext,
-    VLine, axes_labels,
+    HLine, HoverPickEvent, InputPolicy, MarkerSize, MarkerStyle, PlotCommand, PlotEvent,
+    PlotInputEvent, PlotPointerEvent, PlotUiMessage, PointId, Series, TooltipContext, VLine,
+    axes_labels,
     axis_link::AxisLink,
     camera::Camera,
     legend::{self, LegendEntry},
-    message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
+    message::{
+        CursorPositionUiPayload, PlotCoordinateSnapshot, PlotRenderUpdate, TooltipUiPayload,
+    },
     picking,
     plot_renderer::{PlotRenderer, RenderParams},
     plot_state::PlotState,
@@ -82,6 +85,8 @@ pub struct PlotWidget {
     pub(crate) tick_label_size: f32,
     pub(crate) axis_label_size: f32,
     pub(crate) data_aspect: Option<f64>,
+    pub(crate) input_policy: InputPolicy,
+    pub(crate) command_queue: Arc<Mutex<Vec<PlotCommand>>>,
     // UI state
     /// Map of picked point id to highlight point data & tooltip text.
     pub(crate) picked_points: IndexMap<PointId, (HighlightPoint, Option<TooltipUiPayload>)>,
@@ -91,7 +96,7 @@ pub struct PlotWidget {
     pub(crate) x_ticks: Vec<PositionedTick>,
     pub(crate) y_ticks: Vec<PositionedTick>,
     // Camera and bounds for coordinate conversion (updated when ticks are updated)
-    pub(crate) camera_bounds: Option<(Camera, Rectangle)>,
+    pub(crate) camera_bounds: Option<PlotCoordinateSnapshot>,
 }
 
 impl Default for PlotWidget {
@@ -136,6 +141,8 @@ impl PlotWidget {
             tick_label_size: 10.0,
             axis_label_size: 16.0,
             data_aspect: None,
+            input_policy: InputPolicy::Default,
+            command_queue: Arc::new(Mutex::new(Vec::new())),
             x_ticks: Vec::new(),
             y_ticks: Vec::new(),
             picked_points: IndexMap::new(),
@@ -162,6 +169,18 @@ impl PlotWidget {
             self.data_aspect = None;
         }
         self.data_version = self.data_version.wrapping_add(1);
+    }
+
+    /// Set the input handling policy for the plot widget.
+    pub fn set_input_policy(&mut self, policy: InputPolicy) {
+        self.input_policy = policy;
+    }
+
+    /// Enqueue a plot command for the renderer to apply.
+    pub fn enqueue_command(&mut self, command: PlotCommand) {
+        if let Ok(mut queue) = self.command_queue.lock() {
+            queue.push(command);
+        }
     }
 
     /// Remove a data series from the plot by its ID.
@@ -244,17 +263,9 @@ impl PlotWidget {
     /// Similar to how PositionedTick calculates screen position
     fn world_to_screen_position(
         world: [f64; 2],
-        camera_bounds: &(Camera, Rectangle),
+        camera_bounds: &PlotCoordinateSnapshot,
     ) -> Option<[f32; 2]> {
-        let (camera, bounds) = camera_bounds;
-        if let (Some(screen_x), Some(screen_y)) = (
-            world_to_screen_position_x(world[0], camera, bounds),
-            world_to_screen_position_y(world[1], camera, bounds),
-        ) {
-            Some([screen_x, screen_y])
-        } else {
-            None
-        }
+        camera_bounds.world_to_screen(world)
     }
 
     /// Compute the world-space anchor point for a tooltip.
@@ -459,53 +470,58 @@ impl PlotWidget {
             PlotUiMessage::ToggleSeriesVisibility(id) => {
                 self.toggle_visibility(&id);
             }
-            PlotUiMessage::RenderUpdate(payload) => {
-                // Update camera and bounds when ticks are updated (camera changed)
-                if let Some(camera_bounds) = payload.camera_bounds
-                    && self.camera_bounds != Some(camera_bounds)
-                {
-                    self.camera_bounds = Some(camera_bounds);
-                    // Update tooltip positions when camera/bounds change
-                    self.update_tooltip_positions();
-                }
+            PlotUiMessage::Event(event) => {
+                if let Some(payload) = event.render {
+                    // Update camera and bounds when ticks are updated (camera changed)
+                    if let Some(camera_bounds) = payload.camera_bounds
+                        && self.camera_bounds != Some(camera_bounds)
+                    {
+                        self.camera_bounds = Some(camera_bounds);
+                        // Update tooltip positions when camera/bounds change
+                        self.update_tooltip_positions();
+                    }
 
-                let highlight_changed = match payload.hover_pick {
-                    Some(HoverPickEvent::Hover(point_id)) => {
-                        self.hovered_points.clear();
-                        self.handle_hover_pick::<false>(point_id)
-                    }
-                    Some(HoverPickEvent::Pick(point_id)) => {
-                        self.handle_hover_pick::<true>(point_id)
-                    }
-                    Some(HoverPickEvent::ClearHover) => {
-                        let highlight_changed = !self.hovered_points.is_empty();
-                        self.hovered_points.clear();
-                        highlight_changed
-                    }
-                    Some(HoverPickEvent::ClearPick) => {
-                        let highlight_changed = !self.picked_points.is_empty();
-                        self.picked_points.clear();
-                        highlight_changed
-                    }
-                    _ => false,
-                };
+                    let highlight_changed = match payload.hover_pick {
+                        Some(HoverPickEvent::Hover(point_id)) => {
+                            self.hovered_points.clear();
+                            self.handle_hover_pick::<false>(point_id)
+                        }
+                        Some(HoverPickEvent::Pick(point_id)) => {
+                            self.handle_hover_pick::<true>(point_id)
+                        }
+                        Some(HoverPickEvent::ClearHover) => {
+                            let highlight_changed = !self.hovered_points.is_empty();
+                            self.hovered_points.clear();
+                            highlight_changed
+                        }
+                        Some(HoverPickEvent::ClearPick) => {
+                            let highlight_changed = !self.picked_points.is_empty();
+                            self.picked_points.clear();
+                            highlight_changed
+                        }
+                        _ => false,
+                    };
 
-                // Trigger data version update to rebuild highlighted_points in PlotState
-                if highlight_changed {
-                    self.highlight_version = self.highlight_version.wrapping_add(1);
+                    // Trigger data version update to rebuild highlighted_points in PlotState
+                    if highlight_changed {
+                        self.highlight_version = self.highlight_version.wrapping_add(1);
+                    }
+                    if payload.clear_cursor_position {
+                        self.cursor_ui = None;
+                    }
+                    if let Some(c) = payload.cursor_position_ui {
+                        self.cursor_ui = Some(c);
+                    }
+                    if let Some(ticks) = payload.x_ticks {
+                        self.x_ticks = ticks;
+                    }
+                    if let Some(ticks) = payload.y_ticks {
+                        self.y_ticks = ticks;
+                    }
                 }
-                if payload.clear_cursor_position {
-                    self.cursor_ui = None;
-                }
-                if let Some(c) = payload.cursor_position_ui {
-                    self.cursor_ui = Some(c);
-                }
-                if let Some(ticks) = payload.x_ticks {
-                    self.x_ticks = ticks;
-                }
-                if let Some(ticks) = payload.y_ticks {
-                    self.y_ticks = ticks;
-                }
+            }
+            PlotUiMessage::Command(command) => {
+                self.enqueue_command(command);
             }
         }
     }
@@ -699,7 +715,7 @@ impl PlotWidget {
 
     fn view_tooltip_overlay<'a>(
         payload: &'a TooltipUiPayload,
-        camera_bounds: &Option<(Camera, Rectangle)>,
+        camera_bounds: &Option<PlotCoordinateSnapshot>,
     ) -> Option<Element<'a, PlotUiMessage>> {
         use container::Style;
         const TOOLTIP_ALPHA: f32 = 0.7;
@@ -735,7 +751,8 @@ impl PlotWidget {
 
         // flip the tooltip if the point is outside this percentage of the bounds
         const FLIP_PCT: f32 = 0.8;
-        if let Some((_, bounds)) = &camera_bounds {
+        if let Some(camera_bounds) = &camera_bounds {
+            let bounds = &camera_bounds.bounds;
             if screen_y > bounds.height * FLIP_PCT {
                 // flip the tooltip to the bottom aligned
                 top = 0.0;
@@ -964,6 +981,7 @@ impl std::fmt::Debug for Primitive {
 struct UpdateEffects {
     needs_redraw: bool,
     hover_pick: Option<HoverPickEvent>,
+    input_event: Option<PlotInputEvent>,
     cursor_ui: Option<CursorPositionUiPayload>,
     clear_cursor_position: bool,
     /// Request publishing `camera_bounds` even when ticks didn't change.
@@ -1073,6 +1091,215 @@ fn update_cursor_overlay_on_move(
     }
 }
 
+fn build_pointer_event(
+    state: &PlotState,
+    bounds: Rectangle,
+    cursor: mouse::Cursor,
+) -> PlotPointerEvent {
+    let (screen_x, screen_y) = match cursor {
+        mouse::Cursor::Available(p) | mouse::Cursor::Levitating(p) => (p.x, p.y),
+        mouse::Cursor::Unavailable => (
+            bounds.x + state.cursor_position.x,
+            bounds.y + state.cursor_position.y,
+        ),
+    };
+    let local_x = screen_x - bounds.x;
+    let local_y = screen_y - bounds.y;
+    let inside = state.point_inside(local_x, local_y);
+    let world = if inside {
+        let viewport = DVec2::new(bounds.width as f64, bounds.height as f64);
+        let world = state
+            .camera
+            .screen_to_world(DVec2::new(local_x as f64, local_y as f64), viewport);
+        Some([world.x, world.y])
+    } else {
+        None
+    };
+    PlotPointerEvent {
+        screen: [screen_x, screen_y],
+        local: [local_x, local_y],
+        inside,
+        world,
+        modifiers: state.modifiers,
+    }
+}
+
+fn build_input_event(
+    mouse_event: mouse::Event,
+    state: &PlotState,
+    bounds: Rectangle,
+    cursor: mouse::Cursor,
+) -> PlotInputEvent {
+    let mut pointer = build_pointer_event(state, bounds, cursor);
+    match mouse_event {
+        mouse::Event::CursorMoved { .. } => PlotInputEvent::CursorMoved(pointer),
+        mouse::Event::CursorEntered => PlotInputEvent::CursorEntered(pointer),
+        mouse::Event::CursorLeft => {
+            pointer.inside = false;
+            pointer.world = None;
+            PlotInputEvent::CursorLeft(pointer)
+        }
+        mouse::Event::ButtonPressed(button) => PlotInputEvent::ButtonPressed { button, pointer },
+        mouse::Event::ButtonReleased(button) => PlotInputEvent::ButtonReleased { button, pointer },
+        mouse::Event::WheelScrolled { delta } => PlotInputEvent::WheelScrolled { delta, pointer },
+    }
+}
+
+fn apply_command(
+    widget: &PlotWidget,
+    state: &mut PlotState,
+    command: PlotCommand,
+    effects: &mut UpdateEffects,
+) -> bool {
+    let mut needs_redraw = false;
+    match command {
+        PlotCommand::ApplyDefaultMouseEvent(input) => {
+            let (mouse_event, cursor) = match input {
+                PlotInputEvent::CursorMoved(pointer) => (
+                    {
+                        state.modifiers = pointer.modifiers;
+                        mouse::Event::CursorMoved {
+                            position: iced::Point::new(pointer.screen[0], pointer.screen[1]),
+                        }
+                    },
+                    mouse::Cursor::Available(iced::Point::new(
+                        pointer.screen[0],
+                        pointer.screen[1],
+                    )),
+                ),
+                PlotInputEvent::CursorEntered(pointer) => (
+                    {
+                        state.modifiers = pointer.modifiers;
+                        mouse::Event::CursorEntered
+                    },
+                    mouse::Cursor::Available(iced::Point::new(
+                        pointer.screen[0],
+                        pointer.screen[1],
+                    )),
+                ),
+                PlotInputEvent::CursorLeft(pointer) => (
+                    {
+                        state.modifiers = pointer.modifiers;
+                        mouse::Event::CursorLeft
+                    },
+                    mouse::Cursor::Available(iced::Point::new(
+                        pointer.screen[0],
+                        pointer.screen[1],
+                    )),
+                ),
+                PlotInputEvent::ButtonPressed { button, pointer } => (
+                    {
+                        state.modifiers = pointer.modifiers;
+                        mouse::Event::ButtonPressed(button)
+                    },
+                    mouse::Cursor::Available(iced::Point::new(
+                        pointer.screen[0],
+                        pointer.screen[1],
+                    )),
+                ),
+                PlotInputEvent::ButtonReleased { button, pointer } => (
+                    {
+                        state.modifiers = pointer.modifiers;
+                        mouse::Event::ButtonReleased(button)
+                    },
+                    mouse::Cursor::Available(iced::Point::new(
+                        pointer.screen[0],
+                        pointer.screen[1],
+                    )),
+                ),
+                PlotInputEvent::WheelScrolled { delta, pointer } => (
+                    {
+                        state.modifiers = pointer.modifiers;
+                        mouse::Event::WheelScrolled { delta }
+                    },
+                    mouse::Cursor::Available(iced::Point::new(
+                        pointer.screen[0],
+                        pointer.screen[1],
+                    )),
+                ),
+            };
+
+            needs_redraw |= state.handle_mouse_event(
+                mouse_event,
+                cursor,
+                widget,
+                &mut effects.hover_pick,
+                true,
+            );
+
+            match mouse_event {
+                mouse::Event::CursorMoved { .. } | mouse::Event::CursorEntered => {
+                    maybe_submit_hover_request(widget, state, effects);
+                    update_cursor_overlay_on_move(widget, state, effects);
+                }
+                mouse::Event::CursorLeft => {
+                    clear_hover_effect(widget, state, effects);
+                }
+                _ => {}
+            }
+        }
+        PlotCommand::PanByWorld { delta } => {
+            state.camera.position.x += delta[0];
+            state.camera.position.y += delta[1];
+            state.update_axis_links();
+            needs_redraw = true;
+        }
+        PlotCommand::ZoomBy {
+            factor,
+            anchor_world,
+        } => {
+            let factor = if factor.is_finite() && factor > 0.0 {
+                factor
+            } else {
+                1.0
+            };
+            let anchor = anchor_world
+                .map(|a| DVec2::new(a[0], a[1]))
+                .unwrap_or(state.camera.position);
+            let delta = state.camera.position - anchor;
+            state.camera.half_extents *= factor;
+            state.camera.position = anchor + delta * factor;
+            state.update_axis_links();
+            needs_redraw = true;
+        }
+        PlotCommand::ZoomToWorldRect {
+            min,
+            max,
+            padding_frac,
+        } => {
+            state.camera.set_bounds_preserve_offset(
+                DVec2::new(min[0], min[1]),
+                DVec2::new(max[0], max[1]),
+                padding_frac,
+            );
+            state.update_axis_links();
+            needs_redraw = true;
+        }
+        PlotCommand::Autoscale { update_axis_links } => {
+            state.autoscale(update_axis_links);
+            needs_redraw = true;
+        }
+        PlotCommand::ClearHover => {
+            clear_hover_effect(widget, state, effects);
+            needs_redraw = true;
+        }
+        PlotCommand::ClearPick => {
+            effects.hover_pick = Some(HoverPickEvent::ClearPick);
+            needs_redraw = true;
+        }
+        PlotCommand::RequestHover => {
+            maybe_submit_hover_request(widget, state, effects);
+        }
+        PlotCommand::RequestPick => {
+            if let Some(point_id) = widget.pick_hit(state) {
+                effects.hover_pick = Some(HoverPickEvent::Pick(point_id));
+                needs_redraw = true;
+            }
+        }
+    }
+    needs_redraw
+}
+
 fn consume_gpu_pick_results(
     widget: &PlotWidget,
     state: &mut PlotState,
@@ -1127,12 +1354,21 @@ fn update_ticks_and_build_payload(
     if publish_x.is_none()
         && publish_y.is_none()
         && widget_has_any_tooltips(widget)
-        && widget.camera_bounds != Some((state.camera, state.bounds))
+        && widget.camera_bounds != Some(build_coordinate_snapshot(state))
     {
         effects.publish_camera_bounds = true;
     }
 
     (publish_x, publish_y)
+}
+
+fn build_coordinate_snapshot(state: &PlotState) -> PlotCoordinateSnapshot {
+    PlotCoordinateSnapshot {
+        camera_position: [state.camera.position.x, state.camera.position.y],
+        camera_half_extents: [state.camera.half_extents.x, state.camera.half_extents.y],
+        camera_render_offset: [state.camera.render_offset.x, state.camera.render_offset.y],
+        bounds: state.bounds,
+    }
 }
 
 impl shader::Program<PlotUiMessage> for PlotWidget {
@@ -1225,20 +1461,43 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             }
         }
 
+        if let Ok(mut queue) = self.command_queue.lock() {
+            let commands = std::mem::take(&mut *queue);
+            drop(queue);
+            for command in commands {
+                effects.needs_redraw |= apply_command(self, state, command, &mut effects);
+            }
+        }
+
         match event {
             iced::Event::Mouse(mouse_event) => {
-                effects.needs_redraw |=
-                    state.handle_mouse_event(*mouse_event, cursor, self, &mut effects.hover_pick);
+                let interactions_enabled = self.input_policy == InputPolicy::Default;
+                effects.needs_redraw |= state.handle_mouse_event(
+                    *mouse_event,
+                    cursor,
+                    self,
+                    &mut effects.hover_pick,
+                    interactions_enabled,
+                );
 
                 match mouse_event {
-                    iced::mouse::Event::CursorMoved { .. } => {
-                        maybe_submit_hover_request(self, state, &mut effects);
+                    iced::mouse::Event::CursorMoved { .. } | iced::mouse::Event::CursorEntered => {
+                        if interactions_enabled {
+                            maybe_submit_hover_request(self, state, &mut effects);
+                        }
                         update_cursor_overlay_on_move(self, state, &mut effects);
                     }
                     iced::mouse::Event::CursorLeft => {
-                        clear_hover_effect(self, state, &mut effects);
+                        if interactions_enabled {
+                            clear_hover_effect(self, state, &mut effects);
+                        }
                     }
                     _ => {}
+                }
+
+                if self.input_policy == InputPolicy::Override {
+                    effects.input_event =
+                        Some(build_input_event(*mouse_event, state, bounds, cursor));
                 }
             }
             iced::Event::Keyboard(keyboard_event) => {
@@ -1246,6 +1505,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                     key: keyboard::Key::Named(keyboard::key::Named::Escape),
                     ..
                 } = keyboard_event
+                    && self.input_policy == InputPolicy::Default
                 {
                     effects.hover_pick = Some(HoverPickEvent::ClearPick);
                 }
@@ -1274,7 +1534,8 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             || publish_x_ticks.is_some()
             || publish_y_ticks.is_some()
             || effects.clear_cursor_position
-            || effects.publish_camera_bounds;
+            || effects.publish_camera_bounds
+            || effects.input_event.is_some();
 
         if needs_publish {
             let camera_bounds = if effects.hover_pick.is_some()
@@ -1282,21 +1543,34 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                 || publish_y_ticks.is_some()
                 || effects.publish_camera_bounds
             {
-                Some((state.camera, state.bounds))
+                Some(build_coordinate_snapshot(state))
             } else {
                 None
             };
 
-            return Some(shader::Action::publish(PlotUiMessage::RenderUpdate(
-                PlotRenderUpdate {
+            let render = if effects.hover_pick.is_some()
+                || effects.cursor_ui.is_some()
+                || publish_x_ticks.is_some()
+                || publish_y_ticks.is_some()
+                || effects.clear_cursor_position
+                || effects.publish_camera_bounds
+            {
+                Some(PlotRenderUpdate {
                     hover_pick: effects.hover_pick,
                     clear_cursor_position: effects.clear_cursor_position,
                     cursor_position_ui: effects.cursor_ui,
                     x_ticks: publish_x_ticks,
                     y_ticks: publish_y_ticks,
                     camera_bounds,
-                },
-            )));
+                })
+            } else {
+                None
+            };
+
+            return Some(shader::Action::publish(PlotUiMessage::Event(PlotEvent {
+                input: effects.input_event,
+                render,
+            })));
         }
 
         effects.needs_redraw.then(shader::Action::request_redraw)

@@ -1,6 +1,6 @@
-use iced::Rectangle;
+use iced::{Rectangle, keyboard, mouse};
 
-use crate::{camera::Camera, series::ShapeId, ticks::PositionedTick};
+use crate::{series::ShapeId, ticks::PositionedTick};
 
 /// Messages sent by the plot widget to the application.
 ///
@@ -13,20 +13,103 @@ pub enum PlotUiMessage {
     ToggleControlsOverlay,
     /// Toggle visibility of a series or reference line by label.
     ToggleSeriesVisibility(ShapeId),
-    /// Internal render update message.
-    RenderUpdate(PlotRenderUpdate),
+    /// Plot event payload (input + render updates).
+    Event(PlotEvent),
+    /// Apply a plot command (used to forward default interactions in override mode).
+    Command(PlotCommand),
 }
 
 impl PlotUiMessage {
     /// Get the hover or pick event from the render update.
     /// If the plot widget is not in hover or pick mode, this will return None.
     pub fn get_hover_pick_event(&self) -> Option<HoverPickEvent> {
-        if let PlotUiMessage::RenderUpdate(update) = self {
-            update.hover_pick
+        if let PlotUiMessage::Event(event) = self {
+            event.render.as_ref().and_then(|update| update.hover_pick)
         } else {
             None
         }
     }
+}
+
+/// Input handling policy for the plot widget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputPolicy {
+    /// Use the built-in pan/zoom/hover/pick interactions.
+    Default,
+    /// Emit input events and suppress built-in interactions.
+    Override,
+}
+
+/// A plot event payload containing input and render updates.
+#[derive(Debug, Clone)]
+pub struct PlotEvent {
+    pub input: Option<PlotInputEvent>,
+    pub render: Option<PlotRenderUpdate>,
+}
+
+/// Pointer input event emitted by the plot in override mode.
+#[derive(Debug, Clone)]
+pub enum PlotInputEvent {
+    CursorMoved(PlotPointerEvent),
+    CursorEntered(PlotPointerEvent),
+    CursorLeft(PlotPointerEvent),
+    ButtonPressed {
+        button: mouse::Button,
+        pointer: PlotPointerEvent,
+    },
+    ButtonReleased {
+        button: mouse::Button,
+        pointer: PlotPointerEvent,
+    },
+    WheelScrolled {
+        delta: mouse::ScrollDelta,
+        pointer: PlotPointerEvent,
+    },
+}
+
+/// Shared pointer event data for plot input.
+#[derive(Debug, Clone, Copy)]
+pub struct PlotPointerEvent {
+    /// Cursor position in window coordinates.
+    pub screen: [f32; 2],
+    /// Cursor position in plot-local coordinates (relative to plot bounds).
+    pub local: [f32; 2],
+    /// Whether the cursor is inside the plot bounds.
+    pub inside: bool,
+    /// Cursor position in world/data coordinates (if inside bounds).
+    pub world: Option<[f64; 2]>,
+    /// Current keyboard modifiers.
+    pub modifiers: keyboard::Modifiers,
+}
+
+/// Commands that can be applied to the plot (for custom input handling).
+#[derive(Debug, Clone)]
+pub enum PlotCommand {
+    /// Apply the built-in default input behavior for a synthetic pointer event.
+    ApplyDefaultMouseEvent(PlotInputEvent),
+    /// Pan the camera by the given world-space delta.
+    PanByWorld { delta: [f64; 2] },
+    /// Zoom the camera by a factor around an optional world-space anchor point.
+    ZoomBy {
+        factor: f64,
+        anchor_world: Option<[f64; 2]>,
+    },
+    /// Zoom the camera to the given world-space rectangle.
+    ZoomToWorldRect {
+        min: [f64; 2],
+        max: [f64; 2],
+        padding_frac: f64,
+    },
+    /// Autoscale the camera to fit data.
+    Autoscale { update_axis_links: bool },
+    /// Clear hovered points.
+    ClearHover,
+    /// Clear picked points.
+    ClearPick,
+    /// Request a hover pick at the current cursor position.
+    RequestHover,
+    /// Request a pick at the current cursor position.
+    RequestPick,
 }
 
 /// Context passed to hover/pick highlight callbacks.
@@ -60,6 +143,54 @@ pub struct CursorPositionUiPayload {
     pub text: String,
 }
 
+/// Coordinate snapshot for screen/world conversions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlotCoordinateSnapshot {
+    pub camera_position: [f64; 2],
+    pub camera_half_extents: [f64; 2],
+    pub camera_render_offset: [f64; 2],
+    pub bounds: Rectangle,
+}
+
+impl PlotCoordinateSnapshot {
+    /// Convert a plot-local screen position to world coordinates.
+    pub fn screen_to_world(&self, screen: [f32; 2]) -> [f64; 2] {
+        let screen_size = [self.bounds.width as f64, self.bounds.height as f64];
+        let ndc_x = (screen[0] as f64 / screen_size[0]) * 2.0 - 1.0;
+        let ndc_y = -((screen[1] as f64 / screen_size[1]) * 2.0 - 1.0);
+        let effective_position = [
+            self.camera_position[0] - self.camera_render_offset[0],
+            self.camera_position[1] - self.camera_render_offset[1],
+        ];
+        let render_pos = [
+            effective_position[0] + ndc_x * self.camera_half_extents[0],
+            effective_position[1] + ndc_y * self.camera_half_extents[1],
+        ];
+        [
+            render_pos[0] + self.camera_render_offset[0],
+            render_pos[1] + self.camera_render_offset[1],
+        ]
+    }
+
+    /// Convert world coordinates to plot-local screen coordinates.
+    pub fn world_to_screen(&self, world: [f64; 2]) -> Option<[f32; 2]> {
+        let ndc_x = (world[0] - self.camera_position[0]) / self.camera_half_extents[0];
+        let ndc_y = (world[1] - self.camera_position[1]) / self.camera_half_extents[1];
+        let screen_x = (ndc_x as f32 + 1.0) * 0.5 * self.bounds.width;
+        let screen_y = (1.0 - ndc_y as f32) * 0.5 * self.bounds.height;
+
+        if screen_x < 0.0
+            || screen_x > self.bounds.width
+            || screen_y < 0.0
+            || screen_y > self.bounds.height
+        {
+            None
+        } else {
+            Some([screen_x, screen_y])
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[doc(hidden)]
 pub struct PlotRenderUpdate {
@@ -68,8 +199,8 @@ pub struct PlotRenderUpdate {
     pub cursor_position_ui: Option<CursorPositionUiPayload>,
     pub x_ticks: Option<Vec<PositionedTick>>,
     pub y_ticks: Option<Vec<PositionedTick>>,
-    /// Internal: Camera and bounds for coordinate conversion (only used internally, not part of public API)
-    pub(crate) camera_bounds: Option<(Camera, Rectangle)>,
+    /// Camera and bounds for coordinate conversion.
+    pub camera_bounds: Option<PlotCoordinateSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

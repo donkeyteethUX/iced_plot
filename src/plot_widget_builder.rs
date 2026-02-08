@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::axis_link::AxisLink;
+use crate::message::InputPolicy;
 use crate::message::TooltipContext;
 use crate::plot_widget::{CursorProvider, HighlightPoint, HighlightPointProvider, PlotWidget};
 use crate::reference_lines::{HLine, VLine};
@@ -48,6 +49,7 @@ pub struct PlotWidgetBuilder {
     tick_label_size: Option<f32>,
     axis_label_size: Option<f32>,
     data_aspect: Option<f64>,
+    input_policy: Option<InputPolicy>,
     series: Vec<Series>,
     vlines: Vec<VLine>,
     hlines: Vec<HLine>,
@@ -259,6 +261,12 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Set the input handling policy for the plot widget.
+    pub fn with_input_policy(mut self, policy: InputPolicy) -> Self {
+        self.input_policy = Some(policy);
+        self
+    }
+
     /// Add a [`Series`] to the plot.
     pub fn add_series(mut self, series: Series) -> Self {
         self.series.push(series);
@@ -380,6 +388,9 @@ impl PlotWidgetBuilder {
         }
         if let Some(aspect) = self.data_aspect {
             w.set_data_aspect(aspect);
+        }
+        if let Some(policy) = self.input_policy {
+            w.set_input_policy(policy);
         }
         for s in self.series {
             w.add_series(s)?;
