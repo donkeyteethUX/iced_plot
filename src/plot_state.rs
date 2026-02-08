@@ -1,14 +1,11 @@
 use std::sync::Arc;
 
 use glam::{DVec2, Vec2};
-use iced::{
-    Color, Rectangle, keyboard,
-    mouse::{self, Event},
-    time::Instant,
-};
+use iced::{Color, Rectangle, keyboard, mouse, time::Instant};
 
 use crate::{
-    AxisLink, HLine, HoverPickEvent, LineStyle, MarkerSize, PlotWidget, Point, ShapeId, VLine,
+    AxisLink, HLine, LineStyle, MarkerSize, PlotInputEvent, PlotPointerEvent, PlotWidget, Point,
+    ShapeId, VLine,
     camera::Camera,
     picking::PickingState,
     plot_widget::{HighlightPoint, world_to_screen_position_x, world_to_screen_position_y},
@@ -325,52 +322,43 @@ impl PlotState {
         self.point_inside(self.cursor_position.x, self.cursor_position.y)
     }
 
-    pub(crate) fn handle_mouse_event(
+    pub(crate) fn apply_input_event(
         &mut self,
-        event: Event,
-        cursor: mouse::Cursor,
-        widget: &PlotWidget,
-        publish_hover_pick: &mut Option<HoverPickEvent>,
+        input: &PlotInputEvent,
         interactions_enabled: bool,
-    ) -> bool {
+        scroll_to_pan_enabled: bool,
+    ) -> InputEffects {
         const SELECTION_DELTA_THRESHOLD: f32 = 4.0; // pixels
         const SELECTION_PADDING: f32 = 0.02; // fractional padding in world units relative to selection size
 
-        // Only request redraws when something actually changes or when we need
-        // to service a picking request for a new cursor position.
-        let mut needs_redraw = false;
-
+        let mut effects = InputEffects::default();
         let viewport: DVec2 = Vec2::new(self.bounds.width, self.bounds.height).into();
 
-        match event {
-            Event::CursorMoved { mut position } => {
-                if let mouse::Cursor::Available(p) | mouse::Cursor::Levitating(p) = cursor {
-                    // cursor position can consider the scrolled offset
-                    position = p;
-                }
-                // Check if the cursor is inside this widget's bounds in window space
-                let inside = self.point_inside(position.x, position.y);
+        let mut update_cursor = |pointer: &PlotPointerEvent| {
+            self.modifiers = pointer.modifiers;
+            self.cursor_position = Vec2::new(pointer.local[0], pointer.local[1]);
+            if self.crosshairs_enabled {
+                self.crosshairs_position = self.cursor_position;
+                effects.needs_redraw = true;
+            }
+        };
 
-                // Store cursor in local coordinates (relative to bounds)
-                self.cursor_position =
-                    Vec2::new(position.x - self.bounds.x, position.y - self.bounds.y);
-                // Update crosshairs position when enabled
-                if widget.crosshairs_enabled {
-                    self.crosshairs_position = self.cursor_position;
-                    needs_redraw = true;
-                }
+        match input {
+            PlotInputEvent::CursorMoved(pointer) | PlotInputEvent::CursorEntered(pointer) => {
+                update_cursor(pointer);
+                effects.cursor_moved = true;
+                effects.cursor_left = !pointer.inside;
 
                 if interactions_enabled {
                     // Handle selection (right click drag)
                     if self.selection.active {
                         self.selection.end = self.cursor_position;
                         self.selection.moved = true;
-                        needs_redraw = true;
+                        effects.needs_redraw = true;
                     }
 
                     // Handle panning (left click drag)
                     if self.pan.active {
-                        // Convert screen positions to render coordinates (without offset)
                         let render_current = self.camera.screen_to_render(
                             DVec2::new(
                                 self.cursor_position.x as f64,
@@ -383,161 +371,130 @@ impl PlotState {
                             .screen_to_render(self.pan.start_cursor, viewport);
                         let render_delta = render_current - render_start;
 
-                        // Update camera position by applying the render space delta
                         self.camera.position = self.pan.start_camera_center - render_delta;
                         self.update_axis_links();
-                        needs_redraw = true;
+                        effects.needs_redraw = true;
                     }
 
-                    // Hover picking (only when not panning or selecting)
-                    if !self.pan.active && !self.selection.active && self.hover_enabled {
-                        if !inside {
-                            // If cursor leaves this widget, clear hover state for this widget only
-                            if self.picking.last_hover_cache.is_some() {
-                                self.picking.last_hover_cache = None;
-                                // Redraw once to clear hover halo overlay
-                                needs_redraw = true;
+                    // Hover picking request flag when inside and idle
+                    if !self.pan.active
+                        && !self.selection.active
+                        && self.hover_enabled
+                        && pointer.inside
+                    {
+                        effects.needs_redraw = true;
+                    }
+                }
+            }
+            PlotInputEvent::CursorLeft(pointer) => {
+                self.modifiers = pointer.modifiers;
+                effects.cursor_left = true;
+            }
+            PlotInputEvent::ButtonPressed { button, pointer } => {
+                self.modifiers = pointer.modifiers;
+                if interactions_enabled {
+                    match button {
+                        mouse::Button::Left => {
+                            if !pointer.inside {
+                                return effects;
                             }
-                            return needs_redraw;
-                        } else {
-                            // Inside bounds and hover enabled: request a redraw so the renderer
-                            // can service the GPU picking request for this cursor position.
-                            needs_redraw = true;
-                        }
-                    }
-                }
-            }
-            Event::CursorLeft => {
-                if interactions_enabled {
-                    // Clear hover state on leave and request a redraw to clear hover halo
-                    if self.picking.last_hover_cache.is_some() {
-                        self.picking.last_hover_cache = None;
-                        needs_redraw = true;
-                    }
-                }
-            }
-            Event::ButtonPressed(mouse::Button::Left) => {
-                if interactions_enabled {
-                    // Only start panning if the press started inside our bounds
-                    // (Drags will continue even if the cursor leaves later)
-                    let inside = self.cursor_inside();
-                    if !inside {
-                        return needs_redraw;
-                    }
-                    let now = Instant::now();
-                    let double = if let Some(prev) = self.last_click_time {
-                        now.duration_since(prev).as_millis() < 350
-                    } else {
-                        false
-                    };
-                    self.last_click_time = Some(now);
-                    if double {
-                        self.autoscale(true);
-                        needs_redraw = true;
-                    } else {
-                        if self.hover_enabled && !self.pan.active && !self.selection.active {
-                            // check if the cursor is hovering over a point
-                            let picked = if let Some(HoverPickEvent::Hover(point_id)) =
-                                *publish_hover_pick
-                            {
-                                Some(point_id)
+                            let now = Instant::now();
+                            let double = if let Some(prev) = self.last_click_time {
+                                now.duration_since(prev).as_millis() < 350
                             } else {
-                                widget.pick_hit(self)
+                                false
                             };
-
-                            if let Some(point_id) = picked {
-                                // Upgrade the "hover" to a "pick".
-                                *publish_hover_pick = Some(HoverPickEvent::Pick(point_id));
+                            self.last_click_time = Some(now);
+                            if double {
+                                self.autoscale(true);
+                                effects.needs_redraw = true;
+                            } else {
+                                if self.hover_enabled && !self.pan.active && !self.selection.active
+                                {
+                                    effects.request_pick_on_click = true;
+                                }
+                                self.pan.active = true;
+                                self.pan.start_cursor =
+                                    DVec2::new(pointer.local[0] as f64, pointer.local[1] as f64);
+                                self.pan.start_camera_center = self.camera.position;
                             }
                         }
-                        // Start panning
-                        self.pan.active = true;
-                        self.pan.start_cursor = self.cursor_position.into();
-                        self.pan.start_camera_center = self.camera.position;
-                    }
-                }
-            }
-            Event::ButtonReleased(mouse::Button::Left) => {
-                if interactions_enabled {
-                    if self.pan.active {
-                        self.pan.active = false;
-                    }
-                }
-            }
-            Event::ButtonPressed(mouse::Button::Right) => {
-                if interactions_enabled {
-                    // Only start selection if inside our bounds
-                    let inside = self.cursor_inside();
-                    if !inside {
-                        return needs_redraw;
-                    }
-                    // Start selection
-                    self.selection.active = true;
-                    self.selection.start = self.cursor_position;
-                    self.selection.end = self.cursor_position;
-                    self.selection.moved = false;
-                    needs_redraw = true;
-                }
-            }
-            Event::ButtonReleased(mouse::Button::Right) => {
-                if interactions_enabled {
-                    if self.selection.active {
-                        self.selection.end = self.cursor_position;
-                        let delta = self.selection.end - self.selection.start;
-                        let dragged = delta.length() > SELECTION_DELTA_THRESHOLD;
-                        // Perform zoom if user actually dragged a region of non-trivial size
-                        if dragged {
-                            // Convert screen (pixels) to world coords using camera helper
-                            let p1 = self.camera.screen_to_world(
-                                DVec2::new(
-                                    self.selection.start.x as f64,
-                                    self.selection.start.y as f64,
-                                ),
-                                viewport,
-                            );
-                            let p2 = self.camera.screen_to_world(
-                                DVec2::new(
-                                    self.selection.end.x as f64,
-                                    self.selection.end.y as f64,
-                                ),
-                                viewport,
-                            );
-                            let min_v = DVec2::new(p1.x.min(p2.x), p1.y.min(p2.y));
-                            let max_v = DVec2::new(p1.x.max(p2.x), p1.y.max(p2.y));
-                            // Use set_bounds_preserve_offset to avoid changing the render_offset during zoom
-                            self.camera.set_bounds_preserve_offset(
-                                min_v,
-                                max_v,
-                                SELECTION_PADDING as f64,
-                            );
-                            self.update_axis_links();
+                        mouse::Button::Right => {
+                            if !pointer.inside {
+                                return effects;
+                            }
+                            self.selection.active = true;
+                            self.selection.start = self.cursor_position;
+                            self.selection.end = self.cursor_position;
+                            self.selection.moved = false;
+                            effects.needs_redraw = true;
                         }
-                        // Clear selection overlay after release
-                        self.selection.active = false;
-                        self.selection.moved = false;
-                        needs_redraw = true;
+                        _ => {}
                     }
                 }
             }
-            Event::WheelScrolled { delta } => {
+            PlotInputEvent::ButtonReleased { button, pointer } => {
+                self.modifiers = pointer.modifiers;
                 if interactions_enabled {
-                    // Only respond to wheel when cursor is inside our bounds
-                    let inside = self.cursor_inside();
-                    if !inside {
-                        return needs_redraw;
+                    match button {
+                        mouse::Button::Left => {
+                            if self.pan.active {
+                                self.pan.active = false;
+                            }
+                        }
+                        mouse::Button::Right => {
+                            if self.selection.active {
+                                self.selection.end = self.cursor_position;
+                                let delta = self.selection.end - self.selection.start;
+                                let dragged = delta.length() > SELECTION_DELTA_THRESHOLD;
+                                if dragged {
+                                    let p1 = self.camera.screen_to_world(
+                                        DVec2::new(
+                                            self.selection.start.x as f64,
+                                            self.selection.start.y as f64,
+                                        ),
+                                        viewport,
+                                    );
+                                    let p2 = self.camera.screen_to_world(
+                                        DVec2::new(
+                                            self.selection.end.x as f64,
+                                            self.selection.end.y as f64,
+                                        ),
+                                        viewport,
+                                    );
+                                    let min_v = DVec2::new(p1.x.min(p2.x), p1.y.min(p2.y));
+                                    let max_v = DVec2::new(p1.x.max(p2.x), p1.y.max(p2.y));
+                                    self.camera.set_bounds_preserve_offset(
+                                        min_v,
+                                        max_v,
+                                        SELECTION_PADDING as f64,
+                                    );
+                                    self.update_axis_links();
+                                }
+                                self.selection.active = false;
+                                self.selection.moved = false;
+                                effects.needs_redraw = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            PlotInputEvent::WheelScrolled { delta, pointer } => {
+                self.modifiers = pointer.modifiers;
+                if interactions_enabled {
+                    if !pointer.inside {
+                        return effects;
                     }
 
                     let (x, y) = match delta {
-                        iced::mouse::ScrollDelta::Lines { x, y } => (x, y),
-                        iced::mouse::ScrollDelta::Pixels { x, y } => (x, y),
+                        iced::mouse::ScrollDelta::Lines { x, y } => (*x, *y),
+                        iced::mouse::ScrollDelta::Pixels { x, y } => (*x, *y),
                     };
 
-                    // Only zoom when Ctrl is held down
                     if self.modifiers.contains(keyboard::Modifiers::CTRL) {
-                        // Apply zoom factor based on scroll direction
                         let zoom_factor = if y > 0.0 { 0.95 } else { 1.05 };
 
-                        // Convert cursor position to render coordinates before zoom (without offset)
                         let cursor_render_before = self.camera.screen_to_render(
                             DVec2::new(
                                 self.cursor_position.x as f64,
@@ -546,10 +503,8 @@ impl PlotState {
                             viewport,
                         );
 
-                        // Apply zoom by scaling half_extents
                         self.camera.half_extents *= zoom_factor;
 
-                        // Convert cursor position to render coordinates after zoom
                         let cursor_render_after = self.camera.screen_to_render(
                             DVec2::new(
                                 self.cursor_position.x as f64,
@@ -558,14 +513,12 @@ impl PlotState {
                             viewport,
                         );
 
-                        // Adjust camera position (in render space) to keep cursor at same position
                         let render_delta = cursor_render_before - cursor_render_after;
-                        // Convert render delta back to world space and adjust camera position
                         self.camera.position += render_delta;
 
                         self.update_axis_links();
-                        needs_redraw = true;
-                    } else if widget.scroll_to_pan_enabled {
+                        effects.needs_redraw = true;
+                    } else if scroll_to_pan_enabled {
                         let world_pan_x =
                             -x as f64 * (self.camera.half_extents.x / (viewport.x / 2.0));
                         let world_pan_y =
@@ -573,15 +526,13 @@ impl PlotState {
                         self.camera.position.x += world_pan_x;
                         self.camera.position.y += world_pan_y;
                         self.update_axis_links();
-                        needs_redraw = true;
+                        effects.needs_redraw = true;
                     }
                 }
             }
-            _ => {}
         }
 
-        // camera uniform is handled in renderer per frame
-        needs_redraw
+        effects
     }
 
     pub(crate) fn handle_keyboard_event(&mut self, event: &keyboard::Event) -> bool {
@@ -626,4 +577,12 @@ pub(crate) struct PanState {
     pub(crate) active: bool,
     pub(crate) start_cursor: DVec2,
     pub(crate) start_camera_center: DVec2,
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub(crate) struct InputEffects {
+    pub(crate) needs_redraw: bool,
+    pub(crate) cursor_moved: bool,
+    pub(crate) cursor_left: bool,
+    pub(crate) request_pick_on_click: bool,
 }

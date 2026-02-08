@@ -1153,90 +1153,42 @@ fn apply_command(
 ) -> bool {
     let mut needs_redraw = false;
     match command {
-        PlotCommand::ApplyDefaultMouseEvent(input) => {
-            let (mouse_event, cursor) = match input {
-                PlotInputEvent::CursorMoved(pointer) => (
-                    {
-                        state.modifiers = pointer.modifiers;
-                        mouse::Event::CursorMoved {
-                            position: iced::Point::new(pointer.screen[0], pointer.screen[1]),
-                        }
-                    },
-                    mouse::Cursor::Available(iced::Point::new(
-                        pointer.screen[0],
-                        pointer.screen[1],
-                    )),
-                ),
-                PlotInputEvent::CursorEntered(pointer) => (
-                    {
-                        state.modifiers = pointer.modifiers;
-                        mouse::Event::CursorEntered
-                    },
-                    mouse::Cursor::Available(iced::Point::new(
-                        pointer.screen[0],
-                        pointer.screen[1],
-                    )),
-                ),
-                PlotInputEvent::CursorLeft(pointer) => (
-                    {
-                        state.modifiers = pointer.modifiers;
-                        mouse::Event::CursorLeft
-                    },
-                    mouse::Cursor::Available(iced::Point::new(
-                        pointer.screen[0],
-                        pointer.screen[1],
-                    )),
-                ),
-                PlotInputEvent::ButtonPressed { button, pointer } => (
-                    {
-                        state.modifiers = pointer.modifiers;
-                        mouse::Event::ButtonPressed(button)
-                    },
-                    mouse::Cursor::Available(iced::Point::new(
-                        pointer.screen[0],
-                        pointer.screen[1],
-                    )),
-                ),
-                PlotInputEvent::ButtonReleased { button, pointer } => (
-                    {
-                        state.modifiers = pointer.modifiers;
-                        mouse::Event::ButtonReleased(button)
-                    },
-                    mouse::Cursor::Available(iced::Point::new(
-                        pointer.screen[0],
-                        pointer.screen[1],
-                    )),
-                ),
-                PlotInputEvent::WheelScrolled { delta, pointer } => (
-                    {
-                        state.modifiers = pointer.modifiers;
-                        mouse::Event::WheelScrolled { delta }
-                    },
-                    mouse::Cursor::Available(iced::Point::new(
-                        pointer.screen[0],
-                        pointer.screen[1],
-                    )),
-                ),
-            };
+        PlotCommand::ApplyInputEvent {
+            input,
+            interactions_enabled,
+        } => {
+            let input_effects =
+                state.apply_input_event(&input, interactions_enabled, widget.scroll_to_pan_enabled);
+            needs_redraw |= input_effects.needs_redraw;
 
-            needs_redraw |= state.handle_mouse_event(
-                mouse_event,
-                cursor,
-                widget,
-                &mut effects.hover_pick,
-                true,
-            );
-
-            match mouse_event {
-                mouse::Event::CursorMoved { .. } | mouse::Event::CursorEntered => {
+            if input_effects.cursor_moved {
+                if interactions_enabled {
                     maybe_submit_hover_request(widget, state, effects);
-                    update_cursor_overlay_on_move(widget, state, effects);
                 }
-                mouse::Event::CursorLeft => {
-                    clear_hover_effect(widget, state, effects);
-                }
-                _ => {}
+                update_cursor_overlay_on_move(widget, state, effects);
             }
+            if input_effects.cursor_left && interactions_enabled {
+                clear_hover_effect(widget, state, effects);
+            }
+            if interactions_enabled
+                && input_effects.request_pick_on_click
+                && effects.hover_pick.is_none()
+                && let Some(point_id) = widget.pick_hit(state)
+            {
+                effects.hover_pick = Some(HoverPickEvent::Pick(point_id));
+                needs_redraw = true;
+            }
+        }
+        PlotCommand::ApplyDefaultMouseEvent(input) => {
+            needs_redraw |= apply_command(
+                widget,
+                state,
+                PlotCommand::ApplyInputEvent {
+                    input,
+                    interactions_enabled: true,
+                },
+                effects,
+            );
         }
         PlotCommand::PanByWorld { delta } => {
             state.camera.position.x += delta[0];
@@ -1472,32 +1424,19 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         match event {
             iced::Event::Mouse(mouse_event) => {
                 let interactions_enabled = self.input_policy == InputPolicy::Default;
-                effects.needs_redraw |= state.handle_mouse_event(
-                    *mouse_event,
-                    cursor,
+                let input_event = build_input_event(*mouse_event, state, bounds, cursor);
+                effects.needs_redraw |= apply_command(
                     self,
-                    &mut effects.hover_pick,
-                    interactions_enabled,
+                    state,
+                    PlotCommand::ApplyInputEvent {
+                        input: input_event.clone(),
+                        interactions_enabled,
+                    },
+                    &mut effects,
                 );
 
-                match mouse_event {
-                    iced::mouse::Event::CursorMoved { .. } | iced::mouse::Event::CursorEntered => {
-                        if interactions_enabled {
-                            maybe_submit_hover_request(self, state, &mut effects);
-                        }
-                        update_cursor_overlay_on_move(self, state, &mut effects);
-                    }
-                    iced::mouse::Event::CursorLeft => {
-                        if interactions_enabled {
-                            clear_hover_effect(self, state, &mut effects);
-                        }
-                    }
-                    _ => {}
-                }
-
                 if self.input_policy == InputPolicy::Override {
-                    effects.input_event =
-                        Some(build_input_event(*mouse_event, state, bounds, cursor));
+                    effects.input_event = Some(input_event);
                 }
             }
             iced::Event::Keyboard(keyboard_event) => {

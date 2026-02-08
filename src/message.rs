@@ -85,6 +85,11 @@ pub struct PlotPointerEvent {
 /// Commands that can be applied to the plot (for custom input handling).
 #[derive(Debug, Clone)]
 pub enum PlotCommand {
+    /// Apply a pointer event with explicit interaction enable/disable.
+    ApplyInputEvent {
+        input: PlotInputEvent,
+        interactions_enabled: bool,
+    },
     /// Apply the built-in default input behavior for a synthetic pointer event.
     ApplyDefaultMouseEvent(PlotInputEvent),
     /// Pan the camera by the given world-space delta.
