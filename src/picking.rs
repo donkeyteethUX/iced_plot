@@ -239,9 +239,10 @@ fn cpu_pick_hit(
     }
     let span = series.get(span_idx)?;
     let local_idx = best_idx - span_start;
+    let point_index = *span.point_indices.get(local_idx)?;
     Some(PointId {
         series_id: span.id,
-        point_index: local_idx,
+        point_index,
     })
 }
 
@@ -740,7 +741,7 @@ impl PickingPass {
     fn decode_id_to_hit(
         &self,
         id: u32,
-        points: &[Point],
+        _points: &[Point],
         series: &[SeriesSpan],
     ) -> Option<PointId> {
         // IDs are 1-based instance index
@@ -759,15 +760,15 @@ impl PickingPass {
         }
 
         let span: &SeriesSpan = &series[span_idx];
-        let point_idx = span.start + local_idx;
-
-        if point_idx >= points.len() {
+        if local_idx >= span.point_indices.len() {
             return None;
         }
 
+        let point_index = span.point_indices[local_idx];
+
         Some(PointId {
             series_id: span.id,
-            point_index: local_idx,
+            point_index,
         })
     }
 }

@@ -1,5 +1,6 @@
 //! GPU renderer for PlotWidget.
 use crate::LineStyle;
+use crate::axis_scale::data_point_to_plot;
 use crate::picking::PickingPass;
 use crate::{camera::CameraUniform, grid::Grid, plot_state::PlotState};
 use iced::widget::shader::Viewport;
@@ -693,7 +694,8 @@ impl PlotRenderer {
                 writer.write_f32(p.size);
                 writer.write_u32(p.size_mode);
 
-                id_map.push((span_idx as u32, local_i as u32));
+                let original_idx = s.point_indices.get(local_i).copied().unwrap_or(local_i);
+                id_map.push((span_idx as u32, original_idx as u32));
             }
         }
 
@@ -738,18 +740,39 @@ impl PlotRenderer {
             if s.line_style.is_none() || s.len < 2 {
                 continue;
             }
-            let first = (writer.len() / 36) as u32; // 36 bytes per vertex
             let (line_style_u32, style_param) = line_style_params(s.line_style.unwrap());
 
             let points_slice = &state.points[s.start..s.start + s.len];
+            let mut segment_first = 0u32;
+            let mut segment_count = 0u32;
             let mut cumulative_distance = 0.0f32;
 
             for (i, p) in points_slice.iter().enumerate() {
-                if i > 0 {
+                let break_segment = i > 0
+                    && s.point_indices
+                        .get(i)
+                        .zip(s.point_indices.get(i - 1))
+                        .is_some_and(|(curr, prev)| *curr != *prev + 1);
+
+                if break_segment {
+                    if segment_count >= 2 {
+                        segs.push(LineSegment {
+                            first_vertex: segment_first,
+                            vertex_count: segment_count,
+                        });
+                    }
+                    segment_first = (writer.len() / 36) as u32;
+                    segment_count = 0;
+                    cumulative_distance = 0.0;
+                } else if i > 0 {
                     let prev = &points_slice[i - 1];
                     let dx = p.position[0] - prev.position[0];
                     let dy = p.position[1] - prev.position[1];
                     cumulative_distance += (dx * dx + dy * dy).sqrt() as f32;
+                }
+
+                if segment_count == 0 {
+                    segment_first = (writer.len() / 36) as u32;
                 }
 
                 let render_pos = self.world_to_render_pos(p.position, &state.camera);
@@ -762,13 +785,13 @@ impl PlotRenderer {
                     cumulative_distance,
                     style_param,
                 );
+                segment_count += 1;
             }
 
-            let count = (writer.len() / 36) as u32 - first;
-            if count >= 2 {
+            if segment_count >= 2 {
                 segs.push(LineSegment {
-                    first_vertex: first,
-                    vertex_count: count,
+                    first_vertex: segment_first,
+                    vertex_count: segment_count,
                 });
             }
         }
@@ -812,8 +835,11 @@ impl PlotRenderer {
 
         // Add vertical lines
         for vline in state.vlines.iter() {
+            let Some(vx_plot) = state.x_axis_scale.data_to_plot(vline.x) else {
+                continue;
+            };
             // Check if vline is within viewport
-            if vline.x < left || vline.x > right {
+            if vx_plot < left || vx_plot > right {
                 continue;
             }
 
@@ -822,7 +848,7 @@ impl PlotRenderer {
 
             // Create two vertices: bottom and top of viewport
             for (idx, y) in [bottom, top].iter().enumerate() {
-                let render_pos = self.world_to_render_pos([vline.x, *y], &state.camera);
+                let render_pos = self.world_to_render_pos([vx_plot, *y], &state.camera);
                 let distance = if idx == 0 { 0.0 } else { (top - bottom) as f32 };
                 writer.write_line_vertex(
                     render_pos,
@@ -841,8 +867,11 @@ impl PlotRenderer {
 
         // Add horizontal lines
         for hline in state.hlines.iter() {
+            let Some(hy_plot) = state.y_axis_scale.data_to_plot(hline.y) else {
+                continue;
+            };
             // Check if hline is within viewport
-            if hline.y < bottom || hline.y > top {
+            if hy_plot < bottom || hy_plot > top {
                 continue;
             }
 
@@ -851,7 +880,7 @@ impl PlotRenderer {
 
             // Create two vertices: left and right of viewport
             for (idx, x) in [left, right].iter().enumerate() {
-                let render_pos = self.world_to_render_pos([*x, hline.y], &state.camera);
+                let render_pos = self.world_to_render_pos([*x, hy_plot], &state.camera);
                 let distance = if idx == 0 { 0.0 } else { (right - left) as f32 };
                 writer.write_line_vertex(
                     render_pos,
@@ -961,6 +990,12 @@ impl PlotRenderer {
                     world_pos[1] += half_size;
                 }
 
+                let Some(world_pos) =
+                    data_point_to_plot(world_pos, state.x_axis_scale, state.y_axis_scale)
+                else {
+                    continue;
+                };
+
                 // Convert world coordinates to NDC
                 let ndc = self.world_to_ndc(world_pos, &state.camera);
                 // Calculate mask box size based on marker_size
@@ -988,8 +1023,14 @@ impl PlotRenderer {
 
             // Build marker if marker_style is Some
             if let Some(marker_style) = highlight_point.marker_style {
-                let render_pos =
-                    self.world_to_render_pos([highlight_point.x, highlight_point.y], &state.camera);
+                let Some(plot_pos) = data_point_to_plot(
+                    [highlight_point.x, highlight_point.y],
+                    state.x_axis_scale,
+                    state.y_axis_scale,
+                ) else {
+                    continue;
+                };
+                let render_pos = self.world_to_render_pos(plot_pos, &state.camera);
                 let (size, size_mode) = marker_style.size.to_raw();
                 marker_writer.write_position(render_pos);
                 marker_writer.write_color(&highlight_point.color);

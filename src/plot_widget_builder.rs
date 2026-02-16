@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::axis_link::AxisLink;
+use crate::axis_scale::AxisScale;
 use crate::message::TooltipContext;
 use crate::plot_widget::{CursorProvider, HighlightPoint, HighlightPointProvider, PlotWidget};
 use crate::reference_lines::{HLine, VLine};
@@ -37,6 +38,8 @@ pub struct PlotWidgetBuilder {
     disable_scroll_to_pan: bool,
     x_lim: Option<(f64, f64)>,
     y_lim: Option<(f64, f64)>,
+    x_axis_scale: Option<AxisScale>,
+    y_axis_scale: Option<AxisScale>,
     x_axis_link: Option<AxisLink>,
     y_axis_link: Option<AxisLink>,
     x_tick_formatter: Option<TickFormatter>,
@@ -166,10 +169,28 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Set the x-axis scale mode.
+    ///
+    /// Hint: For log-style ticks, consider also setting the tick producer and formatter
+    /// to use [`crate::log_tick_producer`] and [`crate::log_formatter`].
+    pub fn with_x_scale(mut self, scale: AxisScale) -> Self {
+        self.x_axis_scale = Some(scale);
+        self
+    }
+
     /// Set the y-axis limits (min, max) for the plot.
     /// If set, these will override autoscaling for the y-axis.
     pub fn with_y_lim(mut self, min: f64, max: f64) -> Self {
         self.y_lim = Some((min, max));
+        self
+    }
+
+    /// Set the y-axis scale mode.
+    ///
+    /// Hint: For log-style ticks, consider also setting the tick producer and formatter
+    /// to use [`crate::log_tick_producer`] and [`crate::log_formatter`].
+    pub fn with_y_scale(mut self, scale: AxisScale) -> Self {
+        self.y_axis_scale = Some(scale);
         self
     }
 
@@ -297,12 +318,31 @@ impl PlotWidgetBuilder {
 
     /// Build the PlotWidget; validates series and duplicate labels via PlotWidget::add_series.
     pub fn build(self) -> Result<PlotWidget, SeriesError> {
-        if let (Some((x_min, x_max)), Some((y_min, y_max))) = (self.x_lim, self.y_lim)
-            && (x_min >= x_max || y_min >= y_max)
+        let x_axis_scale = self.x_axis_scale.unwrap_or_default();
+        let y_axis_scale = self.y_axis_scale.unwrap_or_default();
+
+        for scale in [x_axis_scale, y_axis_scale] {
+            if let AxisScale::Log { base } = scale
+                && !(base.is_finite() && base > 1.0)
+            {
+                return Err(SeriesError::InvalidAxisScale);
+            }
+        }
+
+        if let Some((x_min, x_max)) = self.x_lim
+            && x_min >= x_max
         {
             return Err(SeriesError::InvalidAxisLimits);
         }
+        if let Some((y_min, y_max)) = self.y_lim
+            && y_min >= y_max
+        {
+            return Err(SeriesError::InvalidAxisLimits);
+        }
+
         let mut w = PlotWidget::new();
+        w.set_x_axis_scale(x_axis_scale);
+        w.set_y_axis_scale(y_axis_scale);
         if self.disable_controls_help {
             w.controls_help_enabled = false;
         }

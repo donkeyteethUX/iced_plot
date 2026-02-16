@@ -153,6 +153,8 @@ pub enum SeriesError {
     NotFound(ShapeId),
     /// Axis limits are not properly set (min >= max).
     InvalidAxisLimits,
+    /// Invalid AxisScale configuration (e.g. log scale with non-positive base).
+    InvalidAxisScale,
     /// Per-point colors length does not match positions length.
     InvalidPointColorsLength,
 }

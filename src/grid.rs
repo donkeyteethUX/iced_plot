@@ -116,8 +116,11 @@ impl Grid {
         let mut count = 0u32;
 
         // Build vertical lines from precomputed x ticks
+        let width = state.bounds.width.max(1.0);
+        let height = state.bounds.height.max(1.0);
         for positioned_tick in &state.x_ticks {
-            let render_x = positioned_tick.tick.value - camera.render_offset.x;
+            let ndc_x = (positioned_tick.screen_pos / width) as f64 * 2.0 - 1.0;
+            let render_x = render_center.x + ndc_x * camera.half_extents.x;
             let alpha = match positioned_tick.tick.line_type {
                 TickWeight::Major => GRID_MAJOR_ALPHA,
                 TickWeight::Minor => GRID_MINOR_ALPHA,
@@ -130,7 +133,8 @@ impl Grid {
 
         // Build horizontal lines from precomputed y ticks
         for positioned_tick in &state.y_ticks {
-            let render_y = positioned_tick.tick.value - camera.render_offset.y;
+            let ndc_y = 1.0 - (positioned_tick.screen_pos / height) as f64 * 2.0;
+            let render_y = render_center.y + ndc_y * camera.half_extents.y;
             let alpha = match positioned_tick.tick.line_type {
                 TickWeight::Major => GRID_MAJOR_ALPHA,
                 TickWeight::Minor => GRID_MINOR_ALPHA,

@@ -43,13 +43,29 @@ pub type TickFormatter = Arc<dyn Fn(Tick) -> String + Send + Sync>;
 pub type TickProducer = Arc<dyn Fn(f64, f64) -> Vec<Tick> + Send + Sync>;
 
 /// A default formatter that displays values with reasonable precision.
-pub(crate) fn default_formatter(mark: Tick) -> String {
+pub fn default_formatter(mark: Tick) -> String {
     let log_step = mark.step_size.log10();
     if log_step >= 0.0 {
         format!("{:.0}", mark.value)
     } else {
         let decimal_places = (-log_step).ceil() as usize;
         format!("{:.*}", decimal_places, mark.value)
+    }
+}
+
+/// A simple formatter for logarithmic ticks with an arbitrary base.
+///
+/// Expects positive `tick.value` and renders labels as `b^n`, where `b` is the provided base.
+pub fn log_formatter(mark: Tick, base: f64) -> String {
+    if !mark.value.is_finite() || mark.value <= 0.0 {
+        return String::new();
+    }
+    let exp = mark.value.log(base).round() as i32;
+
+    if base == std::f64::consts::E {
+        format!("e^{exp}") // Seems like a ~natural~ special case.
+    } else {
+        format!("{base}^{:.1}", exp)
     }
 }
 
@@ -89,6 +105,36 @@ pub fn default_tick_producer(min: f64, max: f64) -> Vec<Tick> {
     }
 
     ticks
+}
+
+/// A simple powers-only base-10 tick producer.
+///
+/// Inputs are raw data-space bounds and must be positive.
+pub fn log_tick_producer(base: f64, min: f64, max: f64) -> Vec<Tick> {
+    let mut lo = min.min(max);
+    let hi = min.max(max);
+    if !lo.is_finite() || !hi.is_finite() || hi <= 0.0 {
+        return Vec::new();
+    }
+    lo = lo.max(f64::MIN_POSITIVE);
+    if lo > hi {
+        return Vec::new();
+    }
+
+    let start_exp = lo.log(base).ceil() as i32;
+    let end_exp = hi.log(base).floor() as i32;
+    if start_exp > end_exp {
+        return Vec::new();
+    }
+
+    let mut out = Vec::with_capacity((end_exp - start_exp + 1) as usize);
+    for exp in start_exp..=end_exp {
+        let value = base.powi(exp);
+        if value.is_finite() {
+            out.push(Tick::new(value, base, TickWeight::Major));
+        }
+    }
+    out
 }
 
 /// Calculate a "nice" step size for grid lines based on the desired number of divisions.

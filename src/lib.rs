@@ -24,6 +24,7 @@
 //! See `examples/` for more.
 pub(crate) mod axes_labels;
 pub(crate) mod axis_link;
+pub(crate) mod axis_scale;
 pub(crate) mod camera;
 pub(crate) mod grid;
 pub(crate) mod legend;
@@ -43,6 +44,7 @@ pub use iced::Color;
 
 // Re-exports of public types.
 pub use axis_link::AxisLink;
+pub use axis_scale::AxisScale;
 pub use grid::TickWeight;
 pub use message::{HoverPickEvent, PlotUiMessage, PointId, TooltipContext};
 pub use plot_widget::{HighlightPoint, PlotWidget};
@@ -50,4 +52,7 @@ pub use plot_widget_builder::PlotWidgetBuilder;
 pub use point::{MarkerType, Point};
 pub use reference_lines::{HLine, VLine};
 pub use series::{LineStyle, MarkerSize, MarkerStyle, Series, ShapeId};
-pub use ticks::{Tick, TickFormatter, TickProducer};
+pub use ticks::{
+    Tick, TickFormatter, TickProducer, default_formatter, default_tick_producer, log_formatter,
+    log_tick_producer,
+};

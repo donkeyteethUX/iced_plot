@@ -8,7 +8,9 @@ use iced::{
 };
 
 use crate::{
-    AxisLink, HLine, HoverPickEvent, LineStyle, MarkerSize, PlotWidget, Point, ShapeId, VLine,
+    AxisLink, AxisScale, HLine, HoverPickEvent, LineStyle, MarkerSize, PlotWidget, Point, ShapeId,
+    VLine,
+    axis_scale::data_point_to_plot,
     camera::Camera,
     picking::PickingState,
     plot_widget::{HighlightPoint, world_to_screen_position_x, world_to_screen_position_y},
@@ -32,6 +34,8 @@ pub struct PlotState {
     // Axis limits
     pub(crate) x_lim: Option<(f64, f64)>,
     pub(crate) y_lim: Option<(f64, f64)>,
+    pub(crate) x_axis_scale: AxisScale,
+    pub(crate) y_axis_scale: AxisScale,
     // Axis links for synchronization
     pub(crate) x_axis_link: Option<AxisLink>,
     pub(crate) y_axis_link: Option<AxisLink>,
@@ -82,6 +86,8 @@ impl Default for PlotState {
             data_max: None,
             x_lim: None,
             y_lim: None,
+            x_axis_scale: AxisScale::Linear,
+            y_axis_scale: AxisScale::Linear,
             x_axis_link: None,
             y_axis_link: None,
             x_link_version: 0,
@@ -149,10 +155,16 @@ impl PlotState {
             }
 
             let start = points.len();
+            let mut point_indices = Vec::new();
 
             // Add points and track bounds
             for (pos_index, &pos) in series.positions.iter().enumerate() {
-                let p = DVec2::new(pos[0], pos[1]);
+                let Some(transformed) =
+                    data_point_to_plot(pos, widget.x_axis_scale, widget.y_axis_scale)
+                else {
+                    continue;
+                };
+                let p = DVec2::new(transformed[0], transformed[1]);
                 data_min = Some(data_min.map_or(p, |m| m.min(p)));
                 data_max = Some(data_max.map_or(p, |m| m.max(p)));
 
@@ -170,11 +182,12 @@ impl PlotState {
                         .copied()
                         .unwrap_or(series.color);
                     points.push(Point {
-                        position: pos,
+                        position: transformed,
                         size,
                         size_mode,
                     });
                     point_colors.push(color);
+                    point_indices.push(pos_index);
                 }
             }
 
@@ -189,6 +202,7 @@ impl PlotState {
                 id: *id,
                 start,
                 len: points.len() - start,
+                point_indices: point_indices.into(),
                 line_style: series.line_style,
                 color,
                 marker,
@@ -200,8 +214,12 @@ impl PlotState {
                 MarkerSize::Pixels(_) => None,
             }) && let Some(data_max) = &mut data_max
             {
-                data_max.x += size;
-                data_max.y += size;
+                if widget.x_axis_scale == AxisScale::Linear {
+                    data_max.x += size;
+                }
+                if widget.y_axis_scale == AxisScale::Linear {
+                    data_max.y += size;
+                }
             }
         }
 
@@ -230,6 +248,8 @@ impl PlotState {
         self.legend_collapsed = widget.legend_collapsed;
         self.x_lim = widget.x_lim;
         self.y_lim = widget.y_lim;
+        self.x_axis_scale = widget.x_axis_scale;
+        self.y_axis_scale = widget.y_axis_scale;
         self.x_axis_link = widget.x_axis_link.clone();
         self.y_axis_link = widget.y_axis_link.clone();
 
@@ -257,12 +277,22 @@ impl PlotState {
             max_v = data_max;
         }
 
-        if let Some((y_min, y_max)) = self.y_lim {
+        if let Some((y_min, y_max)) = self.y_lim
+            && let (Some(y_min), Some(y_max)) = (
+                self.y_axis_scale.data_to_plot(y_min),
+                self.y_axis_scale.data_to_plot(y_max),
+            )
+        {
             min_v.y = y_min;
             max_v.y = y_max;
         }
 
-        if let Some((x_min, x_max)) = self.x_lim {
+        if let Some((x_min, x_max)) = self.x_lim
+            && let (Some(x_min), Some(x_max)) = (
+                self.x_axis_scale.data_to_plot(x_min),
+                self.x_axis_scale.data_to_plot(x_max),
+            )
+        {
             min_v.x = x_min;
             max_v.x = x_max;
         }
@@ -279,8 +309,16 @@ impl PlotState {
         y_tick_producer: Option<&TickProducer>,
     ) {
         // Calculate x-axis ticks
-        let min_x = self.camera.position.x - self.camera.half_extents.x;
-        let max_x = self.camera.position.x + self.camera.half_extents.x;
+        let min_x_plot = self.camera.position.x - self.camera.half_extents.x;
+        let max_x_plot = self.camera.position.x + self.camera.half_extents.x;
+        let min_x = self
+            .x_axis_scale
+            .plot_to_data(min_x_plot)
+            .unwrap_or(min_x_plot);
+        let max_x = self
+            .x_axis_scale
+            .plot_to_data(max_x_plot)
+            .unwrap_or(max_x_plot);
 
         let x_tick_values = match x_tick_producer {
             Some(producer) => producer(min_x, max_x),
@@ -289,17 +327,28 @@ impl PlotState {
 
         self.x_ticks.clear();
         for tick in x_tick_values {
+            let Some(tick_plot) = self.x_axis_scale.data_to_plot(tick.value) else {
+                continue;
+            };
             // Convert world position to screen position
             if let Some(screen_pos) =
-                world_to_screen_position_x(tick.value, &self.camera, &self.bounds)
+                world_to_screen_position_x(tick_plot, &self.camera, &self.bounds)
             {
                 self.x_ticks.push(PositionedTick { screen_pos, tick });
             }
         }
 
         // Calculate y-axis ticks
-        let min_y = self.camera.position.y - self.camera.half_extents.y;
-        let max_y = self.camera.position.y + self.camera.half_extents.y;
+        let min_y_plot = self.camera.position.y - self.camera.half_extents.y;
+        let max_y_plot = self.camera.position.y + self.camera.half_extents.y;
+        let min_y = self
+            .y_axis_scale
+            .plot_to_data(min_y_plot)
+            .unwrap_or(min_y_plot);
+        let max_y = self
+            .y_axis_scale
+            .plot_to_data(max_y_plot)
+            .unwrap_or(max_y_plot);
 
         let y_tick_values = match y_tick_producer {
             Some(producer) => producer(min_y, max_y),
@@ -308,9 +357,12 @@ impl PlotState {
 
         self.y_ticks.clear();
         for tick in y_tick_values {
+            let Some(tick_plot) = self.y_axis_scale.data_to_plot(tick.value) else {
+                continue;
+            };
             // Convert world position to screen position
             if let Some(screen_pos) =
-                world_to_screen_position_y(tick.value, &self.camera, &self.bounds)
+                world_to_screen_position_y(tick_plot, &self.camera, &self.bounds)
             {
                 self.y_ticks.push(PositionedTick { screen_pos, tick });
             }
@@ -578,6 +630,7 @@ pub(crate) struct SeriesSpan {
     pub(crate) id: ShapeId,
     pub(crate) start: usize,
     pub(crate) len: usize,
+    pub(crate) point_indices: Arc<[usize]>,
     pub(crate) line_style: Option<LineStyle>,
     pub(crate) color: Color,
     pub(crate) marker: u32,

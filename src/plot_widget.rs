@@ -23,9 +23,10 @@ use iced::{
 use indexmap::IndexMap;
 
 use crate::{
-    HLine, HoverPickEvent, MarkerSize, MarkerStyle, PlotUiMessage, PointId, Series, TooltipContext,
-    VLine, axes_labels,
+    AxisScale, HLine, HoverPickEvent, MarkerSize, MarkerStyle, PlotUiMessage, PointId, Series,
+    TooltipContext, VLine, axes_labels,
     axis_link::AxisLink,
+    axis_scale::{data_point_to_plot, plot_point_to_data},
     camera::Camera,
     legend::{self, LegendEntry},
     message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
@@ -65,6 +66,8 @@ pub struct PlotWidget {
     pub(crate) y_axis_label: String,
     pub(crate) x_lim: Option<(f64, f64)>,
     pub(crate) y_lim: Option<(f64, f64)>,
+    pub(crate) x_axis_scale: AxisScale,
+    pub(crate) y_axis_scale: AxisScale,
     pub(crate) x_axis_link: Option<AxisLink>,
     pub(crate) y_axis_link: Option<AxisLink>,
     pub(crate) hover_radius_px: f32,
@@ -119,6 +122,8 @@ impl PlotWidget {
             y_axis_label: String::new(),
             x_lim: None,
             y_lim: None,
+            x_axis_scale: AxisScale::Linear,
+            y_axis_scale: AxisScale::Linear,
             x_axis_link: None,
             y_axis_link: None,
             hover_radius_px: 8.0,
@@ -221,11 +226,27 @@ impl PlotWidget {
         self.x_lim = Some((min, max));
     }
 
+    /// Set the x-axis scale mode.
+    ///
+    /// This does not modify tick producer/formatter settings.
+    pub fn set_x_axis_scale(&mut self, scale: AxisScale) {
+        self.x_axis_scale = scale;
+        self.data_version = self.data_version.wrapping_add(1);
+    }
+
     /// Set the y-axis limits (min, max) for the plot.
     ///
     /// If set, these will override autoscaling for the y-axis.
     pub fn set_y_lim(&mut self, min: f64, max: f64) {
         self.y_lim = Some((min, max));
+    }
+
+    /// Set the y-axis scale mode.
+    ///
+    /// This does not modify tick producer/formatter settings.
+    pub fn set_y_axis_scale(&mut self, scale: AxisScale) {
+        self.y_axis_scale = scale;
+        self.data_version = self.data_version.wrapping_add(1);
     }
 
     /// Link the x-axis to other plots. When the x-axis is panned or zoomed,
@@ -245,7 +266,10 @@ impl PlotWidget {
     fn world_to_screen_position(
         world: [f64; 2],
         camera_bounds: &(Camera, Rectangle),
+        x_axis_scale: AxisScale,
+        y_axis_scale: AxisScale,
     ) -> Option<[f32; 2]> {
+        let world = data_point_to_plot(world, x_axis_scale, y_axis_scale)?;
         let (camera, bounds) = camera_bounds;
         if let (Some(screen_x), Some(screen_y)) = (
             world_to_screen_position_x(world[0], camera, bounds),
@@ -286,6 +310,8 @@ impl PlotWidget {
                     tooltip.screen_xy = Self::world_to_screen_position(
                         Self::tooltip_anchor_world(highlight_point),
                         camera_bounds,
+                        self.x_axis_scale,
+                        self.y_axis_scale,
                     );
                 }
             }
@@ -428,6 +454,8 @@ impl PlotWidget {
                 screen_xy: Self::world_to_screen_position(
                     Self::tooltip_anchor_world(&highlight_point),
                     camera_bounds,
+                    self.x_axis_scale,
+                    self.y_axis_scale,
                 ),
                 text,
             });
@@ -1050,22 +1078,28 @@ fn update_cursor_overlay_on_move(
     }
     if state.cursor_inside() {
         let viewport = Vec2::new(state.bounds.width, state.bounds.height);
-        let world = state.camera.screen_to_world(
+        let plot = state.camera.screen_to_world(
             DVec2::new(
                 state.cursor_position.x as f64,
                 state.cursor_position.y as f64,
             ),
             DVec2::new(viewport.x as f64, viewport.y as f64),
         );
+        let Some(world) =
+            plot_point_to_data([plot.x, plot.y], widget.x_axis_scale, widget.y_axis_scale)
+        else {
+            effects.clear_cursor_position = true;
+            return;
+        };
         let text = if let Some(p) = &widget.cursor_provider {
-            (p)(world.x, world.y)
+            (p)(world[0], world[1])
         } else {
-            format!("{:.4}, {:.4}", world.x, world.y)
+            format!("{:.4}, {:.4}", world[0], world[1])
         };
 
         effects.cursor_ui = Some(CursorPositionUiPayload {
-            x: world.x,
-            y: world.y,
+            x: world[0],
+            y: world[1],
             text,
         });
     } else {
