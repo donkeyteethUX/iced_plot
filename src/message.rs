@@ -14,7 +14,7 @@ pub enum PlotUiMessage {
     /// Toggle visibility of a series or reference line by label.
     ToggleSeriesVisibility(ShapeId),
     /// Plot event payload (input + render updates).
-    Event(PlotEvent),
+    Event(Box<PlotEvent>),
     /// Apply a plot command (used to forward default interactions in override mode).
     Command(PlotCommand),
 }
@@ -25,6 +25,18 @@ impl PlotUiMessage {
     pub fn get_hover_pick_event(&self) -> Option<HoverPickEvent> {
         if let PlotUiMessage::Event(event) = self {
             event.render.as_ref().and_then(|update| update.hover_pick)
+        } else {
+            None
+        }
+    }
+
+    /// Get the input event if one exists.
+    /// 
+    /// Note that input events are only emitted when the plot widget is
+    /// configured with `InputPolicy::Override`.
+    pub fn get_input_event(&self) -> Option<PlotInputEvent> {
+        if let PlotUiMessage::Event(event) = self {
+            event.input
         } else {
             None
         }
@@ -48,7 +60,7 @@ pub struct PlotEvent {
 }
 
 /// Pointer input event emitted by the plot in override mode.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum PlotInputEvent {
     CursorMoved(PlotPointerEvent),
     CursorEntered(PlotPointerEvent),

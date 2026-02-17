@@ -1425,19 +1425,20 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             iced::Event::Mouse(mouse_event) => {
                 let interactions_enabled = self.input_policy == InputPolicy::Default;
                 let input_event = build_input_event(*mouse_event, state, bounds, cursor);
-                effects.needs_redraw |= apply_command(
-                    self,
-                    state,
-                    PlotCommand::ApplyInputEvent {
-                        input: input_event.clone(),
-                        interactions_enabled,
-                    },
-                    &mut effects,
-                );
 
                 if self.input_policy == InputPolicy::Override {
                     effects.input_event = Some(input_event);
                 }
+
+                effects.needs_redraw |= apply_command(
+                    self,
+                    state,
+                    PlotCommand::ApplyInputEvent {
+                        input: input_event,
+                        interactions_enabled,
+                    },
+                    &mut effects,
+                );
             }
             iced::Event::Keyboard(keyboard_event) => {
                 if let keyboard::Event::KeyPressed {
@@ -1506,10 +1507,12 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                 None
             };
 
-            return Some(shader::Action::publish(PlotUiMessage::Event(PlotEvent {
-                input: effects.input_event,
-                render,
-            })));
+            return Some(shader::Action::publish(PlotUiMessage::Event(Box::new(
+                PlotEvent {
+                    input: effects.input_event,
+                    render,
+                },
+            ))));
         }
 
         effects.needs_redraw.then(shader::Action::request_redraw)

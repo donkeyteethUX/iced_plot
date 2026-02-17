@@ -71,7 +71,7 @@ fn update(app: &mut App, message: Message) {
                 {
                     app.snapshot = Some(snapshot);
                 }
-                if let Some(input) = &event.input {
+                if let Some(input) = event.input {
                     handle_input(app, input);
                 }
             }
@@ -84,7 +84,7 @@ fn view(app: &App) -> Element<'_, Message> {
     app.plot.view().map(Message::Plot)
 }
 
-fn handle_input(app: &mut App, input: &PlotInputEvent) {
+fn handle_input(app: &mut App, input: PlotInputEvent) {
     match input {
         PlotInputEvent::ButtonPressed {
             button: mouse::Button::Left,
@@ -93,7 +93,7 @@ fn handle_input(app: &mut App, input: &PlotInputEvent) {
             if pointer.inside
                 && let Some(world) = pointer.world
             {
-                if let Some(index) = find_nearest_control_point(app, pointer) {
+                if let Some(index) = find_nearest_control_point(app, &pointer) {
                     app.drag_index = Some(index);
                 } else {
                     app.control_points.push(world);
@@ -121,7 +121,7 @@ fn handle_input(app: &mut App, input: &PlotInputEvent) {
             // Forward wheel interactions to default zoom/pan behavior.
             app.plot
                 .update(PlotUiMessage::Command(PlotCommand::ApplyDefaultMouseEvent(
-                    input.clone(),
+                    input,
                 )));
         }
         _ => {}
