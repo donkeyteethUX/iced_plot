@@ -157,11 +157,16 @@ pub enum SeriesError {
     InvalidAxisScale,
     /// Per-point colors length does not match positions length.
     InvalidPointColorsLength,
+    /// Fill begin/end must reference different shapes.
+    InvalidFillEndpoints,
+    /// Fill endpoint references a shape that does not exist in the widget.
+    FillEndpointNotFound(ShapeId),
 }
 
 /// Unique identifier for a shape in the plot.
 ///
-/// You can obtain the [ShapeId] of [Series], [VLine](crate::VLine), or [HLine](crate::HLine) by `id` field:
+/// You can obtain the [ShapeId] of [Series], [VLine](crate::VLine), [HLine](crate::HLine),
+/// or [Fill](crate::Fill) by `id` field:
 /// ```rust
 /// use iced_plot::{Series, VLine, HLine, MarkerStyle, LineStyle};
 /// let series = Series::new(vec![[0.0, 0.0], [1.0, 1.0]], MarkerStyle::circle(5.0), LineStyle::Solid);

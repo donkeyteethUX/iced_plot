@@ -26,6 +26,7 @@ pub(crate) mod axes_labels;
 pub(crate) mod axis_link;
 pub(crate) mod axis_scale;
 pub(crate) mod camera;
+pub(crate) mod fill;
 pub(crate) mod grid;
 pub(crate) mod legend;
 pub(crate) mod message;
@@ -45,6 +46,7 @@ pub use iced::Color;
 // Re-exports of public types.
 pub use axis_link::AxisLink;
 pub use axis_scale::AxisScale;
+pub use fill::Fill;
 pub use grid::TickWeight;
 pub use message::{HoverPickEvent, PlotUiMessage, PointId, TooltipContext};
 pub use plot_widget::{HighlightPoint, PlotWidget};

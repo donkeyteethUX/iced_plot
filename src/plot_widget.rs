@@ -23,8 +23,8 @@ use iced::{
 use indexmap::IndexMap;
 
 use crate::{
-    AxisScale, HLine, HoverPickEvent, MarkerSize, MarkerStyle, PlotUiMessage, PointId, Series,
-    TooltipContext, VLine, axes_labels,
+    AxisScale, Fill, HLine, HoverPickEvent, MarkerSize, MarkerStyle, PlotUiMessage, PointId,
+    Series, TooltipContext, VLine, axes_labels,
     axis_link::AxisLink,
     axis_scale::{data_point_to_plot, plot_point_to_data},
     camera::Camera,
@@ -52,6 +52,7 @@ pub struct PlotWidget {
     pub(crate) instance_id: u64,
     // Data
     pub(crate) series: IndexMap<ShapeId, Series>,
+    pub(crate) fills: IndexMap<ShapeId, Fill>,
     pub(crate) vlines: IndexMap<ShapeId, VLine>,
     pub(crate) hlines: IndexMap<ShapeId, HLine>,
     pub(crate) hidden_shapes: HashSet<ShapeId>,
@@ -109,6 +110,7 @@ impl PlotWidget {
         Self {
             instance_id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             series: IndexMap::new(),
+            fills: IndexMap::new(),
             vlines: IndexMap::new(),
             hlines: IndexMap::new(),
             hidden_shapes: HashSet::new(),
@@ -180,6 +182,17 @@ impl PlotWidget {
         }
     }
 
+    /// Remove a fill from the plot by its ID.
+    pub fn remove_fill(&mut self, id: &ShapeId) -> Result<(), SeriesError> {
+        if self.fills.shift_remove(id).is_some() {
+            self.hidden_shapes.remove(id);
+            self.data_version += 1;
+            Ok(())
+        } else {
+            Err(SeriesError::NotFound(*id))
+        }
+    }
+
     /// Update a data series by its id.
     pub fn update_series<F: FnMut(&mut Series)>(
         &mut self,
@@ -200,6 +213,24 @@ impl PlotWidget {
     pub fn add_vline(&mut self, vline: VLine) {
         self.vlines.insert(vline.id, vline);
         self.data_version += 1;
+    }
+
+    /// Add a filled region between two shapes.
+    ///
+    /// `fill.begin` and `fill.end` must reference existing series/reference lines.
+    pub fn add_fill(&mut self, fill: Fill) -> Result<(), SeriesError> {
+        if !fill.validate() {
+            return Err(SeriesError::InvalidFillEndpoints);
+        }
+        if !self.is_fill_endpoint_available(fill.begin) {
+            return Err(SeriesError::FillEndpointNotFound(fill.begin));
+        }
+        if !self.is_fill_endpoint_available(fill.end) {
+            return Err(SeriesError::FillEndpointNotFound(fill.end));
+        }
+        self.fills.insert(fill.id, fill);
+        self.data_version = self.data_version.wrapping_add(1);
+        Ok(())
     }
 
     /// Add a horizontal reference line to the plot.
@@ -722,6 +753,21 @@ impl PlotWidget {
                 });
             }
         }
+        // Add fills to legend
+        for (id, fill) in &self.fills {
+            if let Some(ref label) = fill.label
+                && !label.is_empty()
+            {
+                out.push(LegendEntry {
+                    id: *id,
+                    label: label.clone(),
+                    color: fill.color,
+                    _marker: u32::MAX,
+                    _line_style: None,
+                    hidden: self.hidden_shapes.contains(id),
+                });
+            }
+        }
         out
     }
 
@@ -951,6 +997,7 @@ impl PlotWidget {
 
     fn toggle_visibility(&mut self, id: &ShapeId) {
         let exists = self.series.contains_key(id)
+            || self.fills.contains_key(id)
             || self.vlines.contains_key(id)
             || self.hlines.contains_key(id);
 
@@ -971,6 +1018,12 @@ impl PlotWidget {
             self.highlight_version += 1;
         }
         self.data_version += 1;
+    }
+
+    fn is_fill_endpoint_available(&self, id: ShapeId) -> bool {
+        self.series.contains_key(&id)
+            || self.vlines.contains_key(&id)
+            || self.hlines.contains_key(&id)
     }
 }
 

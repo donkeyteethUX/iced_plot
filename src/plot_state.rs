@@ -27,6 +27,7 @@ pub struct PlotState {
     pub(crate) points: Arc<[Point]>,       // vertex/instance data
     pub(crate) point_colors: Arc<[Color]>, // per-point colors (matches points)
     pub(crate) series: Arc<[SeriesSpan]>,  // spans describing logical series
+    pub(crate) fills: Arc<[FillSpan]>,     // triangulated fill spans
     pub(crate) vlines: Arc<[VLine]>,       // vertical reference lines
     pub(crate) hlines: Arc<[HLine]>,       // horizontal reference lines
     pub(crate) data_min: Option<DVec2>,
@@ -58,6 +59,7 @@ pub struct PlotState {
     // Version counters
     pub(crate) markers_version: u64,
     pub(crate) lines_version: u64,
+    pub(crate) fills_version: u64,
     pub(crate) highlight_version: u64,
     pub(crate) data_src_version: u64, // version of source data last synced
     pub(crate) highlight_src_version: u64,
@@ -80,6 +82,7 @@ impl Default for PlotState {
             point_colors: Arc::new([]),
             highlighted_points: Arc::new([]),
             series: Arc::new([]),
+            fills: Arc::new([]),
             vlines: Arc::new([]),
             hlines: Arc::new([]),
             data_min: None,
@@ -102,6 +105,7 @@ impl Default for PlotState {
             pan: PanState::default(),
             markers_version: 1,
             lines_version: 1,
+            fills_version: 1,
             highlight_version: 0,
             hover_enabled: true,
             hover_radius_px: 8.0,
@@ -238,9 +242,27 @@ impl PlotState {
             .map(|(_, h)| h.clone())
             .collect();
 
+        let x_domain = plot_x_domain(widget, data_min, data_max);
+        let y_domain = plot_y_domain(widget, data_min, data_max);
+
+        let fills: Vec<_> = widget
+            .fills
+            .iter()
+            .filter(|(fill_id, fill)| {
+                !widget.hidden_shapes.contains(fill_id)
+                    && !widget.hidden_shapes.contains(&fill.begin)
+                    && !widget.hidden_shapes.contains(&fill.end)
+            })
+            .filter_map(|(_, fill)| {
+                build_fill_span(widget, fill.begin, fill.end, fill.color, x_domain, y_domain)
+                    .filter(|span| !span.vertices.is_empty())
+            })
+            .collect();
+
         self.points = points.into();
         self.point_colors = point_colors.into();
         self.series = series_spans.into();
+        self.fills = fills.into();
         self.vlines = vlines.into();
         self.hlines = hlines.into();
         self.data_min = data_min;
@@ -265,6 +287,7 @@ impl PlotState {
         // (not when only hover/pick changes - that's tracked by highlight_version)
         self.markers_version = self.markers_version.wrapping_add(1);
         self.lines_version = self.lines_version.wrapping_add(1);
+        self.fills_version = self.fills_version.wrapping_add(1);
     }
 
     pub(crate) fn autoscale(&mut self, update_axis_links: bool) {
@@ -623,6 +646,280 @@ impl PlotState {
             self.y_link_version = link.version();
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FillSpan {
+    pub(crate) color: Color,
+    /// Triangle list vertices in plot/world coordinates.
+    pub(crate) vertices: Arc<[[f64; 2]]>,
+}
+
+enum FillEndpoint<'a> {
+    Series(&'a crate::Series),
+    HLine(f64),
+    VLine(f64),
+}
+
+fn resolve_fill_endpoint<'a>(widget: &'a PlotWidget, id: ShapeId) -> Option<FillEndpoint<'a>> {
+    if let Some(series) = widget.series.get(&id) {
+        return Some(FillEndpoint::Series(series));
+    }
+    if let Some(hline) = widget.hlines.get(&id) {
+        return Some(FillEndpoint::HLine(hline.y));
+    }
+    if let Some(vline) = widget.vlines.get(&id) {
+        return Some(FillEndpoint::VLine(vline.x));
+    }
+    None
+}
+
+fn plot_x_domain(
+    widget: &PlotWidget,
+    data_min: Option<DVec2>,
+    data_max: Option<DVec2>,
+) -> Option<(f64, f64)> {
+    if let Some((min, max)) = widget.x_lim
+        && let (Some(min), Some(max)) = (
+            widget.x_axis_scale.data_to_plot(min),
+            widget.x_axis_scale.data_to_plot(max),
+        )
+    {
+        return (min < max).then_some((min, max));
+    }
+    match (data_min, data_max) {
+        (Some(min), Some(max)) if min.x < max.x => Some((min.x, max.x)),
+        _ => None,
+    }
+}
+
+fn plot_y_domain(
+    widget: &PlotWidget,
+    data_min: Option<DVec2>,
+    data_max: Option<DVec2>,
+) -> Option<(f64, f64)> {
+    if let Some((min, max)) = widget.y_lim
+        && let (Some(min), Some(max)) = (
+            widget.y_axis_scale.data_to_plot(min),
+            widget.y_axis_scale.data_to_plot(max),
+        )
+    {
+        return (min < max).then_some((min, max));
+    }
+    match (data_min, data_max) {
+        (Some(min), Some(max)) if min.y < max.y => Some((min.y, max.y)),
+        _ => None,
+    }
+}
+
+fn transformed_series_points(
+    series: &crate::Series,
+    x_axis_scale: AxisScale,
+    y_axis_scale: AxisScale,
+) -> Vec<[f64; 2]> {
+    series
+        .positions
+        .iter()
+        .filter_map(|&p| data_point_to_plot(p, x_axis_scale, y_axis_scale))
+        .collect()
+}
+
+/// Keep only strictly increasing-x points in their original order.
+///
+/// This avoids sorting and lets fill interpolation run in linear time.
+/// Out-of-order (or duplicate-x) points are skipped.
+fn monotonic_increasing_x(points: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
+    let mut out = Vec::with_capacity(points.len());
+    let mut last_x: Option<f64> = None;
+    for p in points {
+        match last_x {
+            Some(x_prev) if p[0] <= x_prev => {}
+            _ => {
+                last_x = Some(p[0]);
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+fn find_segment_covering_x(points: &[[f64; 2]], x: f64) -> Option<usize> {
+    if points.len() < 2 {
+        return None;
+    }
+    let eps = 1e-12;
+    let mut idx = 0usize;
+    while idx + 1 < points.len() {
+        let x0 = points[idx][0];
+        let x1 = points[idx + 1][0];
+        if x >= x0 - eps && x <= x1 + eps {
+            return Some(idx);
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn y_at_x_in_segment(points: &[[f64; 2]], seg_idx: usize, x: f64) -> Option<f64> {
+    let p0 = *points.get(seg_idx)?;
+    let p1 = *points.get(seg_idx + 1)?;
+    let x0 = p0[0];
+    let x1 = p1[0];
+    let eps = 1e-9;
+    if x < x0 - eps || x > x1 + eps {
+        return None;
+    }
+    let dx = x1 - x0;
+    if dx.abs() <= f64::EPSILON {
+        return Some((p0[1] + p1[1]) * 0.5);
+    }
+    let t = (x - x0) / dx;
+    Some(p0[1] + t * (p1[1] - p0[1]))
+}
+
+fn advance_segment_to_x(points: &[[f64; 2]], seg_idx: &mut usize, x: f64) {
+    let eps = 1e-12;
+    while *seg_idx + 2 <= points.len().saturating_sub(1) && points[*seg_idx + 1][0] <= x + eps {
+        *seg_idx += 1;
+    }
+}
+
+fn push_quad_as_triangles(
+    vertices: &mut Vec<[f64; 2]>,
+    a0: [f64; 2],
+    b0: [f64; 2],
+    a1: [f64; 2],
+    b1: [f64; 2],
+) {
+    vertices.extend_from_slice(&[a0, b0, a1, a1, b0, b1]);
+}
+
+fn build_fill_span(
+    widget: &PlotWidget,
+    begin: ShapeId,
+    end: ShapeId,
+    color: Color,
+    x_domain: Option<(f64, f64)>,
+    y_domain: Option<(f64, f64)>,
+) -> Option<FillSpan> {
+    let begin_endpoint = resolve_fill_endpoint(widget, begin)?;
+    let end_endpoint = resolve_fill_endpoint(widget, end)?;
+
+    let mut vertices: Vec<[f64; 2]> = Vec::new();
+
+    match (begin_endpoint, end_endpoint) {
+        (FillEndpoint::Series(sa), FillEndpoint::Series(sb)) => {
+            let a = monotonic_increasing_x(transformed_series_points(
+                sa,
+                widget.x_axis_scale,
+                widget.y_axis_scale,
+            ));
+            let b = monotonic_increasing_x(transformed_series_points(
+                sb,
+                widget.x_axis_scale,
+                widget.y_axis_scale,
+            ));
+            if a.len() < 2 || b.len() < 2 {
+                return None;
+            }
+
+            let overlap_min = a.first()?[0].max(b.first()?[0]);
+            let overlap_max = a.last()?[0].min(b.last()?[0]);
+            if overlap_min >= overlap_max {
+                return None;
+            }
+
+            let mut seg_a = find_segment_covering_x(&a, overlap_min)?;
+            let mut seg_b = find_segment_covering_x(&b, overlap_min)?;
+
+            let mut x_curr = overlap_min;
+            let mut y_a_curr = y_at_x_in_segment(&a, seg_a, x_curr)?;
+            let mut y_b_curr = y_at_x_in_segment(&b, seg_b, x_curr)?;
+
+            let eps = 1e-12;
+            loop {
+                let next_a = a.get(seg_a + 1).map(|p| p[0]).unwrap_or(f64::INFINITY);
+                let next_b = b.get(seg_b + 1).map(|p| p[0]).unwrap_or(f64::INFINITY);
+                let x_next = next_a.min(next_b).min(overlap_max);
+
+                if x_next <= x_curr + eps {
+                    break;
+                }
+
+                let y_a_next = y_at_x_in_segment(&a, seg_a, x_next)?;
+                let y_b_next = y_at_x_in_segment(&b, seg_b, x_next)?;
+
+                push_quad_as_triangles(
+                    &mut vertices,
+                    [x_curr, y_a_curr],
+                    [x_curr, y_b_curr],
+                    [x_next, y_a_next],
+                    [x_next, y_b_next],
+                );
+
+                x_curr = x_next;
+                y_a_curr = y_a_next;
+                y_b_curr = y_b_next;
+
+                if x_curr >= overlap_max - eps {
+                    break;
+                }
+
+                advance_segment_to_x(&a, &mut seg_a, x_curr);
+                advance_segment_to_x(&b, &mut seg_b, x_curr);
+
+                if seg_a + 1 >= a.len() || seg_b + 1 >= b.len() {
+                    break;
+                }
+            }
+        }
+        (FillEndpoint::Series(series), FillEndpoint::HLine(y_data))
+        | (FillEndpoint::HLine(y_data), FillEndpoint::Series(series)) => {
+            let y_plot = widget.y_axis_scale.data_to_plot(y_data)?;
+            let points =
+                transformed_series_points(series, widget.x_axis_scale, widget.y_axis_scale);
+            for segment in points.windows(2) {
+                let p0 = segment[0];
+                let p1 = segment[1];
+                let q0 = [p0[0], y_plot];
+                let q1 = [p1[0], y_plot];
+                push_quad_as_triangles(&mut vertices, p0, q0, p1, q1);
+            }
+        }
+        (FillEndpoint::Series(series), FillEndpoint::VLine(x_data))
+        | (FillEndpoint::VLine(x_data), FillEndpoint::Series(series)) => {
+            let x_plot = widget.x_axis_scale.data_to_plot(x_data)?;
+            let points =
+                transformed_series_points(series, widget.x_axis_scale, widget.y_axis_scale);
+            for segment in points.windows(2) {
+                let p0 = segment[0];
+                let p1 = segment[1];
+                let q0 = [x_plot, p0[1]];
+                let q1 = [x_plot, p1[1]];
+                push_quad_as_triangles(&mut vertices, p0, q0, p1, q1);
+            }
+        }
+        (FillEndpoint::HLine(y0_data), FillEndpoint::HLine(y1_data)) => {
+            let (x0, x1) = x_domain?;
+            let y0 = widget.y_axis_scale.data_to_plot(y0_data)?;
+            let y1 = widget.y_axis_scale.data_to_plot(y1_data)?;
+            push_quad_as_triangles(&mut vertices, [x0, y0], [x0, y1], [x1, y0], [x1, y1]);
+        }
+        (FillEndpoint::VLine(x0_data), FillEndpoint::VLine(x1_data)) => {
+            let (y0, y1) = y_domain?;
+            let x0 = widget.x_axis_scale.data_to_plot(x0_data)?;
+            let x1 = widget.x_axis_scale.data_to_plot(x1_data)?;
+            push_quad_as_triangles(&mut vertices, [x0, y0], [x1, y0], [x0, y1], [x1, y1]);
+        }
+        _ => {
+            return None;
+        }
+    }
+
+    (!vertices.is_empty()).then_some(FillSpan {
+        color,
+        vertices: vertices.into(),
+    })
 }
 
 #[derive(Debug, Clone)]

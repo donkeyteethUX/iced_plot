@@ -35,6 +35,7 @@ struct LineBuffer {
 struct PipelineCache {
     marker: Option<RenderPipeline>,
     line: Option<RenderPipeline>,
+    fill: Option<RenderPipeline>,
     overlay: Option<RenderPipeline>,
     line_overlay: Option<RenderPipeline>,
 }
@@ -44,6 +45,7 @@ impl PipelineCache {
         Self {
             marker: None,
             line: None,
+            fill: None,
             overlay: None,
             line_overlay: None,
         }
@@ -53,6 +55,7 @@ impl PipelineCache {
 /// Cache for vertex buffers
 struct BufferCache {
     markers: Option<VertexBuffer>,
+    fills: Option<VertexBuffer>,
     lines: Option<LineBuffer>,
     reflines: Option<LineBuffer>,
     selection: Option<VertexBuffer>,
@@ -65,6 +68,7 @@ impl BufferCache {
     fn new() -> Self {
         Self {
             markers: None,
+            fills: None,
             lines: None,
             reflines: None,
             selection: None,
@@ -78,6 +82,7 @@ impl BufferCache {
 /// Tracks version numbers to detect changes
 struct VersionTracker {
     markers: u64,
+    fills: u64,
     lines: u64,
     highlight: u64,
     render_offset: glam::DVec2,
@@ -87,6 +92,7 @@ impl VersionTracker {
     fn new() -> Self {
         Self {
             markers: 0,
+            fills: 0,
             lines: 0,
             highlight: 0,
             render_offset: glam::DVec2::ZERO,
@@ -265,6 +271,9 @@ impl PlotRenderer {
         self.grid
             .ensure_pipeline(device, self.format, &self.camera_bgl);
         self.grid.update(device, state);
+        if !state.fills.is_empty() {
+            self.ensure_fill_pipeline(device);
+        }
         if !state.series.is_empty() && state.series.iter().any(|s| s.line_style.is_some()) {
             self.ensure_line_pipeline(device);
         }
@@ -287,6 +296,10 @@ impl PlotRenderer {
         if state.markers_version != self.versions.markers || offset_changed {
             self.rebuild_markers(device, queue, state);
             self.versions.markers = state.markers_version;
+        }
+        if state.fills_version != self.versions.fills || offset_changed {
+            self.rebuild_fills(device, queue, state);
+            self.versions.fills = state.fills_version;
         }
         if state.lines_version != self.versions.lines || offset_changed {
             self.rebuild_lines(device, queue, state);
@@ -530,6 +543,67 @@ impl PlotRenderer {
         self.pipelines.line = Some(pipeline);
     }
 
+    pub fn ensure_fill_pipeline(&mut self, device: &Device) {
+        if self.pipelines.fill.is_some() {
+            return;
+        }
+        let shader = device.create_shader_module(include_wgsl!("shaders/fill.wgsl"));
+        let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("fill layout"),
+            bind_group_layouts: &[&self.camera_bgl],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("fill pipeline"),
+            layout: Some(&layout),
+            vertex: VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: PipelineCompilationOptions::default(),
+                buffers: &[VertexBufferLayout {
+                    array_stride: 24,
+                    step_mode: VertexStepMode::Vertex,
+                    attributes: &[
+                        VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: VertexFormat::Float32x2,
+                        },
+                        VertexAttribute {
+                            offset: 8,
+                            shader_location: 1,
+                            format: VertexFormat::Float32x4,
+                        },
+                    ],
+                }],
+            },
+            fragment: Some(FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: PipelineCompilationOptions::default(),
+                targets: &[Some(ColorTargetState {
+                    format: self.format,
+                    blend: Some(BlendState::ALPHA_BLENDING),
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        self.pipelines.fill = Some(pipeline);
+    }
+
     pub fn ensure_overlay_pipeline(&mut self, device: &Device) {
         if self.pipelines.overlay.is_some() {
             return;
@@ -725,6 +799,41 @@ impl PlotRenderer {
 
         // Update picking id map
         self.picking.set_id_map(id_map);
+    }
+
+    fn rebuild_fills(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
+        self.buffers.fills = None;
+        if state.fills.is_empty() {
+            return;
+        }
+
+        let mut writer = VertexWriter::new();
+        for fill in state.fills.iter() {
+            for world_pos in fill.vertices.iter() {
+                let render_pos = self.world_to_render_pos(*world_pos, &state.camera);
+                writer.write_position(render_pos);
+                writer.write_color(&fill.color);
+            }
+        }
+
+        if writer.is_empty() {
+            return;
+        }
+
+        let data = writer.as_slice();
+        self.buffers.fills = Some(VertexBuffer {
+            buffer: device.create_buffer(&BufferDescriptor {
+                label: Some("fill vb"),
+                size: data.len() as u64,
+                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            vertex_count: (data.len() / 24) as u32,
+        });
+
+        if let Some(vb) = &self.buffers.fills {
+            queue.write_buffer(&vb.buffer, 0, data);
+        }
     }
 
     fn rebuild_lines(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
@@ -1174,6 +1283,14 @@ impl PlotRenderer {
 
             // grid
             self.grid.draw(&mut pass, &self.camera_bind_group);
+            // fills
+            if let (Some(pipeline), Some(vb)) = (self.pipelines.fill.as_ref(), &self.buffers.fills)
+            {
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, vb.buffer.slice(..));
+                pass.draw(0..vb.vertex_count, 0..1);
+            }
             // lines
             if let (Some(pipeline), Some(lb)) = (self.pipelines.line.as_ref(), &self.buffers.lines)
             {

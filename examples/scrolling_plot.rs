@@ -1,4 +1,9 @@
 //! Example of a scrolling plot with new data points being added over time.
+use std::time::Duration;
+
+use iced::time::Instant;
+use iced_plot::Fill;
+use iced_plot::HLine;
 use iced_plot::PlotUiMessage;
 use iced_plot::PlotWidget;
 use iced_plot::{MarkerStyle, PlotWidgetBuilder};
@@ -8,10 +13,9 @@ use iced::window;
 use iced::{Color, Element};
 
 fn main() -> iced::Result {
-    iced::application(App::new, App::update, App::view)
+    iced::application::timed(App::new, App::update, App::subscription, App::view)
         .font(include_bytes!("fonts/FiraCodeNerdFont-Regular.ttf"))
         .default_font(iced::Font::with_name("FiraCode Nerd Font"))
-        .subscription(App::subscription)
         .run()
 }
 
@@ -25,15 +29,21 @@ struct App {
     series_id: ShapeId,
     widget: PlotWidget,
     x: f64,
+    last_tick: std::time::Instant,
 }
 
 impl App {
-    fn update(&mut self, message: Message) {
+    fn update(&mut self, message: Message, now: std::time::Instant) {
         match message {
             Message::PlotMessage(plot_msg) => {
                 self.widget.update(plot_msg);
             }
             Message::Tick => {
+                if self.last_tick.elapsed() < Duration::from_millis(30) {
+                    return;
+                }
+                self.last_tick = now;
+
                 let y = (self.x * 0.5).sin();
                 // Update the series
                 self.widget
@@ -64,14 +74,19 @@ impl App {
         let series = Series::markers_only(vec![[x, (x * 0.5).sin()]], MarkerStyle::ring(10.0))
             .with_label("scrolling")
             .with_color(Color::WHITE);
+        let hline = HLine::new(0.0);
+        let fill = Fill::new(hline.id, series.id);
         Self {
             series_id: series.id,
             widget: PlotWidgetBuilder::new()
                 .with_autoscale_on_updates(true)
                 .add_series(series)
+                .add_hline(hline)
+                .add_fill(fill)
                 .build()
                 .unwrap(),
             x,
+            last_tick: Instant::now(),
         }
     }
 }
