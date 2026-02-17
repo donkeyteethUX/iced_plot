@@ -785,12 +785,14 @@ impl PlotRenderer {
             self.buffers.markers = Some(VertexBuffer {
                 buffer: device.create_buffer(&BufferDescriptor {
                     label: Some("marker vb"),
-                    size: needed.max(1024),
+                    size: needed.max(2048),
                     usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }),
                 vertex_count: marker_series_count as u32,
             });
+        } else if let Some(vb) = &mut self.buffers.markers {
+            vb.vertex_count = marker_series_count as u32;
         }
 
         if let Some(vb) = &self.buffers.markers {
