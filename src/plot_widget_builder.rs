@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::axis_link::AxisLink;
 use crate::axis_scale::AxisScale;
+use crate::fill::Fill;
 use crate::message::TooltipContext;
 use crate::plot_widget::{CursorProvider, HighlightPoint, HighlightPointProvider, PlotWidget};
 use crate::reference_lines::{HLine, VLine};
@@ -52,6 +53,7 @@ pub struct PlotWidgetBuilder {
     axis_label_size: Option<f32>,
     data_aspect: Option<f64>,
     series: Vec<Series>,
+    fills: Vec<Fill>,
     vlines: Vec<VLine>,
     hlines: Vec<HLine>,
 }
@@ -292,6 +294,12 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Add a fill region between two shapes in the plot.
+    pub fn add_fill(mut self, fill: Fill) -> Self {
+        self.fills.push(fill);
+        self
+    }
+
     /// Add a horizontal reference line to the plot.
     pub fn add_hline(mut self, hline: HLine) -> Self {
         self.hlines.push(hline);
@@ -429,6 +437,9 @@ impl PlotWidgetBuilder {
         }
         for hline in self.hlines {
             w.add_hline(hline);
+        }
+        for fill in self.fills {
+            w.add_fill(fill)?;
         }
 
         Ok(w)

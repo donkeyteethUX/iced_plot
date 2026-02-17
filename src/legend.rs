@@ -32,7 +32,8 @@ pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Option<Element<'_,
         .height(Length::Shrink);
 
     for e in entries {
-        let series_color = e.color;
+        let mut series_color = e.color;
+        series_color.a = 1.0;
         let swatch_color = if e.hidden {
             color!(120, 120, 120)
         } else {
