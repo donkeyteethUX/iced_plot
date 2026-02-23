@@ -62,7 +62,6 @@ pub struct PlotState {
     pub(crate) fills_version: u64,
     pub(crate) highlight_version: u64,
     pub(crate) data_src_version: u64, // version of source data last synced
-    pub(crate) highlight_src_version: u64,
     pub(crate) source_instance_id: Option<u64>,
     // Hover/picking internals
     pub(crate) hover_enabled: bool,
@@ -78,7 +77,6 @@ impl Default for PlotState {
     fn default() -> Self {
         Self {
             data_src_version: 0,
-            highlight_src_version: 0,
             source_instance_id: None,
             points: Arc::new([]),
             point_colors: Arc::new([]),
@@ -279,7 +277,6 @@ impl PlotState {
 
         // highlighted_points
         self.sync_highlighted_points_from_widget(widget);
-        self.highlight_src_version = widget.highlight_version;
 
         // Copy formatters
         self.x_axis_formatter = widget.x_axis_formatter.clone();

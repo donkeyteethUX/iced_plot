@@ -57,7 +57,6 @@ pub struct PlotWidget {
     pub(crate) hlines: IndexMap<ShapeId, HLine>,
     pub(crate) hidden_shapes: HashSet<ShapeId>,
     pub(crate) data_version: u64,
-    pub(crate) highlight_version: u64,
     // Configuration
     pub(crate) autoscale_on_updates: bool,
     pub(crate) scroll_to_pan_enabled: bool,
@@ -115,7 +114,6 @@ impl PlotWidget {
             hlines: IndexMap::new(),
             hidden_shapes: HashSet::new(),
             data_version: 1,
-            highlight_version: 0,
             autoscale_on_updates: false,
             scroll_to_pan_enabled: true,
             legend_enabled: true,
@@ -416,28 +414,22 @@ impl PlotWidget {
 
     /// Add a hover point to the plot.
     pub fn add_hover_point(&mut self, point_id: PointId) {
-        if self.handle_hover_pick::<false>(point_id) {
-            self.highlight_version = self.highlight_version.wrapping_add(1);
-        }
+        self.handle_hover_pick::<false>(point_id);
     }
     /// Add a pick point to the plot.
     pub fn add_pick_point(&mut self, point_id: PointId) {
-        if self.handle_hover_pick::<true>(point_id) {
-            self.highlight_version = self.highlight_version.wrapping_add(1);
-        }
+        self.handle_hover_pick::<true>(point_id);
     }
     /// Clear all hover points from the plot.
     pub fn clear_hover(&mut self) {
         if !self.hovered_points.is_empty() {
             self.hovered_points.clear();
-            self.highlight_version = self.highlight_version.wrapping_add(1);
         }
     }
     /// Clear all pick points from the plot.
     pub fn clear_pick(&mut self) {
         if !self.picked_points.is_empty() {
             self.picked_points.clear();
-            self.highlight_version = self.highlight_version.wrapping_add(1);
         }
     }
     fn handle_hover_pick<const PICK: bool>(&mut self, point_id: PointId) -> bool {
@@ -526,7 +518,7 @@ impl PlotWidget {
                     self.update_tooltip_positions();
                 }
 
-                let highlight_changed = match payload.hover_pick {
+                match payload.hover_pick {
                     Some(HoverPickEvent::Hover(point_id)) => {
                         self.hovered_points.clear();
                         self.handle_hover_pick::<false>(point_id)
@@ -546,11 +538,6 @@ impl PlotWidget {
                     }
                     _ => false,
                 };
-
-                // Trigger data version update to rebuild highlighted_points in PlotState
-                if highlight_changed {
-                    self.highlight_version = self.highlight_version.wrapping_add(1);
-                }
                 if payload.clear_cursor_position {
                     self.cursor_ui = None;
                 }
@@ -1007,14 +994,6 @@ impl PlotWidget {
         if !self.hidden_shapes.remove(id) {
             self.hidden_shapes.insert(*id);
         }
-        let contains_highlight = self
-            .hovered_points
-            .keys()
-            .chain(self.picked_points.keys())
-            .any(|point_id| point_id.series_id == *id);
-        if contains_highlight {
-            self.highlight_version += 1;
-        }
         self.data_version += 1;
     }
 
@@ -1243,6 +1222,8 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         cursor: mouse::Cursor,
     ) -> Option<shader::Action<PlotUiMessage>> {
         let mut effects = UpdateEffects::default();
+        let prev_camera = state.camera;
+        let prev_bounds = state.bounds;
 
         // Keep these in sync early, since other phases depend on them.
         state.bounds = bounds;
@@ -1252,11 +1233,8 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         state.crosshairs_enabled = self.crosshairs_enabled;
 
         // Sync highlight overlay data without rebuilding plot geometry.
-        if self.highlight_version != state.highlight_src_version {
-            let changed = state.sync_highlighted_points_from_widget(self);
-            state.highlight_src_version = self.highlight_version;
-            effects.needs_redraw |= changed;
-        }
+        let highlights_changed = state.sync_highlighted_points_from_widget(self);
+        effects.needs_redraw |= highlights_changed;
 
         // Check if limits have been manually set. This will always trigger an "autoscale"
         // to apply the new limits.
@@ -1348,6 +1326,15 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         if let Some(aspect) = self.data_aspect
             && apply_data_aspect(&mut state.camera, &state.bounds, aspect)
         {
+            effects.needs_redraw = true;
+        }
+
+        // Hover/pick highlight mask boxes are baked in clip space. Rebuild them through the
+        // existing highlight_version path whenever camera or viewport bounds change.
+        if !state.highlighted_points.is_empty()
+            && (state.camera != prev_camera || state.bounds != prev_bounds)
+        {
+            state.highlight_version = state.highlight_version.wrapping_add(1);
             effects.needs_redraw = true;
         }
 
