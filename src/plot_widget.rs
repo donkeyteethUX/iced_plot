@@ -1261,10 +1261,15 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         // Check if limits have been manually set. This will always trigger an "autoscale"
         // to apply the new limits.
         let limits_changed = self.x_lim != state.x_lim || self.y_lim != state.y_lim;
+        let instance_switched = state.source_instance_id != Some(self.instance_id);
 
-        if self.data_version != state.data_src_version {
+        if self.data_version != state.data_src_version || instance_switched {
             // Rebuild derived state from widget data
             state.rebuild_from_widget(self);
+
+            if instance_switched && let Some((camera, _)) = self.camera_bounds {
+                state.camera = camera;
+            }
 
             // Refresh hover after data updates when appropriate.
             maybe_submit_hover_request(self, state, &mut effects);
@@ -1273,13 +1278,14 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             //
             // We do so on the first update, if autoscale_on_updates is enabled, or if
             // limits have been manually set.
-            let init_axis_links = state.data_src_version == 0;
-            if self.autoscale_on_updates || init_axis_links || limits_changed {
+            let first_time_widget_view = instance_switched && self.camera_bounds.is_none();
+            if self.autoscale_on_updates || limits_changed || first_time_widget_view {
                 // Initial autoscale shouldn't update axis links.
-                state.autoscale(!init_axis_links);
+                state.autoscale(!first_time_widget_view);
             }
 
             state.data_src_version = self.data_version;
+            state.source_instance_id = Some(self.instance_id);
             effects.needs_redraw = true;
         } else if limits_changed {
             state.x_lim = self.x_lim;

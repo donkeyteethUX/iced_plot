@@ -318,10 +318,14 @@ impl PlotWidgetBuilder {
         ctx: TooltipContext<'_>,
         point: &mut HighlightPoint,
     ) -> Option<String> {
-        Some(format!(
-            "{}\nx: {:.2}, y: {:.2}",
-            ctx.series_label, point.x, point.y
-        ))
+        if ctx.series_label.is_empty() {
+            Some(format!("x: {:.2}, y: {:.2}", point.x, point.y))
+        } else {
+            Some(format!(
+                "{}\nx: {:.2}, y: {:.2}",
+                ctx.series_label, point.x, point.y
+            ))
+        }
     }
 
     /// Build the PlotWidget; validates series and duplicate labels via PlotWidget::add_series.

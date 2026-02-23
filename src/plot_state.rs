@@ -63,6 +63,7 @@ pub struct PlotState {
     pub(crate) highlight_version: u64,
     pub(crate) data_src_version: u64, // version of source data last synced
     pub(crate) highlight_src_version: u64,
+    pub(crate) source_instance_id: Option<u64>,
     // Hover/picking internals
     pub(crate) hover_enabled: bool,
     pub(crate) hover_radius_px: f32,
@@ -78,6 +79,7 @@ impl Default for PlotState {
         Self {
             data_src_version: 0,
             highlight_src_version: 0,
+            source_instance_id: None,
             points: Arc::new([]),
             point_colors: Arc::new([]),
             highlighted_points: Arc::new([]),
