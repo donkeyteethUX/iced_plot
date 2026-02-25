@@ -1171,6 +1171,7 @@ fn update_ticks_and_build_payload(
     widget: &PlotWidget,
     state: &mut PlotState,
     effects: &mut UpdateEffects,
+    first_time_widget_view: bool,
 ) -> (Option<Vec<PositionedTick>>, Option<Vec<PositionedTick>>) {
     if !effects.needs_redraw {
         return (None, None);
@@ -1183,8 +1184,10 @@ fn update_ticks_and_build_payload(
         widget.y_tick_producer.as_ref(),
     );
 
-    let publish_x = (state.x_ticks != old_x).then(|| state.x_ticks.clone());
-    let publish_y = (state.y_ticks != old_y).then(|| state.y_ticks.clone());
+    let publish_x =
+        (first_time_widget_view || (state.x_ticks != old_x)).then(|| state.x_ticks.clone());
+    let publish_y =
+        (first_time_widget_view || (state.y_ticks != old_y)).then(|| state.y_ticks.clone());
 
     // If tick producers are disabled, ticks might never change. Still publish camera/bounds
     // when tooltips exist so the widget can keep tooltip screen positions in sync.
@@ -1240,6 +1243,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         // to apply the new limits.
         let limits_changed = self.x_lim != state.x_lim || self.y_lim != state.y_lim;
         let instance_switched = state.source_instance_id != Some(self.instance_id);
+        let first_time_widget_view = instance_switched && self.camera_bounds.is_none();
 
         if self.data_version != state.data_src_version || instance_switched {
             // Rebuild derived state from widget data
@@ -1256,7 +1260,6 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             //
             // We do so on the first update, if autoscale_on_updates is enabled, or if
             // limits have been manually set.
-            let first_time_widget_view = instance_switched && self.camera_bounds.is_none();
             if self.autoscale_on_updates || limits_changed || first_time_widget_view {
                 // Initial autoscale shouldn't update axis links.
                 state.autoscale(!first_time_widget_view);
@@ -1345,7 +1348,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         effects.needs_redraw |= state.picking.has_outstanding_gpu_request();
 
         let (publish_x_ticks, publish_y_ticks) =
-            update_ticks_and_build_payload(self, state, &mut effects);
+            update_ticks_and_build_payload(self, state, &mut effects, first_time_widget_view);
 
         let needs_publish = effects.hover_pick.is_some()
             || effects.cursor_ui.is_some()
