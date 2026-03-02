@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::axis_link::AxisLink;
 use crate::axis_scale::AxisScale;
+use crate::controls::PlotControls;
 use crate::fill::Fill;
 use crate::message::TooltipContext;
 use crate::plot_widget::{CursorProvider, HighlightPoint, HighlightPointProvider, PlotWidget};
@@ -34,9 +35,8 @@ pub struct PlotWidgetBuilder {
     cursor_overlay: Option<bool>,
     cursor_provider: Option<CursorProvider>,
     crosshairs: Option<bool>,
-    disable_controls_help: bool,
+    controls: Option<PlotControls>,
     disable_legend: bool,
-    disable_scroll_to_pan: bool,
     x_lim: Option<(f64, f64)>,
     y_lim: Option<(f64, f64)>,
     x_axis_scale: Option<AxisScale>,
@@ -144,7 +144,7 @@ impl PlotWidgetBuilder {
     ///
     /// When controls/help UI is disabled, you still can toggle help overlay by calling `PlotWidget.update(PlotUiMessage::ToggleControlsOverlay)`
     pub fn disable_controls_help(mut self) -> Self {
-        self.disable_controls_help = true;
+        self.controls.get_or_insert_default().show_controls_help = false;
         self
     }
 
@@ -160,7 +160,13 @@ impl PlotWidgetBuilder {
     ///
     /// Useful if your application embeds plot widget inside a scrollable container.
     pub fn disable_scroll_to_pan(mut self) -> Self {
-        self.disable_scroll_to_pan = true;
+        self.controls.get_or_insert_default().pan.scroll_to_pan = false;
+        self
+    }
+
+    /// Set the full interaction controls behavior for the plot.
+    pub fn with_controls(mut self, controls: PlotControls) -> Self {
+        self.controls = Some(controls);
         self
     }
 
@@ -355,14 +361,11 @@ impl PlotWidgetBuilder {
         let mut w = PlotWidget::new();
         w.set_x_axis_scale(x_axis_scale);
         w.set_y_axis_scale(y_axis_scale);
-        if self.disable_controls_help {
-            w.controls_help_enabled = false;
+        if let Some(controls) = self.controls {
+            w.set_controls(controls);
         }
         if self.disable_legend {
             w.legend_enabled = false;
-        }
-        if self.disable_scroll_to_pan {
-            w.scroll_to_pan_enabled = false;
         }
 
         if let Some(enabled) = self.autoscale_on_updates {

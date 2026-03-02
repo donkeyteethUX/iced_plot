@@ -28,6 +28,7 @@ use crate::{
     axis_link::AxisLink,
     axis_scale::{data_point_to_plot, plot_point_to_data},
     camera::Camera,
+    controls::PlotControls,
     legend::{self, LegendEntry},
     message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
     picking,
@@ -59,7 +60,7 @@ pub struct PlotWidget {
     pub(crate) data_version: u64,
     // Configuration
     pub(crate) autoscale_on_updates: bool,
-    pub(crate) scroll_to_pan_enabled: bool,
+    pub(crate) controls: PlotControls,
     pub(crate) legend_enabled: bool,
     pub(crate) legend_collapsed: bool,
     pub(crate) x_axis_label: String,
@@ -76,7 +77,6 @@ pub struct PlotWidget {
     pub(crate) cursor_overlay: bool,
     pub(crate) cursor_provider: Option<CursorProvider>,
     pub(crate) crosshairs_enabled: bool,
-    pub(crate) controls_help_enabled: bool,
     pub(crate) controls_overlay_open: bool,
     pub(crate) x_axis_formatter: Option<TickFormatter>,
     pub(crate) y_axis_formatter: Option<TickFormatter>,
@@ -115,7 +115,7 @@ impl PlotWidget {
             hidden_shapes: HashSet::new(),
             data_version: 1,
             autoscale_on_updates: false,
-            scroll_to_pan_enabled: true,
+            controls: PlotControls::default(),
             legend_enabled: true,
             legend_collapsed: false,
             x_axis_label: String::new(),
@@ -132,7 +132,6 @@ impl PlotWidget {
             cursor_overlay: true,
             cursor_provider: None,
             crosshairs_enabled: false,
-            controls_help_enabled: true,
             controls_overlay_open: false,
             x_axis_formatter: Some(Arc::new(ticks::default_formatter)),
             y_axis_formatter: Some(Arc::new(ticks::default_formatter)),
@@ -579,7 +578,7 @@ impl PlotWidget {
                         })
                     })
             ),
-            self.view_top_right_overlay(legend.is_some(), self.scroll_to_pan_enabled),
+            self.view_top_right_overlay(legend.is_some()),
             self.view_tick_labels(),
             legend,
         ];
@@ -630,6 +629,11 @@ impl PlotWidget {
     /// Enable or disable crosshairs that follow the cursor position.
     pub fn set_crosshairs(&mut self, enabled: bool) {
         self.crosshairs_enabled = enabled;
+    }
+
+    /// Set full interaction controls behavior for the plot.
+    pub fn set_controls(&mut self, controls: PlotControls) {
+        self.controls = controls;
     }
 
     /// Set a custom formatter for the x-axis tick labels.
@@ -851,12 +855,8 @@ impl PlotWidget {
         Some(bubble.into())
     }
 
-    fn view_top_right_overlay(
-        &self,
-        has_legend: bool,
-        scroll_enabled: bool,
-    ) -> Element<'_, PlotUiMessage> {
-        let help_btn = self.controls_help_enabled.then(|| {
+    fn view_top_right_overlay(&self, has_legend: bool) -> Element<'_, PlotUiMessage> {
+        let help_btn = self.controls.show_controls_help.then(|| {
             let help_label = if self.controls_overlay_open {
                 "×"
             } else {
@@ -869,14 +869,11 @@ impl PlotWidget {
         });
 
         let top_row = widget::row![self.view_cursor_overlay(), help_btn].spacing(6.0);
-        let col = widget::column![
-            top_row,
-            self.view_controls_overlay_panel(has_legend, scroll_enabled)
-        ]
-        .spacing(6.0)
-        .width(Length::Shrink)
-        .height(Length::Shrink)
-        .align_x(Horizontal::Right);
+        let col = widget::column![top_row, self.view_controls_overlay_panel(has_legend)]
+            .spacing(6.0)
+            .width(Length::Shrink)
+            .height(Length::Shrink)
+            .align_x(Horizontal::Right);
 
         container(col)
             .width(Length::Fill)
@@ -892,28 +889,39 @@ impl PlotWidget {
             .into()
     }
 
-    fn view_controls_overlay_panel(
-        &self,
-        has_legend: bool,
-        scroll_enabled: bool,
-    ) -> Option<Element<'_, PlotUiMessage>> {
+    fn view_controls_overlay_panel(&self, has_legend: bool) -> Option<Element<'_, PlotUiMessage>> {
         if !self.controls_overlay_open {
             return None;
         }
 
         let txt = |t| widget::text(t).size(12.0).style(widget::text::base);
-        let content = widget::column![
-            txt("Controls").style(widget::text::primary),
-            txt("Left-drag: pan"),
-            txt("Right-drag: box zoom"),
-            txt("Ctrl + scroll: zoom at cursor"),
-            scroll_enabled.then(|| txt("Scroll: pan")),
-            txt("Double-click: reset / autoscale"),
-            txt("Left-click point: pick"),
-            txt("Esc: clear picked points"),
-            has_legend.then(|| txt("Click icon in legend to toggle visibility.")),
-        ]
-        .spacing(2.0);
+        let mut content =
+            widget::column![txt("Controls").style(widget::text::primary)].spacing(2.0);
+
+        if self.controls.pan.drag_to_pan {
+            content = content.push(txt("Left-drag: pan"));
+        }
+        if self.controls.zoom.box_zoom {
+            content = content.push(txt("Right-drag: box zoom"));
+        }
+        if self.controls.zoom.scroll_with_ctrl {
+            content = content.push(txt("Ctrl + scroll: zoom at cursor"));
+        }
+        if self.controls.pan.scroll_to_pan {
+            content = content.push(txt("Scroll: pan"));
+        }
+        if self.controls.zoom.double_click_autoscale {
+            content = content.push(txt("Double-click: reset / autoscale"));
+        }
+        if self.controls.pick.click_to_pick {
+            content = content.push(txt("Left-click point: pick"));
+        }
+        if self.controls.pick.clear_on_escape {
+            content = content.push(txt("Esc: clear picked points"));
+        }
+        if has_legend {
+            content = content.push(txt("Click icon in legend to toggle visibility."));
+        }
 
         Some(
             container(content)
@@ -1142,7 +1150,9 @@ fn consume_gpu_pick_results(
     state: &mut PlotState,
     effects: &mut UpdateEffects,
 ) {
-    if !state.hover_enabled || state.points.len() < picking::CPU_PICK_THRESHOLD {
+    if !(state.hover_enabled || state.pick_enabled)
+        || state.points.len() < picking::CPU_PICK_THRESHOLD
+    {
         return;
     }
 
@@ -1230,8 +1240,9 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
 
         // Keep these in sync early, since other phases depend on them.
         state.bounds = bounds;
-        state.hover_enabled =
-            self.hover_highlight_provider.is_some() || self.pick_highlight_provider.is_some();
+        state.hover_enabled = self.controls.highlight_on_hover
+            && (self.hover_highlight_provider.is_some() || self.pick_highlight_provider.is_some());
+        state.pick_enabled = self.controls.pick.click_to_pick;
         state.hover_radius_px = self.hover_radius_px;
         state.crosshairs_enabled = self.crosshairs_enabled;
 
@@ -1318,6 +1329,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
                     key: keyboard::Key::Named(keyboard::key::Named::Escape),
                     ..
                 } = keyboard_event
+                    && self.controls.pick.clear_on_escape
                 {
                     effects.hover_pick = Some(HoverPickEvent::ClearPick);
                 }

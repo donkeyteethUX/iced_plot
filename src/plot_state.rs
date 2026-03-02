@@ -65,6 +65,7 @@ pub struct PlotState {
     pub(crate) source_instance_id: Option<u64>,
     // Hover/picking internals
     pub(crate) hover_enabled: bool,
+    pub(crate) pick_enabled: bool,
     pub(crate) hover_radius_px: f32,
     pub(crate) picking: PickingState,
     pub(crate) crosshairs_enabled: bool,
@@ -108,6 +109,7 @@ impl Default for PlotState {
             fills_version: 1,
             highlight_version: 0,
             hover_enabled: true,
+            pick_enabled: true,
             hover_radius_px: 8.0,
             picking: PickingState::default(),
             crosshairs_enabled: false,
@@ -496,11 +498,15 @@ impl PlotState {
                     false
                 };
                 self.last_click_time = Some(now);
-                if double {
+                if double && widget.controls.zoom.double_click_autoscale {
                     self.autoscale(true);
                     needs_redraw = true;
                 } else {
-                    if self.hover_enabled && !self.pan.active && !self.selection.active {
+                    if self.pick_enabled
+                        && widget.controls.pick.click_to_pick
+                        && !self.pan.active
+                        && !self.selection.active
+                    {
                         // check if the cursor is hovering over a point
                         let picked =
                             if let Some(HoverPickEvent::Hover(point_id)) = *publish_hover_pick {
@@ -514,10 +520,13 @@ impl PlotState {
                             *publish_hover_pick = Some(HoverPickEvent::Pick(point_id));
                         }
                     }
-                    // Start panning
-                    self.pan.active = true;
-                    self.pan.start_cursor = self.cursor_position.into();
-                    self.pan.start_camera_center = self.camera.position;
+
+                    if widget.controls.pan.drag_to_pan {
+                        // Start panning
+                        self.pan.active = true;
+                        self.pan.start_cursor = self.cursor_position.into();
+                        self.pan.start_camera_center = self.camera.position;
+                    }
                 }
             }
             Event::ButtonReleased(mouse::Button::Left) => {
@@ -526,6 +535,9 @@ impl PlotState {
                 }
             }
             Event::ButtonPressed(mouse::Button::Right) => {
+                if !widget.controls.zoom.box_zoom {
+                    return needs_redraw;
+                }
                 // Only start selection if inside our bounds
                 let inside = self.cursor_inside();
                 if !inside {
@@ -586,7 +598,9 @@ impl PlotState {
                 };
 
                 // Only zoom when Ctrl is held down
-                if self.modifiers.contains(keyboard::Modifiers::CTRL) {
+                if widget.controls.zoom.scroll_with_ctrl
+                    && self.modifiers.contains(keyboard::Modifiers::CTRL)
+                {
                     // Apply zoom factor based on scroll direction
                     let zoom_factor = if y > 0.0 { 0.95 } else { 1.05 };
 
@@ -612,7 +626,7 @@ impl PlotState {
 
                     self.update_axis_links();
                     needs_redraw = true;
-                } else if widget.scroll_to_pan_enabled {
+                } else if widget.controls.pan.scroll_to_pan {
                     let world_pan_x = -x as f64 * (self.camera.half_extents.x / (viewport.x / 2.0));
                     let world_pan_y = y as f64 * (self.camera.half_extents.y / (viewport.y / 2.0));
                     self.camera.position.x += world_pan_x;
