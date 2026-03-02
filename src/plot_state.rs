@@ -8,9 +8,9 @@ use iced::{
 };
 
 use crate::{
-    AxisLink, AxisScale, HLine, HoverPickEvent, LineStyle, MarkerSize, PlotWidget, Point, ShapeId,
-    VLine,
-    axis_scale::data_point_to_plot,
+    AxisLink, AxisScale, DragEvent, HLine, HoverPickEvent, LineStyle, MarkerSize, PlotWidget,
+    Point, ShapeId, VLine,
+    axis_scale::{data_point_to_plot, plot_point_to_data},
     camera::Camera,
     picking::PickingState,
     plot_widget::{HighlightPoint, world_to_screen_position_x, world_to_screen_position_y},
@@ -54,6 +54,7 @@ pub struct PlotState {
     pub(crate) modifiers: keyboard::Modifiers,
     pub(crate) selection: SelectionState,
     pub(crate) pan: PanState,
+    pub(crate) drag: DragState,
     /// Hover/select point rendering data (for incremental rendering)
     pub(crate) highlighted_points: Arc<[HighlightPoint]>,
     // Version counters
@@ -104,6 +105,7 @@ impl Default for PlotState {
             modifiers: keyboard::Modifiers::default(),
             selection: SelectionState::default(),
             pan: PanState::default(),
+            drag: DragState::default(),
             markers_version: 1,
             lines_version: 1,
             fills_version: 1,
@@ -407,6 +409,7 @@ impl PlotState {
         cursor: mouse::Cursor,
         widget: &PlotWidget,
         publish_hover_pick: &mut Option<HoverPickEvent>,
+        publish_drag_event: &mut Option<DragEvent>,
     ) -> bool {
         const SELECTION_DELTA_THRESHOLD: f32 = 4.0; // pixels
         const SELECTION_PADDING: f32 = 0.02; // fractional padding in world units relative to selection size
@@ -458,6 +461,12 @@ impl PlotState {
                     self.camera.position = self.pan.start_camera_center - render_delta;
                     self.update_axis_links();
                     needs_redraw = true;
+                }
+
+                if self.drag.active
+                    && let Some(world) = self.cursor_world_data(viewport)
+                {
+                    *publish_drag_event = Some(DragEvent::Update { world });
                 }
 
                 // Hover picking (only when not panning or selecting)
@@ -521,6 +530,11 @@ impl PlotState {
                         }
                     }
 
+                    self.drag.active = true;
+                    if let Some(world) = self.cursor_world_data(viewport) {
+                        *publish_drag_event = Some(DragEvent::Start { world });
+                    }
+
                     if widget.controls.pan.drag_to_pan {
                         // Start panning
                         self.pan.active = true;
@@ -530,6 +544,12 @@ impl PlotState {
                 }
             }
             Event::ButtonReleased(mouse::Button::Left) => {
+                if self.drag.active
+                    && let Some(world) = self.cursor_world_data(viewport)
+                {
+                    *publish_drag_event = Some(DragEvent::End { world });
+                }
+                self.drag.active = false;
                 if self.pan.active {
                     self.pan.active = false;
                 }
@@ -658,6 +678,14 @@ impl PlotState {
             link.set(self.camera.position.y, self.camera.half_extents.y);
             self.y_link_version = link.version();
         }
+    }
+
+    fn cursor_world_data(&self, viewport: DVec2) -> Option<[f64; 2]> {
+        let plot = self.camera.screen_to_world(
+            DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
+            viewport,
+        );
+        plot_point_to_data([plot.x, plot.y], self.x_axis_scale, self.y_axis_scale)
     }
 }
 
@@ -959,4 +987,9 @@ pub(crate) struct PanState {
     pub(crate) active: bool,
     pub(crate) start_cursor: DVec2,
     pub(crate) start_camera_center: DVec2,
+}
+
+#[derive(Default, Debug, Clone)]
+pub(crate) struct DragState {
+    pub(crate) active: bool,
 }

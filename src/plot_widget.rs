@@ -23,8 +23,8 @@ use iced::{
 use indexmap::IndexMap;
 
 use crate::{
-    AxisScale, Fill, HLine, HoverPickEvent, MarkerSize, MarkerStyle, PlotUiMessage, PointId,
-    Series, TooltipContext, VLine, axes_labels,
+    AxisScale, DragEvent, Fill, HLine, HoverPickEvent, MarkerSize, MarkerStyle, PlotUiMessage,
+    PointId, Series, TooltipContext, VLine, axes_labels,
     axis_link::AxisLink,
     axis_scale::{data_point_to_plot, plot_point_to_data},
     camera::Camera,
@@ -510,9 +510,9 @@ impl PlotWidget {
             PlotUiMessage::RenderUpdate(payload) => {
                 // Update camera and bounds when ticks are updated (camera changed)
                 if let Some(camera_bounds) = payload.camera_bounds
-                    && self.camera_bounds != Some(camera_bounds)
+                    && self.camera_bounds != Some(*camera_bounds)
                 {
-                    self.camera_bounds = Some(camera_bounds);
+                    self.camera_bounds = Some(*camera_bounds);
                     // Update tooltip positions when camera/bounds change
                     self.update_tooltip_positions();
                 }
@@ -1030,6 +1030,7 @@ impl std::fmt::Debug for Primitive {
 struct UpdateEffects {
     needs_redraw: bool,
     hover_pick: Option<HoverPickEvent>,
+    drag_event: Option<DragEvent>,
     cursor_ui: Option<CursorPositionUiPayload>,
     clear_cursor_position: bool,
     /// Request publishing `camera_bounds` even when ticks didn't change.
@@ -1310,8 +1311,13 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
 
         match event {
             iced::Event::Mouse(mouse_event) => {
-                effects.needs_redraw |=
-                    state.handle_mouse_event(*mouse_event, cursor, self, &mut effects.hover_pick);
+                effects.needs_redraw |= state.handle_mouse_event(
+                    *mouse_event,
+                    cursor,
+                    self,
+                    &mut effects.hover_pick,
+                    &mut effects.drag_event,
+                );
 
                 match mouse_event {
                     iced::mouse::Event::CursorMoved { .. } => {
@@ -1363,6 +1369,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             update_ticks_and_build_payload(self, state, &mut effects, first_time_widget_view);
 
         let needs_publish = effects.hover_pick.is_some()
+            || effects.drag_event.is_some()
             || effects.cursor_ui.is_some()
             || publish_x_ticks.is_some()
             || publish_y_ticks.is_some()
@@ -1383,11 +1390,12 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             return Some(shader::Action::publish(PlotUiMessage::RenderUpdate(
                 PlotRenderUpdate {
                     hover_pick: effects.hover_pick,
+                    drag_event: effects.drag_event,
                     clear_cursor_position: effects.clear_cursor_position,
                     cursor_position_ui: effects.cursor_ui,
                     x_ticks: publish_x_ticks,
                     y_ticks: publish_y_ticks,
-                    camera_bounds,
+                    camera_bounds: camera_bounds.map(Box::new),
                 },
             )));
         }

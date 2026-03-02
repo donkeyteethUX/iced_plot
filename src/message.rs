@@ -5,6 +5,7 @@ use crate::{camera::Camera, series::ShapeId, ticks::PositionedTick};
 /// Messages sent by the plot widget to the application.
 ///
 /// These messages are generated in response to user interactions with the plot.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum PlotUiMessage {
     /// Toggle the legend visibility.
@@ -23,6 +24,15 @@ impl PlotUiMessage {
     pub fn get_hover_pick_event(&self) -> Option<HoverPickEvent> {
         if let PlotUiMessage::RenderUpdate(update) = self {
             update.hover_pick
+        } else {
+            None
+        }
+    }
+
+    /// Get the drag event from the render update.
+    pub fn get_drag_event(&self) -> Option<DragEvent> {
+        if let PlotUiMessage::RenderUpdate(update) = self {
+            update.drag_event
         } else {
             None
         }
@@ -64,12 +74,33 @@ pub struct CursorPositionUiPayload {
 #[doc(hidden)]
 pub struct PlotRenderUpdate {
     pub hover_pick: Option<HoverPickEvent>,
+    pub drag_event: Option<DragEvent>,
     pub clear_cursor_position: bool,
     pub cursor_position_ui: Option<CursorPositionUiPayload>,
     pub x_ticks: Option<Vec<PositionedTick>>,
     pub y_ticks: Option<Vec<PositionedTick>>,
     /// Internal: Camera and bounds for coordinate conversion (only used internally, not part of public API)
-    pub(crate) camera_bounds: Option<(Camera, Rectangle)>,
+    pub(crate) camera_bounds: Option<Box<(Camera, Rectangle)>>,
+}
+
+/// Drag interaction event in data/world coordinates.
+#[derive(Debug, Clone, Copy)]
+pub enum DragEvent {
+    /// A drag gesture started inside the plot.
+    Start {
+        /// Current cursor world/data coordinate.
+        world: [f64; 2],
+    },
+    /// Cursor moved while drag is active.
+    Update {
+        /// Current cursor world/data coordinate.
+        world: [f64; 2],
+    },
+    /// Active drag gesture ended.
+    End {
+        /// Current cursor world/data coordinate.
+        world: [f64; 2],
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
