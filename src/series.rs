@@ -8,7 +8,7 @@ use crate::{Color, camera::Camera, point::MarkerType};
 ///
 /// Determines how points in a series are connected.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum LineStyle {
+pub enum LineType {
     /// Solid continuous line.
     Solid,
     /// Dotted line with configurable spacing.
@@ -17,41 +17,110 @@ pub enum LineStyle {
     Dashed { length: f32 },
 }
 
+impl Default for LineType {
+    fn default() -> Self {
+        Self::Solid
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
-/// Marker size modes.
-pub enum MarkerSize {
-    /// Marker size in logical pixels. The marker will be centered on the data position.
+/// Line styling options for series lines.
+///
+/// Defines how individual lines are rendered.
+pub struct LineStyle {
+    /// Width of the line in pixels or world units.
+    pub width: Size,
+    /// Shape of the line.
+    pub line_type: LineType,
+}
+
+impl Default for LineStyle {
+    fn default() -> Self {
+        Self {
+            width: Size::Pixels(1.0),
+            line_type: LineType::Solid,
+        }
+    }
+}
+
+impl LineStyle {
+    pub fn new(width: Size, line_type: LineType) -> Self {
+        Self { width, line_type }
+    }
+
+    pub fn solid() -> Self {
+        Self::default()
+    }
+
+    pub fn dotted(spacing: f32) -> Self {
+        Self {
+            line_type: LineType::Dotted { spacing },
+            ..Self::default()
+        }
+    }
+
+    pub fn dashed(length: f32) -> Self {
+        Self {
+            line_type: LineType::Dashed { length },
+            ..Self::default()
+        }
+    }
+
+    pub fn with_width(mut self, width: impl Into<Size>) -> Self {
+        self.width = width.into();
+        self
+    }
+
+    pub fn with_pixel_width(mut self, width: f32) -> Self {
+        self.width = Size::Pixels(width);
+        self
+    }
+
+    pub fn with_world_width(mut self, width: f64) -> Self {
+        self.width = Size::World(width);
+        self
+    }
+
+    pub fn with_line_type(mut self, line_type: LineType) -> Self {
+        self.line_type = line_type;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// Shared size modes for markers and line widths.
+pub enum Size {
+    /// Size in logical pixels.
+    ///
+    /// Markers are centered on the data position. Lines use this as a screen-space width.
     ///
     /// This is usually the right default.
     Pixels(f32),
 
-    /// Marker size in world units. The marker will be painted at the data position such that
-    /// the lower-left corner of the marker is at the data position.
+    /// Size in world units.
+    ///
+    /// Markers are painted such that the lower-left corner is at the data position.
+    /// Lines use this as a width measured directly in plot units.
     ///
     /// This is useful for implementing heatmaps and similar applications where markers
     /// need to paint an area of the plot.
     World(f64),
 }
 
-impl From<f32> for MarkerSize {
+impl From<f32> for Size {
     fn from(size: f32) -> Self {
         Self::Pixels(size)
     }
 }
 
-impl MarkerSize {
+impl Size {
     pub(crate) fn to_raw(self) -> (f32, u32) {
         match self {
             Self::Pixels(size) => (size, 0),
             Self::World(size) => (size as f32, 1),
         }
     }
-    pub(crate) fn marker_size_px(
-        size: f32,
-        size_mode: u32,
-        camera: &Camera,
-        bounds: &Rectangle,
-    ) -> f32 {
+    pub(crate) fn size_px(size: f32, size_mode: u32, camera: &Camera, bounds: &Rectangle) -> f32 {
         if size_mode != crate::point::MARKER_SIZE_WORLD {
             return size;
         }
@@ -67,7 +136,7 @@ impl MarkerSize {
     }
     pub(crate) fn to_px(self, camera: &Camera, bounds: &Rectangle) -> f32 {
         let (size, size_mode) = self.to_raw();
-        Self::marker_size_px(size, size_mode, camera, bounds)
+        Self::size_px(size, size_mode, camera, bounds)
     }
 }
 
@@ -77,7 +146,7 @@ impl MarkerSize {
 /// Defines how individual data points are rendered.
 pub struct MarkerStyle {
     /// Size of the marker in pixels or world units.
-    pub size: MarkerSize,
+    pub size: Size,
     /// Shape of the marker.
     pub marker_type: MarkerType,
 }
@@ -85,7 +154,7 @@ pub struct MarkerStyle {
 impl Default for MarkerStyle {
     fn default() -> Self {
         Self {
-            size: MarkerSize::Pixels(5.0),
+            size: Size::Pixels(5.0),
             marker_type: MarkerType::FilledCircle,
         }
     }
@@ -94,49 +163,49 @@ impl Default for MarkerStyle {
 impl MarkerStyle {
     pub fn new(size: f32, marker_type: MarkerType) -> Self {
         Self {
-            size: MarkerSize::Pixels(size),
+            size: Size::Pixels(size),
             marker_type,
         }
     }
 
     pub fn new_world(size: f64, marker_type: MarkerType) -> Self {
         Self {
-            size: MarkerSize::World(size),
+            size: Size::World(size),
             marker_type,
         }
     }
 
     pub fn circle(size: f32) -> Self {
         Self {
-            size: MarkerSize::Pixels(size),
+            size: Size::Pixels(size),
             marker_type: MarkerType::FilledCircle,
         }
     }
 
     pub fn ring(size: f32) -> Self {
         Self {
-            size: MarkerSize::Pixels(size),
+            size: Size::Pixels(size),
             marker_type: MarkerType::EmptyCircle,
         }
     }
 
     pub fn square(size: f32) -> Self {
         Self {
-            size: MarkerSize::Pixels(size),
+            size: Size::Pixels(size),
             marker_type: MarkerType::Square,
         }
     }
 
     pub fn star(size: f32) -> Self {
         Self {
-            size: MarkerSize::Pixels(size),
+            size: Size::Pixels(size),
             marker_type: MarkerType::Star,
         }
     }
 
     pub fn triangle(size: f32) -> Self {
         Self {
-            size: MarkerSize::Pixels(size),
+            size: Size::Pixels(size),
             marker_type: MarkerType::Triangle,
         }
     }
@@ -169,7 +238,11 @@ pub enum SeriesError {
 /// or [Fill](crate::Fill) by `id` field:
 /// ```rust
 /// use iced_plot::{Series, VLine, HLine, MarkerStyle, LineStyle};
-/// let series = Series::new(vec![[0.0, 0.0], [1.0, 1.0]], MarkerStyle::circle(5.0), LineStyle::Solid);
+/// let series = Series::new(
+///     vec![[0.0, 0.0], [1.0, 1.0]],
+///     MarkerStyle::circle(5.0),
+///     LineStyle::solid(),
+/// );
 /// let id1 = series.id;
 ///
 /// let vline = VLine::new(0.0);
@@ -323,19 +396,42 @@ impl Series {
         self
     }
 
+    /// Set or change the line width for the series.
+    pub fn line_width(mut self, width: impl Into<Size>) -> Self {
+        let width = width.into();
+        self.line_style = Some(self.line_style.unwrap_or_default().with_width(width));
+        self
+    }
+
+    /// Set or change the line width for the series in world units.
+    pub fn line_width_world(mut self, width: f64) -> Self {
+        self.line_style = Some(self.line_style.unwrap_or_default().with_world_width(width));
+        self
+    }
+
+    /// Set or change only the line type while preserving width if it already exists.
+    pub fn line_type(mut self, line_type: LineType) -> Self {
+        self.line_style = Some(
+            self.line_style
+                .unwrap_or_default()
+                .with_line_type(line_type),
+        );
+        self
+    }
+
     /// Set solid line style.
     pub fn line_solid(self) -> Self {
-        self.line_style(LineStyle::Solid)
+        self.line_type(LineType::Solid)
     }
 
     /// Set dotted line style with given spacing.
     pub fn line_dotted(self, spacing: f32) -> Self {
-        self.line_style(LineStyle::Dotted { spacing })
+        self.line_type(LineType::Dotted { spacing })
     }
 
     /// Set dashed line style with given dash length.
     pub fn line_dashed(self, length: f32) -> Self {
-        self.line_style(LineStyle::Dashed { length })
+        self.line_type(LineType::Dashed { length })
     }
 
     pub(super) fn validate(&self) -> Result<(), SeriesError> {

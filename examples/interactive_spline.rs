@@ -42,16 +42,15 @@ impl App {
             [4.0, 0.2],
         ];
 
-        let control_poly =
-            Series::line_only(control_points.clone(), LineStyle::Dashed { length: 8.0 })
-                .with_label("control polygon")
-                .with_color(Color::from_rgb(0.5, 0.5, 0.5));
+        let control_poly = Series::line_only(control_points.clone(), LineStyle::dashed(8.0))
+            .with_label("control polygon")
+            .with_color(Color::from_rgb(0.5, 0.5, 0.5));
 
         let control_series = Series::markers_only(control_points.clone(), MarkerStyle::circle(7.0))
             .with_label("control points")
             .with_color(Color::from_rgb(1.0, 0.5, 0.2));
 
-        let spline = Series::line_only(sample_catmull_rom(&control_points, 28), LineStyle::Solid)
+        let spline = Series::line_only(sample_catmull_rom(&control_points, 28), LineStyle::solid())
             .with_label("catmull-rom spline")
             .with_color(Color::from_rgb(0.2, 0.8, 1.0));
 

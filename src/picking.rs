@@ -8,7 +8,7 @@ use glam::{DVec2, Vec2};
 use iced::Rectangle;
 use iced::wgpu::*;
 
-use crate::{MarkerSize, Point, PointId, camera::Camera, plot_state::SeriesSpan};
+use crate::{Point, PointId, Size, camera::Camera, plot_state::SeriesSpan};
 
 /// Threshold for number of points above which GPU picking is used instead of CPU picking.
 pub(crate) const CPU_PICK_THRESHOLD: usize = 5000;
@@ -217,7 +217,7 @@ fn cpu_pick_hit(
         let dx = screen_x - cursor_x;
         let dy = screen_y - cursor_y;
         let d2 = dx * dx + dy * dy;
-        let marker_px = MarkerSize::marker_size_px(pt.size, pt.size_mode, camera, bounds) as f64;
+        let marker_px = Size::size_px(pt.size, pt.size_mode, camera, bounds) as f64;
         let radius = hover_radius_px as f64 + marker_px * 0.5;
         if d2 <= radius * radius {
             if let Some((_, best_d2)) = best {

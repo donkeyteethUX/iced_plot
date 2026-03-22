@@ -1,4 +1,4 @@
-use crate::{Color, LineStyle, series::ShapeId};
+use crate::{Color, LineStyle, LineType, Size, series::ShapeId};
 
 /// A vertical line at a fixed x-coordinate.
 #[derive(Debug, Clone)]
@@ -11,9 +11,7 @@ pub struct VLine {
     pub label: Option<String>,
     /// Color of the line.
     pub color: Color,
-    /// Line width in pixels.
-    pub width: f32,
-    /// Line style (solid, dashed, dotted).
+    /// Line styling options, including width and pattern (solid, dashed, dotted).
     pub line_style: LineStyle,
 }
 
@@ -25,8 +23,7 @@ impl VLine {
             x,
             label: None,
             color: Color::from_rgb(0.5, 0.5, 0.5),
-            width: 1.0,
-            line_style: LineStyle::Solid,
+            line_style: LineStyle::default(),
         }
     }
 
@@ -47,13 +44,30 @@ impl VLine {
 
     /// Set the line width in pixels.
     pub fn with_width(mut self, width: f32) -> Self {
-        self.width = width.max(0.5);
+        self.line_style.width = Size::Pixels(width.max(0.5));
+        self
+    }
+
+    /// Set the line width in world units.
+    pub fn with_width_world(mut self, width: f64) -> Self {
+        self.line_style.width = Size::World(width.max(f64::EPSILON));
         self
     }
 
     /// Set the line style.
     pub fn with_style(mut self, style: LineStyle) -> Self {
+        let old_width = self.line_style.width;
+        let preserve_width = style.width == LineStyle::default().width;
         self.line_style = style;
+        if preserve_width {
+            self.line_style.width = old_width;
+        }
+        self
+    }
+
+    /// Set only the line type while preserving the current width.
+    pub fn with_line_type(mut self, line_type: LineType) -> Self {
+        self.line_style.line_type = line_type;
         self
     }
 }
@@ -69,9 +83,7 @@ pub struct HLine {
     pub label: Option<String>,
     /// Color of the line.
     pub color: Color,
-    /// Line width in pixels.
-    pub width: f32,
-    /// Line style (solid, dashed, dotted).
+    /// Line styling options, including width and pattern (solid, dashed, dotted).
     pub line_style: LineStyle,
 }
 
@@ -83,8 +95,7 @@ impl HLine {
             y,
             label: None,
             color: Color::from_rgb(0.5, 0.5, 0.5),
-            width: 1.0,
-            line_style: LineStyle::Solid,
+            line_style: LineStyle::default(),
         }
     }
 
@@ -105,13 +116,30 @@ impl HLine {
 
     /// Set the line width in pixels.
     pub fn with_width(mut self, width: f32) -> Self {
-        self.width = width.max(0.5);
+        self.line_style.width = Size::Pixels(width.max(0.5));
+        self
+    }
+
+    /// Set the line width in world units.
+    pub fn with_width_world(mut self, width: f64) -> Self {
+        self.line_style.width = Size::World(width.max(f64::EPSILON));
         self
     }
 
     /// Set the line style.
     pub fn with_style(mut self, style: LineStyle) -> Self {
+        let old_width = self.line_style.width;
+        let preserve_width = style.width == LineStyle::default().width;
         self.line_style = style;
+        if preserve_width {
+            self.line_style.width = old_width;
+        }
+        self
+    }
+
+    /// Set only the line type while preserving the current width.
+    pub fn with_line_type(mut self, line_type: LineType) -> Self {
+        self.line_style.line_type = line_type;
         self
     }
 }

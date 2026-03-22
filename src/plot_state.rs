@@ -8,8 +8,8 @@ use iced::{
 };
 
 use crate::{
-    AxisLink, AxisScale, DragEvent, HLine, HoverPickEvent, LineStyle, MarkerSize, PlotWidget,
-    Point, ShapeId, VLine,
+    AxisLink, AxisScale, DragEvent, HLine, HoverPickEvent, LineStyle, PlotWidget, Point, ShapeId,
+    Size, VLine,
     axis_scale::{data_point_to_plot, plot_point_to_data},
     camera::Camera,
     picking::PickingState,
@@ -218,8 +218,8 @@ impl PlotState {
 
             // If this series has a world-space marker, the data_max should be adjusted to account for the marker size.
             if let Some(size) = series.marker_style.as_ref().and_then(|m| match m.size {
-                MarkerSize::World(size) => Some(size),
-                MarkerSize::Pixels(_) => None,
+                Size::World(size) => Some(size),
+                Size::Pixels(_) => None,
             }) && let Some(data_max) = &mut data_max
             {
                 if widget.x_axis_scale == AxisScale::Linear {

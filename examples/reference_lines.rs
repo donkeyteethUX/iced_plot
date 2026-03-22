@@ -47,7 +47,7 @@ fn new() -> PlotWidget {
         .with_label("tan_1")
         .with_color(Color::from_rgb(0.3, 0.6, 0.9));
 
-    let tan2 = Series::line_only(tan_seg2, LineStyle::Solid)
+    let tan2 = Series::line_only(tan_seg2, LineStyle::solid())
         .with_marker_style(MarkerStyle::star(10.0))
         .with_color(Color::from_rgb(0.7, 0.2, 0.1))
         .with_label("tan_2");
@@ -59,7 +59,7 @@ fn new() -> PlotWidget {
         tanh_positions.push([x, (k * (x - 1.5 * PI)).tanh()]);
         x += 0.01;
     }
-    let tanh_s = Series::line_only(tanh_positions, LineStyle::Dashed { length: 8.0 })
+    let tanh_s = Series::line_only(tanh_positions, LineStyle::dashed(8.0))
         .with_label("y = tanh(1.2·(x - 1.5π))")
         .with_color(Color::from_rgb(0.2, 0.8, 0.5));
 
@@ -68,26 +68,26 @@ fn new() -> PlotWidget {
         .with_label("π")
         .with_color(Color::from_rgb(0.9, 0.3, 0.3))
         .with_width(2.0)
-        .with_style(LineStyle::Solid);
+        .with_style(LineStyle::solid());
 
     let vline2 = VLine::new(TAU)
         .with_label("2π")
         .with_color(Color::from_rgb(0.9, 0.5, 0.3))
         .with_width(2.0)
-        .with_style(LineStyle::Dashed { length: 1.0 });
+        .with_style(LineStyle::dashed(1.0));
 
     // Add horizontal reference lines at y = ±1 (asymptotes of tanh)
     let hline1 = HLine::new(1.0)
         .with_label("y=1.0")
         .with_color(Color::from_rgb(0.3, 0.9, 0.5))
         .with_width(2.5)
-        .with_style(LineStyle::Dotted { spacing: 5.0 });
+        .with_style(LineStyle::dotted(5.0));
 
     let hline2 = HLine::new(-1.0)
         .with_label("y=-1.0")
         .with_color(Color::from_rgb(0.3, 0.9, 0.5))
         .with_width(2.5)
-        .with_style(LineStyle::Dotted { spacing: 5.0 });
+        .with_style(LineStyle::dotted(5.0));
 
     PlotWidgetBuilder::new()
         .with_x_label("x")

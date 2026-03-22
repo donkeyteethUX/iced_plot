@@ -45,7 +45,7 @@ impl App {
                     [x, (x * 0.8).sin()]
                 })
                 .collect(),
-            LineStyle::Solid,
+            LineStyle::solid(),
         )
         .with_label("sin(x)")
         .with_color(Color::from_rgb(0.3, 0.7, 1.0));
