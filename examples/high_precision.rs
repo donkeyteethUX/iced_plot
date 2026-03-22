@@ -43,13 +43,9 @@ fn new() -> PlotWidget {
         })
         .with_cursor_provider(|x, y| format!("Cursor:\nt = {:.9} s\nvalue = {:.6}", x, y))
         .add_series(
-            Series::new(
-                positions,
-                MarkerStyle::square(4.0),
-                LineStyle::Dashed { length: 10.0 },
-            )
-            .with_label("both_markers_and_lines")
-            .with_color(Color::from_rgb(0.3, 0.9, 0.3)),
+            Series::new(positions, MarkerStyle::square(4.0), LineStyle::dashed(10.0))
+                .with_label("both_markers_and_lines")
+                .with_color(Color::from_rgb(0.3, 0.9, 0.3)),
         )
         .with_cursor_overlay(true)
         .with_crosshairs(true)

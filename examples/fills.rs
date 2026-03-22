@@ -38,17 +38,17 @@ fn new() -> PlotWidget {
         .collect();
 
     // Create a bunch of series and lines.
-    let upper_series = Series::line_only(upper_positions, LineStyle::Solid)
+    let upper_series = Series::line_only(upper_positions, LineStyle::solid())
         .with_marker_style(MarkerStyle::circle(3.5))
         .with_color(Color::from_rgb(0.15, 0.55, 0.95))
         .with_label("upper series");
-    let lower_series = Series::line_only(lower_positions, LineStyle::Dashed { length: 8.0 })
+    let lower_series = Series::line_only(lower_positions, LineStyle::dashed(8.0))
         .with_marker_style(MarkerStyle::ring(3.0))
         .with_color(Color::from_rgb(0.95, 0.45, 0.15))
         .with_label("lower series (sparse)");
     let baseline = HLine::new(0.0)
         .with_label("y = 0")
-        .with_style(LineStyle::Dotted { spacing: 4.0 })
+        .with_style(LineStyle::dotted(4.0))
         .with_color(Color::from_rgb(0.7, 0.7, 0.7));
     let hband_low = HLine::new(1.9)
         .with_label("h-band low")

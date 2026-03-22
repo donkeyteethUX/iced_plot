@@ -156,7 +156,7 @@ impl App {
                 [x, y]
             })
             .collect();
-        let s1 = Series::line_only(positions, LineStyle::Solid).with_label("sine_line_only");
+        let s1 = Series::line_only(positions, LineStyle::solid()).with_label("sine_line_only");
         let s1_id = s1.id;
         let w1 = PlotWidgetBuilder::new()
             .disable_scroll_to_pan()
@@ -200,13 +200,9 @@ impl App {
                 [x, y]
             })
             .collect();
-        let s3 = Series::new(
-            positions,
-            MarkerStyle::square(4.0),
-            LineStyle::Dashed { length: 10.0 },
-        )
-        .with_label("both_markers_and_lines")
-        .with_color([0.3, 0.9, 0.3]);
+        let s3 = Series::new(positions, MarkerStyle::square(4.0), LineStyle::dashed(10.0))
+            .with_label("both_markers_and_lines")
+            .with_color([0.3, 0.9, 0.3]);
         let s3_id = s3.id;
         let w3 = PlotWidgetBuilder::new()
             .disable_scroll_to_pan()

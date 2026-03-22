@@ -23,8 +23,8 @@ use iced::{
 use indexmap::IndexMap;
 
 use crate::{
-    AxisScale, DragEvent, Fill, HLine, HoverPickEvent, MarkerSize, MarkerStyle, PlotUiMessage,
-    PointId, Series, TooltipContext, VLine, axes_labels,
+    AxisScale, DragEvent, Fill, HLine, HoverPickEvent, MarkerStyle, PlotUiMessage, PointId, Series,
+    Size, TooltipContext, VLine, axes_labels,
     axis_link::AxisLink,
     axis_scale::{data_point_to_plot, plot_point_to_data},
     camera::Camera,
@@ -314,7 +314,7 @@ impl PlotWidget {
     /// so we anchor the tooltip at the marker's center (x + size/2, y + size/2).
     fn tooltip_anchor_world(point: &HighlightPoint) -> [f64; 2] {
         if let Some(marker_style) = point.marker_style
-            && let MarkerSize::World(size) = marker_style.size
+            && let Size::World(size) = marker_style.size
         {
             let half = size * 0.5;
             [point.x + half, point.y + half]
@@ -1558,10 +1558,10 @@ impl HighlightPoint {
     pub fn resize_marker(&mut self, factor: f64) {
         if let Some(marker_style) = &mut self.marker_style {
             match &mut marker_style.size {
-                MarkerSize::Pixels(size) => {
+                Size::Pixels(size) => {
                     *size *= factor as f32;
                 }
-                MarkerSize::World(size) => {
+                Size::World(size) => {
                     *size *= factor;
                 }
             }

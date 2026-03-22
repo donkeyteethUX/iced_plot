@@ -53,7 +53,7 @@ fn new() -> PlotWidget {
         })
         .collect();
 
-    let series = Series::new(positions, MarkerStyle::circle(5.0), LineStyle::Solid)
+    let series = Series::new(positions, MarkerStyle::circle(5.0), LineStyle::solid())
         .with_label("Temperature")
         .with_point_colors(colors)
         .with_color(Color::from_rgb(1.0, 0.5, 0.2));
