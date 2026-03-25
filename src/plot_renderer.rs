@@ -25,7 +25,7 @@ struct VertexBuffer {
     vertex_count: u32,
 }
 
-/// Helper struct for managing line vertex buffers with strip segments
+/// Helper struct for managing line vertex buffers
 struct LineBuffer {
     buffer: Buffer,
     segments: Vec<LineSegment>,
@@ -138,26 +138,28 @@ impl VertexWriter {
 
     fn write_line_vertex(
         &mut self,
-        pos: [f32; 2],
-        prev: [f32; 2],
-        next: [f32; 2],
+        start: [f32; 2],
+        end: [f32; 2],
         color: &iced::Color,
         style: u32,
-        distance: f32,
+        distance_start: f32,
+        segment_length_world: f32,
         param: f32,
         width: f32,
         width_mode: u32,
+        along: f32,
         side: f32,
     ) {
-        self.write_position(pos);
-        self.write_position(prev);
-        self.write_position(next);
+        self.write_position(start);
+        self.write_position(end);
         self.write_color(color);
         self.write_u32(style);
-        self.write_f32(distance);
+        self.write_f32(distance_start);
+        self.write_f32(segment_length_world);
         self.write_f32(param);
         self.write_f32(width);
         self.write_u32(width_mode);
+        self.write_f32(along);
         self.write_f32(side);
     }
 
@@ -505,58 +507,66 @@ impl PlotRenderer {
                 entry_point: Some("vs_main"),
                 compilation_options: PipelineCompilationOptions::default(),
                 buffers: &[VertexBufferLayout {
-                    // vec2<f32> position (8) + vec2<f32> prev_position (8) + vec2<f32> next_position (8) + vec4<f32> color (16) + u32 line_style (4) + f32 distance_along_line (4) + f32 style_param (4) + f32 width (4) + u32 width_mode (4) + f32 side (4)
+                    // vec2<f32> segment_start (8) + vec2<f32> segment_end (8) + vec4<f32> color (16)
+                    // + u32 line_style (4) + f32 distance_start (4) + f32 segment_length_world (4)
+                    // + f32 style_param (4) + f32 width (4) + u32 width_mode (4)
+                    // + f32 along (4) + f32 side (4)
                     array_stride: 64,
                     step_mode: VertexStepMode::Vertex,
                     attributes: &[
                         VertexAttribute {
                             offset: 0,
                             shader_location: 0,
-                            format: VertexFormat::Float32x2, // position
+                            format: VertexFormat::Float32x2, // segment_start
                         },
                         VertexAttribute {
                             offset: 8,
                             shader_location: 1,
-                            format: VertexFormat::Float32x2, // prev_position
+                            format: VertexFormat::Float32x2, // segment_end
                         },
                         VertexAttribute {
                             offset: 16,
                             shader_location: 2,
-                            format: VertexFormat::Float32x2, // next_position
-                        },
-                        VertexAttribute {
-                            offset: 24,
-                            shader_location: 3,
                             format: VertexFormat::Float32x4, // color
                         },
                         VertexAttribute {
-                            offset: 40,
-                            shader_location: 4,
+                            offset: 32,
+                            shader_location: 3,
                             format: VertexFormat::Uint32, // line_style
                         },
                         VertexAttribute {
-                            offset: 44,
-                            shader_location: 5,
-                            format: VertexFormat::Float32, // distance_along_line
+                            offset: 36,
+                            shader_location: 4,
+                            format: VertexFormat::Float32, // distance_start
                         },
                         VertexAttribute {
-                            offset: 48,
+                            offset: 40,
+                            shader_location: 5,
+                            format: VertexFormat::Float32, // segment_length_world
+                        },
+                        VertexAttribute {
+                            offset: 44,
                             shader_location: 6,
                             format: VertexFormat::Float32, // style_param
                         },
                         VertexAttribute {
-                            offset: 52,
+                            offset: 48,
                             shader_location: 7,
                             format: VertexFormat::Float32, // width
                         },
                         VertexAttribute {
-                            offset: 56,
+                            offset: 52,
                             shader_location: 8,
                             format: VertexFormat::Uint32, // width_mode
                         },
                         VertexAttribute {
-                            offset: 60,
+                            offset: 56,
                             shader_location: 9,
+                            format: VertexFormat::Float32, // along
+                        },
+                        VertexAttribute {
+                            offset: 60,
+                            shader_location: 10,
                             format: VertexFormat::Float32, // side
                         },
                     ],
@@ -573,7 +583,7 @@ impl PlotRenderer {
                 })],
             }),
             primitive: PrimitiveState {
-                topology: PrimitiveTopology::TriangleStrip,
+                topology: PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: FrontFace::Ccw,
                 cull_mode: None,
@@ -914,7 +924,7 @@ impl PlotRenderer {
                         .is_some_and(|(curr, prev)| *curr != *prev + 1);
 
                 if break_segment {
-                    write_polyline_strip(
+                    write_polyline_triangles(
                         &mut writer,
                         &mut segs,
                         &poly_positions,
@@ -951,7 +961,7 @@ impl PlotRenderer {
                 poly_colors.push(color);
             }
 
-            write_polyline_strip(
+            write_polyline_triangles(
                 &mut writer,
                 &mut segs,
                 &poly_positions,
@@ -1020,7 +1030,7 @@ impl PlotRenderer {
             ];
             let distances = [0.0, (top - bottom) as f32];
             let colors = [vline.color, vline.color];
-            write_polyline_strip(
+            write_polyline_triangles(
                 &mut writer,
                 &mut segs,
                 &positions,
@@ -1052,7 +1062,7 @@ impl PlotRenderer {
             ];
             let distances = [0.0, (right - left) as f32];
             let colors = [hline.color, hline.color];
-            write_polyline_strip(
+            write_polyline_triangles(
                 &mut writer,
                 &mut segs,
                 &positions,
@@ -1482,7 +1492,7 @@ fn line_style_params(style: LineStyle) -> (u32, f32) {
     }
 }
 
-fn write_polyline_strip(
+fn write_polyline_triangles(
     writer: &mut VertexWriter,
     segs: &mut Vec<LineSegment>,
     positions: &[[f32; 2]],
@@ -1499,48 +1509,105 @@ fn write_polyline_strip(
 
     let (width, width_mode) = line_width_params(width);
     let first_vertex = (writer.byte_len() / 64) as u32;
-    for i in 0..positions.len() {
-        let prev = if i == 0 {
-            positions[i]
-        } else {
-            positions[i - 1]
-        };
-        let next = if i + 1 == positions.len() {
-            positions[i]
-        } else {
-            positions[i + 1]
-        };
+    for index in 0..positions.len() - 1 {
+        let start = positions[index];
+        let end = positions[index + 1];
+        let segment_length_world = distances[index + 1] - distances[index];
+        if segment_length_world <= f32::EPSILON {
+            continue;
+        }
+
+        let start_color = &colors[index];
+        let end_color = &colors[index + 1];
+        let distance_start = distances[index];
 
         writer.write_line_vertex(
-            positions[i],
-            prev,
-            next,
-            &colors[i],
+            start,
+            end,
+            start_color,
             line_style_u32,
-            distances[i],
+            distance_start,
+            segment_length_world,
+            style_param,
+            width,
+            width_mode,
+            0.0,
+            1.0,
+        );
+        writer.write_line_vertex(
+            start,
+            end,
+            start_color,
+            line_style_u32,
+            distance_start,
+            segment_length_world,
+            style_param,
+            width,
+            width_mode,
+            0.0,
+            -1.0,
+        );
+        writer.write_line_vertex(
+            start,
+            end,
+            end_color,
+            line_style_u32,
+            distance_start,
+            segment_length_world,
             style_param,
             width,
             width_mode,
             1.0,
+            1.0,
         );
         writer.write_line_vertex(
-            positions[i],
-            prev,
-            next,
-            &colors[i],
+            start,
+            end,
+            start_color,
             line_style_u32,
-            distances[i],
+            distance_start,
+            segment_length_world,
             style_param,
             width,
             width_mode,
+            0.0,
+            -1.0,
+        );
+        writer.write_line_vertex(
+            start,
+            end,
+            end_color,
+            line_style_u32,
+            distance_start,
+            segment_length_world,
+            style_param,
+            width,
+            width_mode,
+            1.0,
+            1.0,
+        );
+        writer.write_line_vertex(
+            start,
+            end,
+            end_color,
+            line_style_u32,
+            distance_start,
+            segment_length_world,
+            style_param,
+            width,
+            width_mode,
+            1.0,
             -1.0,
         );
     }
 
-    segs.push(LineSegment {
-        first_vertex,
-        vertex_count: (positions.len() * 2) as u32,
-    });
+    let vertex_count = (writer.byte_len() / 64) as u32 - first_vertex;
+    if vertex_count > 0 {
+        segs.push(LineSegment {
+            first_vertex,
+            vertex_count,
+        });
+    }
 }
 
 fn reference_line_half_extent(width: Size, vertical: bool, world_per_px: [f32; 2]) -> f32 {
