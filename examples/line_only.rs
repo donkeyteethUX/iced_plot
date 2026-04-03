@@ -58,7 +58,7 @@ fn new() -> PlotWidget {
         })
         .collect();
 
-    let s1 = Series::line_only(positions, LineStyle::Solid)
+    let s1 = Series::line_only(positions, LineStyle::solid().with_pixel_width(4.0))
         .with_label("sine_line_only")
         .with_color(Color::from_rgb(0.3, 0.3, 0.9));
 
@@ -80,13 +80,9 @@ fn new() -> PlotWidget {
             [x, y]
         })
         .collect();
-    let s3 = Series::new(
-        positions,
-        MarkerStyle::square(4.0),
-        LineStyle::Dashed { length: 10.0 },
-    )
-    .with_label("both_markers_and_lines")
-    .with_color(Color::from_rgb(0.3, 0.9, 0.3));
+    let s3 = Series::new(positions, MarkerStyle::square(4.0), LineStyle::dashed(10.0))
+        .with_label("both_markers_and_lines")
+        .with_color(Color::from_rgb(0.3, 0.9, 0.3));
 
     PlotWidgetBuilder::new()
         .with_hover_highlight_provider(|context, point| {

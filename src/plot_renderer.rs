@@ -2,7 +2,7 @@
 use crate::LineStyle;
 use crate::axis_scale::data_point_to_plot;
 use crate::picking::PickingPass;
-use crate::{camera::CameraUniform, grid::Grid, plot_state::PlotState};
+use crate::{LineType, Size, camera::CameraUniform, grid::Grid, plot_state::PlotState};
 use iced::widget::shader::Viewport;
 use iced::{Rectangle, wgpu::*};
 
@@ -25,10 +25,37 @@ struct VertexBuffer {
     vertex_count: u32,
 }
 
-/// Helper struct for managing line buffers with segments
+/// Helper struct for managing line vertex buffers
 struct LineBuffer {
     buffer: Buffer,
     segments: Vec<LineSegment>,
+}
+
+struct LineVertex<'a> {
+    start: [f32; 2],
+    end: [f32; 2],
+    color: &'a iced::Color,
+    style: u32,
+    distance_start: f32,
+    segment_length_world: f32,
+    param: f32,
+    width: f32,
+    width_mode: u32,
+    along: f32,
+    side: f32,
+}
+
+#[derive(Clone, Copy)]
+struct LineRenderStyle {
+    width: Size,
+    line_style: u32,
+    style_param: f32,
+}
+
+struct PolylineRef<'a> {
+    positions: &'a [[f32; 2]],
+    distances: &'a [f32],
+    colors: &'a [iced::Color],
 }
 
 /// Cache for render pipelines
@@ -136,22 +163,21 @@ impl VertexWriter {
         self.write_f32(color.a);
     }
 
-    fn write_line_vertex(
-        &mut self,
-        pos: [f32; 2],
-        color: &iced::Color,
-        style: u32,
-        distance: f32,
-        param: f32,
-    ) {
-        self.write_position(pos);
-        self.write_color(color);
-        self.write_u32(style);
-        self.write_f32(distance);
-        self.write_f32(param);
+    fn write_line_vertex(&mut self, vertex: LineVertex<'_>) {
+        self.write_position(vertex.start);
+        self.write_position(vertex.end);
+        self.write_color(vertex.color);
+        self.write_u32(vertex.style);
+        self.write_f32(vertex.distance_start);
+        self.write_f32(vertex.segment_length_world);
+        self.write_f32(vertex.param);
+        self.write_f32(vertex.width);
+        self.write_u32(vertex.width_mode);
+        self.write_f32(vertex.along);
+        self.write_f32(vertex.side);
     }
 
-    fn len(&self) -> usize {
+    fn byte_len(&self) -> usize {
         self.data.len()
     }
 
@@ -261,6 +287,13 @@ impl PlotRenderer {
         ]
     }
 
+    fn world_per_pixel(&self, camera: &crate::camera::Camera) -> [f32; 2] {
+        [
+            ((2.0 * camera.half_extents.x) / self.bounds_w.max(1) as f64) as f32,
+            ((2.0 * camera.half_extents.y) / self.bounds_h.max(1) as f64) as f32,
+        ]
+    }
+
     fn ensure_pipelines_and_update_grid(
         &mut self,
         device: &Device,
@@ -274,7 +307,10 @@ impl PlotRenderer {
         if !state.fills.is_empty() {
             self.ensure_fill_pipeline(device);
         }
-        if !state.series.is_empty() && state.series.iter().any(|s| s.line_style.is_some()) {
+        if state.series.iter().any(|s| s.line_style.is_some())
+            || !state.vlines.is_empty()
+            || !state.hlines.is_empty()
+        {
             self.ensure_line_pipeline(device);
         }
         self.ensure_overlay_pipeline(device);
@@ -485,33 +521,67 @@ impl PlotRenderer {
                 entry_point: Some("vs_main"),
                 compilation_options: PipelineCompilationOptions::default(),
                 buffers: &[VertexBufferLayout {
-                    array_stride: 36, // vec2<f32> position (8) + vec4<f32> color (16) + u32 line_style (4) + f32 distance (4) + f32 style_param (4)
+                    // vec2<f32> segment_start (8) + vec2<f32> segment_end (8) + vec4<f32> color (16)
+                    // + u32 line_style (4) + f32 distance_start (4) + f32 segment_length_world (4)
+                    // + f32 style_param (4) + f32 width (4) + u32 width_mode (4)
+                    // + f32 along (4) + f32 side (4)
+                    array_stride: 64,
                     step_mode: VertexStepMode::Vertex,
                     attributes: &[
                         VertexAttribute {
                             offset: 0,
                             shader_location: 0,
-                            format: VertexFormat::Float32x2, // position
+                            format: VertexFormat::Float32x2, // segment_start
                         },
                         VertexAttribute {
                             offset: 8,
                             shader_location: 1,
+                            format: VertexFormat::Float32x2, // segment_end
+                        },
+                        VertexAttribute {
+                            offset: 16,
+                            shader_location: 2,
                             format: VertexFormat::Float32x4, // color
                         },
                         VertexAttribute {
-                            offset: 24,
-                            shader_location: 2,
+                            offset: 32,
+                            shader_location: 3,
                             format: VertexFormat::Uint32, // line_style
                         },
                         VertexAttribute {
-                            offset: 28,
-                            shader_location: 3,
-                            format: VertexFormat::Float32, // distance_along_line
+                            offset: 36,
+                            shader_location: 4,
+                            format: VertexFormat::Float32, // distance_start
                         },
                         VertexAttribute {
-                            offset: 32,
-                            shader_location: 4,
+                            offset: 40,
+                            shader_location: 5,
+                            format: VertexFormat::Float32, // segment_length_world
+                        },
+                        VertexAttribute {
+                            offset: 44,
+                            shader_location: 6,
                             format: VertexFormat::Float32, // style_param
+                        },
+                        VertexAttribute {
+                            offset: 48,
+                            shader_location: 7,
+                            format: VertexFormat::Float32, // width
+                        },
+                        VertexAttribute {
+                            offset: 52,
+                            shader_location: 8,
+                            format: VertexFormat::Uint32, // width_mode
+                        },
+                        VertexAttribute {
+                            offset: 56,
+                            shader_location: 9,
+                            format: VertexFormat::Float32, // along
+                        },
+                        VertexAttribute {
+                            offset: 60,
+                            shader_location: 10,
+                            format: VertexFormat::Float32, // side
                         },
                     ],
                 }],
@@ -527,7 +597,7 @@ impl PlotRenderer {
                 })],
             }),
             primitive: PrimitiveState {
-                topology: PrimitiveTopology::LineStrip,
+                topology: PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: FrontFace::Ccw,
                 cull_mode: None,
@@ -846,19 +916,26 @@ impl PlotRenderer {
 
         let mut writer = VertexWriter::new();
         let mut segs: Vec<LineSegment> = Vec::new();
-
         for s in state.series.iter() {
-            if s.line_style.is_none() || s.len < 2 {
+            let Some(line_style) = s.line_style else {
+                continue;
+            };
+            if s.len < 2 {
                 continue;
             }
-            let (line_style_u32, style_param) = line_style_params(s.line_style.unwrap());
-
+            let (line_style_u32, style_param) = line_style_params(line_style);
+            let render_style = LineRenderStyle {
+                width: line_style.width,
+                line_style: line_style_u32,
+                style_param,
+            };
             let points_slice = &state.points[s.start..s.start + s.len];
-            let mut segment_first = 0u32;
-            let mut segment_count = 0u32;
+            let mut poly_positions: Vec<[f32; 2]> = Vec::new();
+            let mut poly_distances: Vec<f32> = Vec::new();
+            let mut poly_colors: Vec<iced::Color> = Vec::new();
             let mut cumulative_distance = 0.0f32;
 
-            for (i, p) in points_slice.iter().enumerate() {
+            for (i, point) in points_slice.iter().enumerate() {
                 let break_segment = i > 0
                     && s.point_indices
                         .get(i)
@@ -866,45 +943,53 @@ impl PlotRenderer {
                         .is_some_and(|(curr, prev)| *curr != *prev + 1);
 
                 if break_segment {
-                    if segment_count >= 2 {
-                        segs.push(LineSegment {
-                            first_vertex: segment_first,
-                            vertex_count: segment_count,
-                        });
-                    }
-                    segment_first = (writer.len() / 36) as u32;
-                    segment_count = 0;
+                    write_polyline_triangles(
+                        &mut writer,
+                        &mut segs,
+                        PolylineRef {
+                            positions: &poly_positions,
+                            distances: &poly_distances,
+                            colors: &poly_colors,
+                        },
+                        render_style,
+                    );
+                    poly_positions.clear();
+                    poly_distances.clear();
+                    poly_colors.clear();
                     cumulative_distance = 0.0;
-                } else if i > 0 {
-                    let prev = &points_slice[i - 1];
-                    let dx = p.position[0] - prev.position[0];
-                    let dy = p.position[1] - prev.position[1];
-                    cumulative_distance += (dx * dx + dy * dy).sqrt() as f32;
                 }
 
-                if segment_count == 0 {
-                    segment_first = (writer.len() / 36) as u32;
+                let render_pos = self.world_to_render_pos(point.position, &state.camera);
+                let color = *state.point_colors.get(s.start + i).unwrap_or(&s.color);
+
+                if let Some(last_pos) = poly_positions.last() {
+                    let dx = render_pos[0] - last_pos[0];
+                    let dy = render_pos[1] - last_pos[1];
+                    let segment_length = (dx * dx + dy * dy).sqrt();
+                    if segment_length <= f32::EPSILON {
+                        if let Some(last_color) = poly_colors.last_mut() {
+                            *last_color = color;
+                        }
+                        continue;
+                    }
+                    cumulative_distance += segment_length;
                 }
 
-                let render_pos = self.world_to_render_pos(p.position, &state.camera);
-                let color_idx = s.start + i;
-                let color = state.point_colors.get(color_idx).unwrap_or(&s.color);
-                writer.write_line_vertex(
-                    render_pos,
-                    color,
-                    line_style_u32,
-                    cumulative_distance,
-                    style_param,
-                );
-                segment_count += 1;
+                poly_positions.push(render_pos);
+                poly_distances.push(cumulative_distance);
+                poly_colors.push(color);
             }
 
-            if segment_count >= 2 {
-                segs.push(LineSegment {
-                    first_vertex: segment_first,
-                    vertex_count: segment_count,
-                });
-            }
+            write_polyline_triangles(
+                &mut writer,
+                &mut segs,
+                PolylineRef {
+                    positions: &poly_positions,
+                    distances: &poly_distances,
+                    colors: &poly_colors,
+                },
+                render_style,
+            );
         }
 
         if writer.is_empty() {
@@ -936,6 +1021,7 @@ impl PlotRenderer {
 
         let mut writer = VertexWriter::new();
         let mut segs: Vec<LineSegment> = Vec::new();
+        let world_per_px = self.world_per_pixel(&state.camera);
 
         // Get visible viewport bounds in world coordinates
         let cam = &state.camera;
@@ -949,31 +1035,35 @@ impl PlotRenderer {
             let Some(vx_plot) = state.x_axis_scale.data_to_plot(vline.x) else {
                 continue;
             };
-            // Check if vline is within viewport
-            if vx_plot < left || vx_plot > right {
+            // Check if the stroked vline still overlaps the viewport.
+            let half_width = reference_line_half_extent(vline.line_style.width, true, world_per_px);
+            if vx_plot + (half_width as f64) < left || vx_plot - (half_width as f64) > right {
                 continue;
             }
 
-            let first = (writer.len() / 36) as u32;
             let (line_style_u32, style_param) = line_style_params(vline.line_style);
-
-            // Create two vertices: bottom and top of viewport
-            for (idx, y) in [bottom, top].iter().enumerate() {
-                let render_pos = self.world_to_render_pos([vx_plot, *y], &state.camera);
-                let distance = if idx == 0 { 0.0 } else { (top - bottom) as f32 };
-                writer.write_line_vertex(
-                    render_pos,
-                    &vline.color,
-                    line_style_u32,
-                    distance,
-                    style_param,
-                );
-            }
-
-            segs.push(LineSegment {
-                first_vertex: first,
-                vertex_count: 2,
-            });
+            let render_style = LineRenderStyle {
+                width: vline.line_style.width,
+                line_style: line_style_u32,
+                style_param,
+            };
+            // Create two endpoints spanning the visible vertical extent.
+            let positions = [
+                self.world_to_render_pos([vx_plot, bottom], &state.camera),
+                self.world_to_render_pos([vx_plot, top], &state.camera),
+            ];
+            let distances = [0.0, (top - bottom) as f32];
+            let colors = [vline.color, vline.color];
+            write_polyline_triangles(
+                &mut writer,
+                &mut segs,
+                PolylineRef {
+                    positions: &positions,
+                    distances: &distances,
+                    colors: &colors,
+                },
+                render_style,
+            );
         }
 
         // Add horizontal lines
@@ -981,31 +1071,36 @@ impl PlotRenderer {
             let Some(hy_plot) = state.y_axis_scale.data_to_plot(hline.y) else {
                 continue;
             };
-            // Check if hline is within viewport
-            if hy_plot < bottom || hy_plot > top {
+            // Check if the stroked hline still overlaps the viewport.
+            let half_width =
+                reference_line_half_extent(hline.line_style.width, false, world_per_px);
+            if hy_plot + (half_width as f64) < bottom || hy_plot - (half_width as f64) > top {
                 continue;
             }
 
-            let first = (writer.len() / 36) as u32;
             let (line_style_u32, style_param) = line_style_params(hline.line_style);
-
-            // Create two vertices: left and right of viewport
-            for (idx, x) in [left, right].iter().enumerate() {
-                let render_pos = self.world_to_render_pos([*x, hy_plot], &state.camera);
-                let distance = if idx == 0 { 0.0 } else { (right - left) as f32 };
-                writer.write_line_vertex(
-                    render_pos,
-                    &hline.color,
-                    line_style_u32,
-                    distance,
-                    style_param,
-                );
-            }
-
-            segs.push(LineSegment {
-                first_vertex: first,
-                vertex_count: 2,
-            });
+            let render_style = LineRenderStyle {
+                width: hline.line_style.width,
+                line_style: line_style_u32,
+                style_param,
+            };
+            // Create two endpoints spanning the visible horizontal extent.
+            let positions = [
+                self.world_to_render_pos([left, hy_plot], &state.camera),
+                self.world_to_render_pos([right, hy_plot], &state.camera),
+            ];
+            let distances = [0.0, (right - left) as f32];
+            let colors = [hline.color, hline.color];
+            write_polyline_triangles(
+                &mut writer,
+                &mut segs,
+                PolylineRef {
+                    positions: &positions,
+                    distances: &distances,
+                    colors: &colors,
+                },
+                render_style,
+            );
         }
 
         if writer.is_empty() {
@@ -1095,7 +1190,7 @@ impl PlotRenderer {
                 // but we need to center the mask_box at the marker's center.
                 // Adjust position if marker is world-space (same as shader does)
                 let mut world_pos = [highlight_point.x, highlight_point.y];
-                if let crate::MarkerSize::World(size) = marker_style.size {
+                if let crate::Size::World(size) = marker_style.size {
                     let half_size = size * 0.5;
                     world_pos[0] += half_size;
                     world_pos[1] += half_size;
@@ -1419,9 +1514,93 @@ impl PlotRenderer {
 
 // Helper to extract line style parameters
 fn line_style_params(style: LineStyle) -> (u32, f32) {
-    match style {
-        LineStyle::Solid => (0u32, 0.0f32),
-        LineStyle::Dotted { spacing } => (1u32, spacing),
-        LineStyle::Dashed { length } => (2u32, length),
+    match style.line_type {
+        LineType::Solid => (0u32, 0.0f32),
+        LineType::Dotted { spacing } => (1u32, spacing),
+        LineType::Dashed { length } => (2u32, length),
+    }
+}
+
+fn write_polyline_triangles(
+    writer: &mut VertexWriter,
+    segs: &mut Vec<LineSegment>,
+    polyline: PolylineRef<'_>,
+    style: LineRenderStyle,
+) {
+    if polyline.positions.len() < 2
+        || polyline.positions.len() != polyline.distances.len()
+        || polyline.positions.len() != polyline.colors.len()
+    {
+        return;
+    }
+
+    let (width, width_mode) = line_width_params(style.width);
+    let first_vertex = (writer.byte_len() / 64) as u32;
+    for index in 0..polyline.positions.len() - 1 {
+        let start = polyline.positions[index];
+        let end = polyline.positions[index + 1];
+        let segment_length_world = polyline.distances[index + 1] - polyline.distances[index];
+        if segment_length_world <= f32::EPSILON {
+            continue;
+        }
+
+        let start_color = &polyline.colors[index];
+        let end_color = &polyline.colors[index + 1];
+        let distance_start = polyline.distances[index];
+
+        for (color, along, side) in [
+            (start_color, 0.0, 1.0),
+            (start_color, 0.0, -1.0),
+            (end_color, 1.0, 1.0),
+            (start_color, 0.0, -1.0),
+            (end_color, 1.0, 1.0),
+            (end_color, 1.0, -1.0),
+        ] {
+            writer.write_line_vertex(LineVertex {
+                start,
+                end,
+                color,
+                style: style.line_style,
+                distance_start,
+                segment_length_world,
+                param: style.style_param,
+                width,
+                width_mode,
+                along,
+                side,
+            });
+        }
+    }
+
+    let vertex_count = (writer.byte_len() / 64) as u32 - first_vertex;
+    if vertex_count > 0 {
+        segs.push(LineSegment {
+            first_vertex,
+            vertex_count,
+        });
+    }
+}
+
+fn reference_line_half_extent(width: Size, vertical: bool, world_per_px: [f32; 2]) -> f32 {
+    match width {
+        Size::Pixels(size) => {
+            let axis_scale = if vertical {
+                world_per_px[0]
+            } else {
+                world_per_px[1]
+            };
+            size.max(0.5) * axis_scale * 0.5
+        }
+        Size::World(size) => size.max(f64::EPSILON) as f32 * 0.5,
+    }
+}
+
+fn line_width_params(width: Size) -> (f32, u32) {
+    match width {
+        Size::Pixels(size) => (size.max(0.5), crate::point::MARKER_SIZE_PIXELS),
+        Size::World(size) => (
+            size.max(f64::EPSILON) as f32,
+            crate::point::MARKER_SIZE_WORLD,
+        ),
     }
 }
