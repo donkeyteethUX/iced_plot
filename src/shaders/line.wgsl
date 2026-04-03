@@ -59,7 +59,11 @@ fn vs_main(in: VsIn) -> VsOut {
     if in.width_mode == 0u {
         half_width_px = max(in.width, 0.5) * 0.5;
     } else {
-        half_width_px = max(in.width / max(pixel_to_world.x, pixel_to_world.y), 0.5) * 0.5;
+        let world_per_px_normal = max(
+            length(normal_px * pixel_to_world),
+            PIXEL_TO_WORLD_MIN,
+        );
+        half_width_px = max(in.width / world_per_px_normal, 0.5) * 0.5;
     }
     let outer_half_width_px = half_width_px + LINE_AA_RADIUS_PX;
 
