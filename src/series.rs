@@ -39,14 +39,17 @@ impl Default for LineStyle {
 }
 
 impl LineStyle {
+    /// Create a line style from an explicit width and line type.
     pub fn new(width: Size, line_type: LineType) -> Self {
         Self { width, line_type }
     }
 
+    /// Create a solid line style with the default width of 1 logical pixel.
     pub fn solid() -> Self {
         Self::default()
     }
 
+    /// Create a dotted line style with the given dot spacing in logical pixels.
     pub fn dotted(spacing: f32) -> Self {
         Self {
             line_type: LineType::Dotted { spacing },
@@ -54,6 +57,7 @@ impl LineStyle {
         }
     }
 
+    /// Create a dashed line style with the given dash length in logical pixels.
     pub fn dashed(length: f32) -> Self {
         Self {
             line_type: LineType::Dashed { length },
@@ -61,21 +65,25 @@ impl LineStyle {
         }
     }
 
+    /// Set the line width in either logical pixels or world units.
     pub fn with_width(mut self, width: impl Into<Size>) -> Self {
         self.width = width.into();
         self
     }
 
+    /// Set the line width in logical pixels.
     pub fn with_pixel_width(mut self, width: f32) -> Self {
         self.width = Size::Pixels(width);
         self
     }
 
+    /// Set the line width in world units.
     pub fn with_world_width(mut self, width: f64) -> Self {
         self.width = Size::World(width);
         self
     }
 
+    /// Set the line type while preserving the current width.
     pub fn with_line_type(mut self, line_type: LineType) -> Self {
         self.line_type = line_type;
         self
