@@ -31,6 +31,33 @@ struct LineBuffer {
     segments: Vec<LineSegment>,
 }
 
+struct LineVertex<'a> {
+    start: [f32; 2],
+    end: [f32; 2],
+    color: &'a iced::Color,
+    style: u32,
+    distance_start: f32,
+    segment_length_world: f32,
+    param: f32,
+    width: f32,
+    width_mode: u32,
+    along: f32,
+    side: f32,
+}
+
+#[derive(Clone, Copy)]
+struct LineRenderStyle {
+    width: Size,
+    line_style: u32,
+    style_param: f32,
+}
+
+struct PolylineRef<'a> {
+    positions: &'a [[f32; 2]],
+    distances: &'a [f32],
+    colors: &'a [iced::Color],
+}
+
 /// Cache for render pipelines
 struct PipelineCache {
     marker: Option<RenderPipeline>,
@@ -136,31 +163,18 @@ impl VertexWriter {
         self.write_f32(color.a);
     }
 
-    fn write_line_vertex(
-        &mut self,
-        start: [f32; 2],
-        end: [f32; 2],
-        color: &iced::Color,
-        style: u32,
-        distance_start: f32,
-        segment_length_world: f32,
-        param: f32,
-        width: f32,
-        width_mode: u32,
-        along: f32,
-        side: f32,
-    ) {
-        self.write_position(start);
-        self.write_position(end);
-        self.write_color(color);
-        self.write_u32(style);
-        self.write_f32(distance_start);
-        self.write_f32(segment_length_world);
-        self.write_f32(param);
-        self.write_f32(width);
-        self.write_u32(width_mode);
-        self.write_f32(along);
-        self.write_f32(side);
+    fn write_line_vertex(&mut self, vertex: LineVertex<'_>) {
+        self.write_position(vertex.start);
+        self.write_position(vertex.end);
+        self.write_color(vertex.color);
+        self.write_u32(vertex.style);
+        self.write_f32(vertex.distance_start);
+        self.write_f32(vertex.segment_length_world);
+        self.write_f32(vertex.param);
+        self.write_f32(vertex.width);
+        self.write_u32(vertex.width_mode);
+        self.write_f32(vertex.along);
+        self.write_f32(vertex.side);
     }
 
     fn byte_len(&self) -> usize {
@@ -910,6 +924,11 @@ impl PlotRenderer {
                 continue;
             }
             let (line_style_u32, style_param) = line_style_params(line_style);
+            let render_style = LineRenderStyle {
+                width: line_style.width,
+                line_style: line_style_u32,
+                style_param,
+            };
             let points_slice = &state.points[s.start..s.start + s.len];
             let mut poly_positions: Vec<[f32; 2]> = Vec::new();
             let mut poly_distances: Vec<f32> = Vec::new();
@@ -927,12 +946,12 @@ impl PlotRenderer {
                     write_polyline_triangles(
                         &mut writer,
                         &mut segs,
-                        &poly_positions,
-                        &poly_distances,
-                        &poly_colors,
-                        line_style.width,
-                        line_style_u32,
-                        style_param,
+                        PolylineRef {
+                            positions: &poly_positions,
+                            distances: &poly_distances,
+                            colors: &poly_colors,
+                        },
+                        render_style,
                     );
                     poly_positions.clear();
                     poly_distances.clear();
@@ -964,12 +983,12 @@ impl PlotRenderer {
             write_polyline_triangles(
                 &mut writer,
                 &mut segs,
-                &poly_positions,
-                &poly_distances,
-                &poly_colors,
-                line_style.width,
-                line_style_u32,
-                style_param,
+                PolylineRef {
+                    positions: &poly_positions,
+                    distances: &poly_distances,
+                    colors: &poly_colors,
+                },
+                render_style,
             );
         }
 
@@ -1023,6 +1042,11 @@ impl PlotRenderer {
             }
 
             let (line_style_u32, style_param) = line_style_params(vline.line_style);
+            let render_style = LineRenderStyle {
+                width: vline.line_style.width,
+                line_style: line_style_u32,
+                style_param,
+            };
             // Create two endpoints spanning the visible vertical extent.
             let positions = [
                 self.world_to_render_pos([vx_plot, bottom], &state.camera),
@@ -1033,12 +1057,12 @@ impl PlotRenderer {
             write_polyline_triangles(
                 &mut writer,
                 &mut segs,
-                &positions,
-                &distances,
-                &colors,
-                vline.line_style.width,
-                line_style_u32,
-                style_param,
+                PolylineRef {
+                    positions: &positions,
+                    distances: &distances,
+                    colors: &colors,
+                },
+                render_style,
             );
         }
 
@@ -1055,6 +1079,11 @@ impl PlotRenderer {
             }
 
             let (line_style_u32, style_param) = line_style_params(hline.line_style);
+            let render_style = LineRenderStyle {
+                width: hline.line_style.width,
+                line_style: line_style_u32,
+                style_param,
+            };
             // Create two endpoints spanning the visible horizontal extent.
             let positions = [
                 self.world_to_render_pos([left, hy_plot], &state.camera),
@@ -1065,12 +1094,12 @@ impl PlotRenderer {
             write_polyline_triangles(
                 &mut writer,
                 &mut segs,
-                &positions,
-                &distances,
-                &colors,
-                hline.line_style.width,
-                line_style_u32,
-                style_param,
+                PolylineRef {
+                    positions: &positions,
+                    distances: &distances,
+                    colors: &colors,
+                },
+                render_style,
             );
         }
 
@@ -1495,110 +1524,52 @@ fn line_style_params(style: LineStyle) -> (u32, f32) {
 fn write_polyline_triangles(
     writer: &mut VertexWriter,
     segs: &mut Vec<LineSegment>,
-    positions: &[[f32; 2]],
-    distances: &[f32],
-    colors: &[iced::Color],
-    width: Size,
-    line_style_u32: u32,
-    style_param: f32,
+    polyline: PolylineRef<'_>,
+    style: LineRenderStyle,
 ) {
-    if positions.len() < 2 || positions.len() != distances.len() || positions.len() != colors.len()
+    if polyline.positions.len() < 2
+        || polyline.positions.len() != polyline.distances.len()
+        || polyline.positions.len() != polyline.colors.len()
     {
         return;
     }
 
-    let (width, width_mode) = line_width_params(width);
+    let (width, width_mode) = line_width_params(style.width);
     let first_vertex = (writer.byte_len() / 64) as u32;
-    for index in 0..positions.len() - 1 {
-        let start = positions[index];
-        let end = positions[index + 1];
-        let segment_length_world = distances[index + 1] - distances[index];
+    for index in 0..polyline.positions.len() - 1 {
+        let start = polyline.positions[index];
+        let end = polyline.positions[index + 1];
+        let segment_length_world = polyline.distances[index + 1] - polyline.distances[index];
         if segment_length_world <= f32::EPSILON {
             continue;
         }
 
-        let start_color = &colors[index];
-        let end_color = &colors[index + 1];
-        let distance_start = distances[index];
+        let start_color = &polyline.colors[index];
+        let end_color = &polyline.colors[index + 1];
+        let distance_start = polyline.distances[index];
 
-        writer.write_line_vertex(
-            start,
-            end,
-            start_color,
-            line_style_u32,
-            distance_start,
-            segment_length_world,
-            style_param,
-            width,
-            width_mode,
-            0.0,
-            1.0,
-        );
-        writer.write_line_vertex(
-            start,
-            end,
-            start_color,
-            line_style_u32,
-            distance_start,
-            segment_length_world,
-            style_param,
-            width,
-            width_mode,
-            0.0,
-            -1.0,
-        );
-        writer.write_line_vertex(
-            start,
-            end,
-            end_color,
-            line_style_u32,
-            distance_start,
-            segment_length_world,
-            style_param,
-            width,
-            width_mode,
-            1.0,
-            1.0,
-        );
-        writer.write_line_vertex(
-            start,
-            end,
-            start_color,
-            line_style_u32,
-            distance_start,
-            segment_length_world,
-            style_param,
-            width,
-            width_mode,
-            0.0,
-            -1.0,
-        );
-        writer.write_line_vertex(
-            start,
-            end,
-            end_color,
-            line_style_u32,
-            distance_start,
-            segment_length_world,
-            style_param,
-            width,
-            width_mode,
-            1.0,
-            1.0,
-        );
-        writer.write_line_vertex(
-            start,
-            end,
-            end_color,
-            line_style_u32,
-            distance_start,
-            segment_length_world,
-            style_param,
-            width,
-            width_mode,
-            1.0,
-            -1.0,
-        );
+        for (color, along, side) in [
+            (start_color, 0.0, 1.0),
+            (start_color, 0.0, -1.0),
+            (end_color, 1.0, 1.0),
+            (start_color, 0.0, -1.0),
+            (end_color, 1.0, 1.0),
+            (end_color, 1.0, -1.0),
+        ] {
+            writer.write_line_vertex(LineVertex {
+                start,
+                end,
+                color,
+                style: style.line_style,
+                distance_start,
+                segment_length_world,
+                param: style.style_param,
+                width,
+                width_mode,
+                along,
+                side,
+            });
+        }
     }
 
     let vertex_count = (writer.byte_len() / 64) as u32 - first_vertex;

@@ -7,20 +7,15 @@ use crate::{Color, camera::Camera, point::MarkerType};
 /// Line styling options for series connections.
 ///
 /// Determines how points in a series are connected.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum LineType {
     /// Solid continuous line.
+    #[default]
     Solid,
     /// Dotted line with configurable spacing.
     Dotted { spacing: f32 },
     /// Dashed line with configurable dash length.
     Dashed { length: f32 },
-}
-
-impl Default for LineType {
-    fn default() -> Self {
-        Self::Solid
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
