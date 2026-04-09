@@ -8,17 +8,11 @@ use std::{
 
 use glam::{DVec2, Vec2};
 use iced::{
-    Color, Element, Length, Rectangle, Theme,
-    alignment::{self, Horizontal, Vertical},
-    keyboard,
-    mouse::{self, Interaction},
-    padding::{self, Padding},
-    wgpu::TextureFormat,
-    widget::{
+    Background, Color, Element, Length, Rectangle, Theme, alignment::{self, Horizontal, Vertical}, keyboard, mouse::{self, Interaction}, padding::{self, Padding}, wgpu::TextureFormat, widget::{
         self, container,
         shader::{self, Pipeline, Viewport},
         stack,
-    },
+    }
 };
 use indexmap::IndexMap;
 
@@ -85,6 +79,7 @@ pub struct PlotWidget {
     pub(crate) tick_label_size: f32,
     pub(crate) axis_label_size: f32,
     pub(crate) data_aspect: Option<f64>,
+    pub(crate) background_color: Option<Color>,
     // UI state
     /// Map of picked point id to highlight point data & tooltip text.
     pub(crate) picked_points: IndexMap<PointId, (HighlightPoint, Option<TooltipUiPayload>)>,
@@ -140,6 +135,7 @@ impl PlotWidget {
             tick_label_size: 10.0,
             axis_label_size: 16.0,
             data_aspect: None,
+            background_color: None,
             x_ticks: Vec::new(),
             y_ticks: Vec::new(),
             picked_points: IndexMap::new(),
@@ -226,6 +222,13 @@ impl PlotWidget {
         self.fills.insert(fill.id, fill);
         self.data_version = self.data_version.wrapping_add(1);
         Ok(())
+    }
+
+    /// Set the background color of the whole graph
+    /// 
+    /// Set to `None` to use the default values
+    pub fn with_background_color(&mut self, color: Option<Color>) {
+        self.background_color = color;
     }
 
     /// Add a horizontal reference line to the plot.
@@ -559,9 +562,19 @@ impl PlotWidget {
             .width(Length::Fill)
             .height(Length::Fill);
 
+        let color_decision = |color: Option<Color>, theme: &Theme| {
+            if let Some(color) = color {
+                color
+            } else {
+                theme.palette().background
+            }
+        };
+
         let inner_container = container(plot)
             .padding(2.0)
-            .style(|theme: &Theme| container::background(theme.palette().background));
+            .style(move |theme: &Theme| container::background(
+                color_decision(self.background_color, theme)
+            ));
 
         let legend = if self.legend_enabled {
             legend::legend(self, self.legend_collapsed)
@@ -590,7 +603,9 @@ impl PlotWidget {
             self.axis_label_size,
         ))
         .padding(3.0)
-        .style(|theme: &Theme| container::background(theme.palette().background))
+        .style(move |theme: &Theme| container::background(
+            color_decision(self.background_color, theme)
+        ))
         .into()
     }
 
