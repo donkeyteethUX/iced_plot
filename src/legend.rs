@@ -57,7 +57,11 @@ pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Option<Element<'_,
         col = col.push(row);
     }
 
-    Some(legend_container(col).style(container::bordered_box).into())
+    Some(
+        legend_container(col)
+            .style(|theme| widget.style(theme).legend)
+            .into(),
+    )
 }
 fn label_button(label: &str) -> Element<'_, PlotUiMessage> {
     button(text(label).size(12.0))

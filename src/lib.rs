@@ -39,6 +39,7 @@ pub(crate) mod plot_widget_builder;
 pub(crate) mod point;
 pub(crate) mod reference_lines;
 pub(crate) mod series;
+pub(crate) mod style;
 pub(crate) mod ticks;
 
 // Iced re-exports.
@@ -56,6 +57,7 @@ pub use plot_widget_builder::PlotWidgetBuilder;
 pub use point::{MarkerType, Point};
 pub use reference_lines::{HLine, VLine};
 pub use series::{LineStyle, LineType, MarkerStyle, Series, ShapeId, Size};
+pub use style::{GridStyle, PlotStyle, default_style};
 pub use ticks::{
     Tick, TickFormatter, TickProducer, default_formatter, default_tick_producer, log_formatter,
     log_tick_producer,

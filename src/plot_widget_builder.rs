@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use iced::Theme;
+
 use crate::axis_link::AxisLink;
 use crate::axis_scale::AxisScale;
 use crate::controls::PlotControls;
@@ -8,6 +10,7 @@ use crate::message::TooltipContext;
 use crate::plot_widget::{CursorProvider, HighlightPoint, HighlightPointProvider, PlotWidget};
 use crate::reference_lines::{HLine, VLine};
 use crate::series::{Series, SeriesError};
+use crate::style::{PlotStyle, StyleFn};
 use crate::ticks::{Tick, TickFormatter, TickProducer};
 
 /// Builder for configuring and constructing a PlotWidget.
@@ -52,6 +55,7 @@ pub struct PlotWidgetBuilder {
     tick_label_size: Option<f32>,
     axis_label_size: Option<f32>,
     data_aspect: Option<f64>,
+    style: Option<StyleFn>,
     series: Vec<Series>,
     fills: Vec<Fill>,
     vlines: Vec<VLine>,
@@ -288,6 +292,15 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Set a custom style resolver for the plot widget.
+    pub fn with_style<F>(mut self, style: F) -> Self
+    where
+        F: Fn(&Theme) -> PlotStyle + Send + Sync + 'static,
+    {
+        self.style = Some(Arc::new(style));
+        self
+    }
+
     /// Add a [`Series`] to the plot.
     pub fn add_series(mut self, series: Series) -> Self {
         self.series.push(series);
@@ -435,6 +448,9 @@ impl PlotWidgetBuilder {
         }
         if let Some(aspect) = self.data_aspect {
             w.set_data_aspect(aspect);
+        }
+        if let Some(style) = self.style {
+            w.set_style_resolver(style);
         }
         for s in self.series {
             w.add_series(s)?;

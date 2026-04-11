@@ -1,7 +1,7 @@
 use glam::DVec2;
 use iced::wgpu::{util::DeviceExt, *};
 
-use crate::plot_state::PlotState;
+use crate::{plot_state::PlotState, style::GridStyle};
 
 pub(crate) struct Grid {
     pipeline: Option<RenderPipeline>,
@@ -9,6 +9,7 @@ pub(crate) struct Grid {
     vertex_count: u32,
     last_center: DVec2,
     last_extents: DVec2,
+    last_style: GridStyle,
 }
 
 /// The visual weight of a tick / grid line.
@@ -43,8 +44,8 @@ impl Grid {
                 entry_point: Some("vs_main"),
                 compilation_options: PipelineCompilationOptions::default(),
                 buffers: &[VertexBufferLayout {
-                    array_stride: (std::mem::size_of::<[f32; 2]>() + std::mem::size_of::<f32>())
-                        as u64,
+                    array_stride: (std::mem::size_of::<[f32; 2]>()
+                        + std::mem::size_of::<[f32; 4]>()) as u64,
                     step_mode: VertexStepMode::Vertex,
                     attributes: &[
                         VertexAttribute {
@@ -55,7 +56,7 @@ impl Grid {
                         VertexAttribute {
                             offset: std::mem::size_of::<[f32; 2]>() as u64,
                             shader_location: 1,
-                            format: VertexFormat::Float32,
+                            format: VertexFormat::Float32x4,
                         },
                     ],
                 }],
@@ -92,18 +93,18 @@ impl Grid {
     }
 
     pub(crate) fn update(&mut self, device: &Device, state: &PlotState) {
-        const GRID_MAJOR_ALPHA: f32 = 0.45;
-        const GRID_MINOR_ALPHA: f32 = 0.28;
-        const GRID_SUB_MINOR_ALPHA: f32 = 0.10;
-
         let camera = &state.camera;
 
-        if camera.position == self.last_center && camera.half_extents == self.last_extents {
+        if camera.position == self.last_center
+            && camera.half_extents == self.last_extents
+            && state.grid_style == self.last_style
+        {
             return;
         }
 
         self.last_center = camera.position;
         self.last_extents = camera.half_extents;
+        self.last_style = state.grid_style;
 
         // Calculate bounds in render space (world - offset) for line endpoints
         let render_center = camera.effective_position();
@@ -121,13 +122,27 @@ impl Grid {
         for positioned_tick in &state.x_ticks {
             let ndc_x = (positioned_tick.screen_pos / width) as f64 * 2.0 - 1.0;
             let render_x = render_center.x + ndc_x * camera.half_extents.x;
-            let alpha = match positioned_tick.tick.line_type {
-                TickWeight::Major => GRID_MAJOR_ALPHA,
-                TickWeight::Minor => GRID_MINOR_ALPHA,
-                TickWeight::SubMinor => GRID_SUB_MINOR_ALPHA,
+            let color = match positioned_tick.tick.line_type {
+                TickWeight::Major => state.grid_style.major,
+                TickWeight::Minor => state.grid_style.minor,
+                TickWeight::SubMinor => state.grid_style.sub_minor,
             };
-            verts.extend_from_slice(&[render_x as f32, min_y as f32, alpha]);
-            verts.extend_from_slice(&[render_x as f32, max_y as f32, alpha]);
+            verts.extend_from_slice(&[
+                render_x as f32,
+                min_y as f32,
+                color.r,
+                color.g,
+                color.b,
+                color.a,
+            ]);
+            verts.extend_from_slice(&[
+                render_x as f32,
+                max_y as f32,
+                color.r,
+                color.g,
+                color.b,
+                color.a,
+            ]);
             count += 2;
         }
 
@@ -135,13 +150,27 @@ impl Grid {
         for positioned_tick in &state.y_ticks {
             let ndc_y = 1.0 - (positioned_tick.screen_pos / height) as f64 * 2.0;
             let render_y = render_center.y + ndc_y * camera.half_extents.y;
-            let alpha = match positioned_tick.tick.line_type {
-                TickWeight::Major => GRID_MAJOR_ALPHA,
-                TickWeight::Minor => GRID_MINOR_ALPHA,
-                TickWeight::SubMinor => GRID_SUB_MINOR_ALPHA,
+            let color = match positioned_tick.tick.line_type {
+                TickWeight::Major => state.grid_style.major,
+                TickWeight::Minor => state.grid_style.minor,
+                TickWeight::SubMinor => state.grid_style.sub_minor,
             };
-            verts.extend_from_slice(&[min_x as f32, render_y as f32, alpha]);
-            verts.extend_from_slice(&[max_x as f32, render_y as f32, alpha]);
+            verts.extend_from_slice(&[
+                min_x as f32,
+                render_y as f32,
+                color.r,
+                color.g,
+                color.b,
+                color.a,
+            ]);
+            verts.extend_from_slice(&[
+                max_x as f32,
+                render_y as f32,
+                color.r,
+                color.g,
+                color.b,
+                color.a,
+            ]);
             count += 2;
         }
 
@@ -175,6 +204,7 @@ impl Default for Grid {
             vertex_count: 0,
             last_center: DVec2::splat(f64::NAN),
             last_extents: DVec2::splat(f64::NAN),
+            last_style: GridStyle::default(),
         }
     }
 }

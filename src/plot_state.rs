@@ -14,6 +14,7 @@ use crate::{
     camera::Camera,
     picking::PickingState,
     plot_widget::{HighlightPoint, world_to_screen_position_x, world_to_screen_position_y},
+    style::GridStyle,
     ticks::{PositionedTick, TickFormatter, TickProducer},
 };
 
@@ -47,6 +48,7 @@ pub struct PlotState {
     pub(crate) bounds: Rectangle,
     pub(crate) x_ticks: Vec<PositionedTick>,
     pub(crate) y_ticks: Vec<PositionedTick>,
+    pub(crate) grid_style: GridStyle,
     // Interaction state
     pub(crate) cursor_position: Vec2,
     pub(crate) last_click_time: Option<Instant>,
@@ -99,6 +101,7 @@ impl Default for PlotState {
             y_link_version: 0,
             camera: Camera::new(1000, 600),
             bounds: Rectangle::default(),
+            grid_style: GridStyle::default(),
             cursor_position: Vec2::ZERO,
             last_click_time: None,
             legend_collapsed: false,

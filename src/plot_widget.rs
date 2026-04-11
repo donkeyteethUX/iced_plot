@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        Arc,
+        Arc, RwLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -29,12 +29,14 @@ use crate::{
     axis_scale::{data_point_to_plot, plot_point_to_data},
     camera::Camera,
     controls::PlotControls,
+    default_style,
     legend::{self, LegendEntry},
     message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
     picking,
     plot_renderer::{PlotRenderer, RenderParams},
     plot_state::PlotState,
     series::{SeriesError, ShapeId},
+    style::{PlotStyle, StyleFn},
     ticks::{self, PositionedTick, TickFormatter, TickProducer},
 };
 
@@ -85,6 +87,8 @@ pub struct PlotWidget {
     pub(crate) tick_label_size: f32,
     pub(crate) axis_label_size: f32,
     pub(crate) data_aspect: Option<f64>,
+    pub(crate) style: StyleFn,
+    pub(crate) resolved_style: RwLock<PlotStyle>,
     // UI state
     /// Map of picked point id to highlight point data & tooltip text.
     pub(crate) picked_points: IndexMap<PointId, (HighlightPoint, Option<TooltipUiPayload>)>,
@@ -140,6 +144,8 @@ impl PlotWidget {
             tick_label_size: 10.0,
             axis_label_size: 16.0,
             data_aspect: None,
+            style: Arc::new(default_style),
+            resolved_style: RwLock::new(PlotStyle::default()),
             x_ticks: Vec::new(),
             y_ticks: Vec::new(),
             picked_points: IndexMap::new(),
@@ -166,6 +172,35 @@ impl PlotWidget {
             self.data_aspect = None;
         }
         self.data_version = self.data_version.wrapping_add(1);
+    }
+
+    /// Set a custom style resolver for the plot widget.
+    pub fn set_style<F>(&mut self, style: F)
+    where
+        F: Fn(&Theme) -> PlotStyle + Send + Sync + 'static,
+    {
+        self.style = Arc::new(style);
+    }
+
+    pub(crate) fn set_style_resolver(&mut self, style: StyleFn) {
+        self.style = style;
+    }
+
+    /// Resolve the current plot style for a given application theme.
+    pub fn style(&self, theme: &Theme) -> PlotStyle {
+        let style = (self.style)(theme);
+        *self
+            .resolved_style
+            .write()
+            .expect("plot style lock poisoned") = style;
+        style
+    }
+
+    fn cached_style(&self) -> PlotStyle {
+        *self
+            .resolved_style
+            .read()
+            .expect("plot style lock poisoned")
     }
 
     /// Remove a data series from the plot by its ID.
@@ -561,7 +596,7 @@ impl PlotWidget {
 
         let inner_container = container(plot)
             .padding(2.0)
-            .style(|theme: &Theme| container::background(theme.palette().background));
+            .style(|theme: &Theme| self.style(theme).plot_area);
 
         let legend = if self.legend_enabled {
             legend::legend(self, self.legend_collapsed)
@@ -574,7 +609,7 @@ impl PlotWidget {
                 self.visible_highlighted_points()
                     .filter_map(|(_, tooltip)| {
                         tooltip.as_ref().and_then(|tooltip| {
-                            Self::view_tooltip_overlay(tooltip, &self.camera_bounds)
+                            self.view_tooltip_overlay(tooltip, &self.camera_bounds)
                         })
                     })
             ),
@@ -590,7 +625,7 @@ impl PlotWidget {
             self.axis_label_size,
         ))
         .padding(3.0)
-        .style(|theme: &Theme| container::background(theme.palette().background))
+        .style(|theme: &Theme| self.style(theme).frame)
         .into()
     }
 
@@ -761,29 +796,10 @@ impl PlotWidget {
     }
 
     fn view_tooltip_overlay<'a>(
+        &'a self,
         payload: &'a TooltipUiPayload,
         camera_bounds: &Option<(Camera, Rectangle)>,
     ) -> Option<Element<'a, PlotUiMessage>> {
-        use container::Style;
-        const TOOLTIP_ALPHA: f32 = 0.7;
-        fn tooltip_style(theme: &Theme) -> container::Style {
-            let palette = theme.extended_palette();
-
-            Style {
-                background: Some(
-                    palette
-                        .background
-                        .weak
-                        .color
-                        .scale_alpha(TOOLTIP_ALPHA)
-                        .into(),
-                ),
-                text_color: Some(palette.background.weak.text.scale_alpha(TOOLTIP_ALPHA)),
-                border: iced::border::rounded(2),
-                ..Style::default()
-            }
-        }
-
         // Offset a bit from point position
         const OFFSET: f32 = 8.0;
         let [screen_x, screen_y] = payload.screen_xy?;
@@ -819,7 +835,7 @@ impl PlotWidget {
                 .wrapping(widget::text::Wrapping::None),
         )
         .padding(6.0)
-        .style(tooltip_style);
+        .style(|theme| self.style(theme).tooltip);
 
         // Position tooltip at fixed location relative to point, not following cursor
         Some(
@@ -850,7 +866,7 @@ impl PlotWidget {
 
         let bubble = container(widget::text(payload.text.clone()).size(12.0))
             .padding(6.0)
-            .style(container::rounded_box);
+            .style(|theme| self.style(theme).cursor_overlay);
 
         Some(bubble.into())
     }
@@ -926,7 +942,7 @@ impl PlotWidget {
         Some(
             container(content)
                 .padding(8.0)
-                .style(container::rounded_box)
+                .style(|theme| self.style(theme).controls_panel)
                 .into(),
         )
     }
@@ -1223,9 +1239,12 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         _cursor: mouse::Cursor,
         _bounds: Rectangle,
     ) -> Self::Primitive {
+        let mut plot_widget = state.clone();
+        plot_widget.grid_style = self.cached_style().grid;
+
         Primitive {
             instance_id: self.instance_id,
-            plot_widget: state.clone(),
+            plot_widget,
         }
     }
     fn update(
