@@ -450,7 +450,7 @@ impl PlotWidgetBuilder {
             w.set_data_aspect(aspect);
         }
         if let Some(style) = self.style {
-            w.set_style_resolver(style);
+            w.style = style;
         }
         for s in self.series {
             w.add_series(s)?;

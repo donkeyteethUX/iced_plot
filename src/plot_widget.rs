@@ -174,33 +174,12 @@ impl PlotWidget {
         self.data_version = self.data_version.wrapping_add(1);
     }
 
-    /// Set a custom style resolver for the plot widget.
+    /// Set a style function for the plot widget.
     pub fn set_style<F>(&mut self, style: F)
     where
         F: Fn(&Theme) -> PlotStyle + Send + Sync + 'static,
     {
         self.style = Arc::new(style);
-    }
-
-    pub(crate) fn set_style_resolver(&mut self, style: StyleFn) {
-        self.style = style;
-    }
-
-    /// Resolve the current plot style for a given application theme.
-    pub fn style(&self, theme: &Theme) -> PlotStyle {
-        let style = (self.style)(theme);
-        *self
-            .resolved_style
-            .write()
-            .expect("plot style lock poisoned") = style;
-        style
-    }
-
-    fn cached_style(&self) -> PlotStyle {
-        *self
-            .resolved_style
-            .read()
-            .expect("plot style lock poisoned")
     }
 
     /// Remove a data series from the plot by its ID.
@@ -320,6 +299,16 @@ impl PlotWidget {
     /// all plots sharing this link will update synchronously.
     pub fn set_y_axis_link(&mut self, link: AxisLink) {
         self.y_axis_link = Some(link);
+    }
+
+    /// Update and return the current plot style for a given application theme.
+    pub(crate) fn update_style(&self, theme: &Theme) -> PlotStyle {
+        let style = (self.style)(theme);
+        *self
+            .resolved_style
+            .write()
+            .expect("plot style lock poisoned") = style;
+        style
     }
 
     /// Convert world position to screen position using camera and bounds
@@ -450,22 +439,33 @@ impl PlotWidget {
     pub fn add_hover_point(&mut self, point_id: PointId) {
         self.handle_hover_pick::<false>(point_id);
     }
+
     /// Add a pick point to the plot.
     pub fn add_pick_point(&mut self, point_id: PointId) {
         self.handle_hover_pick::<true>(point_id);
     }
+
     /// Clear all hover points from the plot.
     pub fn clear_hover(&mut self) {
         if !self.hovered_points.is_empty() {
             self.hovered_points.clear();
         }
     }
+
     /// Clear all pick points from the plot.
     pub fn clear_pick(&mut self) {
         if !self.picked_points.is_empty() {
             self.picked_points.clear();
         }
     }
+
+    fn cached_style(&self) -> PlotStyle {
+        *self
+            .resolved_style
+            .read()
+            .expect("plot style lock poisoned")
+    }
+
     fn handle_hover_pick<const PICK: bool>(&mut self, point_id: PointId) -> bool {
         let mut changed = false;
         let (highlight_provider, points) = if PICK {
@@ -597,7 +597,7 @@ impl PlotWidget {
 
         let inner_container = container(plot)
             .padding(2.0)
-            .style(|theme: &Theme| self.style(theme).plot_area);
+            .style(|theme: &Theme| self.update_style(theme).plot_area);
 
         let legend = if self.legend_enabled {
             legend::legend(self, self.legend_collapsed)
@@ -627,7 +627,7 @@ impl PlotWidget {
             style.axis_label_color,
         ))
         .padding(3.0)
-        .style(|theme: &Theme| self.style(theme).frame)
+        .style(|theme: &Theme| self.update_style(theme).frame)
         .into()
     }
 
@@ -837,7 +837,7 @@ impl PlotWidget {
                 .wrapping(widget::text::Wrapping::None),
         )
         .padding(6.0)
-        .style(|theme| self.style(theme).tooltip);
+        .style(|theme| self.update_style(theme).tooltip);
 
         // Position tooltip at fixed location relative to point, not following cursor
         Some(
@@ -868,7 +868,7 @@ impl PlotWidget {
 
         let bubble = container(widget::text(payload.text.clone()).size(12.0))
             .padding(6.0)
-            .style(|theme| self.style(theme).cursor_overlay);
+            .style(|theme| self.update_style(theme).cursor_overlay);
 
         Some(bubble.into())
     }
@@ -944,7 +944,7 @@ impl PlotWidget {
         Some(
             container(content)
                 .padding(8.0)
-                .style(|theme| self.style(theme).controls_panel)
+                .style(|theme| self.update_style(theme).controls_panel)
                 .into(),
         )
     }

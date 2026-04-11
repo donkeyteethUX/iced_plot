@@ -59,7 +59,7 @@ pub(crate) fn legend(widget: &PlotWidget, collapsed: bool) -> Option<Element<'_,
 
     Some(
         legend_container(col)
-            .style(|theme| widget.style(theme).legend)
+            .style(|theme| widget.update_style(theme).legend)
             .into(),
     )
 }
