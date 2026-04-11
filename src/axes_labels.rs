@@ -1,7 +1,7 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::text::Wrapping;
 use iced::widget::{column, container, row, text};
-use iced::{Element, Length};
+use iced::{Color, Element, Length};
 
 /// Stack the element with the labels on the bottom and left.
 pub(crate) fn stack_with_labels<'a, M: 'a>(
@@ -9,24 +9,36 @@ pub(crate) fn stack_with_labels<'a, M: 'a>(
     x_label: &'a str,
     y_label: &'a str,
     axis_label_size: f32,
+    axis_label_color: Color,
 ) -> Element<'a, M> {
     if x_label.is_empty() && y_label.is_empty() {
         widget.into()
     } else if x_label.is_empty() {
-        row![y_axis_label(y_label, axis_label_size), widget.into()].into()
+        row![
+            y_axis_label(y_label, axis_label_size, axis_label_color),
+            widget.into()
+        ]
+        .into()
     } else if y_label.is_empty() {
-        column![widget.into(), x_axis_label(x_label, axis_label_size)].into()
+        column![
+            widget.into(),
+            x_axis_label(x_label, axis_label_size, axis_label_color)
+        ]
+        .into()
     } else {
         row![
-            y_axis_label(y_label, axis_label_size),
-            column![widget.into(), x_axis_label(x_label, axis_label_size)]
+            y_axis_label(y_label, axis_label_size, axis_label_color),
+            column![
+                widget.into(),
+                x_axis_label(x_label, axis_label_size, axis_label_color)
+            ]
         ]
         .into()
     }
 }
 
-fn x_axis_label<'a, M: 'a>(label: &'a str, size: f32) -> Element<'a, M> {
-    container(text(label).size(size))
+fn x_axis_label<'a, M: 'a>(label: &'a str, size: f32, color: Color) -> Element<'a, M> {
+    container(text(label).size(size).color(color))
         .align_x(Horizontal::Center)
         .align_y(Vertical::Bottom)
         .width(Length::Fill)
@@ -34,8 +46,8 @@ fn x_axis_label<'a, M: 'a>(label: &'a str, size: f32) -> Element<'a, M> {
         .into()
 }
 
-fn y_axis_label<'a, M: 'a>(label: &'a str, size: f32) -> Element<'a, M> {
-    container(text(label).size(size).wrapping(Wrapping::Word))
+fn y_axis_label<'a, M: 'a>(label: &'a str, size: f32, color: Color) -> Element<'a, M> {
+    container(text(label).size(size).color(color).wrapping(Wrapping::Word))
         .align_x(Horizontal::Left)
         .align_y(Vertical::Center)
         .width(Length::Shrink)

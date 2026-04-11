@@ -590,6 +590,7 @@ impl PlotWidget {
 
     /// View the plot widget.
     pub fn view<'a>(&'a self) -> iced::Element<'a, PlotUiMessage> {
+        let style = self.cached_style();
         let plot = widget::shader(self)
             .width(Length::Fill)
             .height(Length::Fill);
@@ -623,6 +624,7 @@ impl PlotWidget {
             &self.x_axis_label,
             &self.y_axis_label,
             self.axis_label_size,
+            style.axis_label_color,
         ))
         .padding(3.0)
         .style(|theme: &Theme| self.style(theme).frame)
@@ -953,7 +955,12 @@ impl PlotWidget {
         }
 
         let mut tick_elements = Vec::with_capacity(self.x_ticks.len() + self.y_ticks.len());
-        let tick_text = |text| widget::text(text).size(self.tick_label_size);
+        let tick_label_color = self.cached_style().tick_label_color;
+        let tick_text = |text| {
+            widget::text(text)
+                .size(self.tick_label_size)
+                .color(tick_label_color)
+        };
 
         if let Some(formatter) = &self.x_axis_formatter {
             for tick in &self.x_ticks {

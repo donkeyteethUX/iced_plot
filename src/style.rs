@@ -28,6 +28,12 @@ pub struct PlotStyle {
 
     /// Style for grid lines rendered inside the plot area.
     pub grid: GridStyle,
+
+    /// Color of tick labels rendered around the plot area.
+    pub tick_label_color: Color,
+
+    /// Color of axis labels rendered around the plot area.
+    pub axis_label_color: Color,
 }
 
 /// Configures the appearance of grid lines inside the plot area.
@@ -84,6 +90,8 @@ pub fn default_style(theme: &Theme) -> PlotStyle {
             minor: with_alpha(grid_base, 0.28),
             sub_minor: with_alpha(grid_base, 0.10),
         },
+        tick_label_color: palette.background.base.text,
+        axis_label_color: palette.background.strong.text,
     }
 }
 

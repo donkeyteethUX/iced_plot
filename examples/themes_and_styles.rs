@@ -259,6 +259,8 @@ fn style1(theme: &Theme) -> PlotStyle {
             with_alpha(palette.secondary.base.color, 0.5),
             with_alpha(palette.secondary.weak.color, 0.2),
         ),
+        tick_label_color: palette.secondary.strong.color,
+        axis_label_color: palette.primary.strong.color,
     }
 }
 
@@ -296,6 +298,8 @@ fn style2(theme: &Theme) -> PlotStyle {
             with_alpha(palette.success.base.color, 0.6),
             with_alpha(palette.secondary.base.color, 0.4),
         ),
+        tick_label_color: palette.success.strong.color,
+        axis_label_color: palette.primary.strong.color,
     }
 }
 
@@ -347,6 +351,8 @@ fn style3(theme: &Theme) -> PlotStyle {
             with_alpha(palette.warning.strong.color, 0.24),
             with_alpha(palette.danger.base.color, 0.20),
         ),
+        tick_label_color: palette.warning.strong.color,
+        axis_label_color: palette.danger.strong.color,
     }
 }
 
