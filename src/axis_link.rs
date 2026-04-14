@@ -23,8 +23,22 @@ impl AxisLink {
         Default::default()
     }
 
-    /// Get the current position and half extent
-    pub(crate) fn get(&self) -> (f64, f64, u64) {
+    /// Get the current position, half-extent, and version counter.
+    ///
+    /// Returns `(center, half_extent, version)`. The data-space axis range
+    /// covered by the linked plots is `[center - half_extent, center + half_extent]`.
+    ///
+    /// The version counter is bumped on every camera change; downstream
+    /// code can poll it to detect viewport updates without plumbing the
+    /// `PlotUiMessage::RenderUpdate` stream.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the internal `RwLock` has been poisoned by a prior
+    /// panic on another thread while holding the write lock. Not expected
+    /// in normal operation.
+    #[must_use]
+    pub fn get(&self) -> (f64, f64, u64) {
         let inner = self.inner.read().unwrap();
         (inner.position, inner.half_extent, inner.version)
     }
@@ -37,8 +51,19 @@ impl AxisLink {
         inner.version = inner.version.wrapping_add(1);
     }
 
-    /// Get the current version
-    pub(crate) fn version(&self) -> u64 {
+    /// Get the current version counter.
+    ///
+    /// The counter is bumped on every camera change. A cheap way to detect
+    /// whether the viewport has moved since the last observation without
+    /// locking the value state.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the internal `RwLock` has been poisoned by a prior
+    /// panic on another thread while holding the write lock. Not expected
+    /// in normal operation.
+    #[must_use]
+    pub fn version(&self) -> u64 {
         self.inner.read().unwrap().version
     }
 }
