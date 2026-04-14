@@ -50,6 +50,24 @@ pub(crate) type CursorProvider = Arc<dyn Fn(f64, f64) -> String + Send + Sync>;
 pub(crate) type HighlightPointProvider =
     Arc<dyn Fn(TooltipContext<'_>, &mut HighlightPoint) -> Option<String> + Send + Sync>;
 
+/// Current viewport state of a [`PlotWidget`].
+///
+/// Produced by [`PlotWidget::current_viewport`]. Captures the data-space
+/// ranges visible along each axis and the pixel rectangle of the plot area.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewportInfo {
+    /// Left edge of the visible data-space range along the x-axis.
+    pub x_min: f64,
+    /// Right edge of the visible data-space range along the x-axis.
+    pub x_max: f64,
+    /// Bottom edge of the visible data-space range along the y-axis.
+    pub y_min: f64,
+    /// Top edge of the visible data-space range along the y-axis.
+    pub y_max: f64,
+    /// Pixel rectangle of the plot-area (excludes axes, labels, legend).
+    pub plot_area: Rectangle,
+}
+
 /// A plot widget that renders data series with interactive features.
 pub struct PlotWidget {
     pub(crate) instance_id: u64,
@@ -279,6 +297,46 @@ impl PlotWidget {
     /// If set, these will override autoscaling for the y-axis.
     pub fn set_y_lim(&mut self, min: f64, max: f64) {
         self.y_lim = Some((min, max));
+    }
+
+    /// Read the current data-space viewport and plot-area pixel rectangle.
+    ///
+    /// Returns `None` before the first frame has been rendered (the widget
+    /// populates this lazily from the shader program's update phase). Once
+    /// available, the returned values track pan/zoom/resize in near real time.
+    ///
+    /// Ranges are returned in data-space coordinates: for non-linear axis
+    /// scales (e.g. `AxisScale::Log`), the internal plot-space values are
+    /// inverted back to data-space before being returned.
+    pub fn current_viewport(&self) -> Option<ViewportInfo> {
+        let (camera, bounds) = self.camera_bounds.as_ref()?;
+        let x_min_plot = camera.position.x - camera.half_extents.x;
+        let x_max_plot = camera.position.x + camera.half_extents.x;
+        let y_min_plot = camera.position.y - camera.half_extents.y;
+        let y_max_plot = camera.position.y + camera.half_extents.y;
+        let x_min = self
+            .x_axis_scale
+            .plot_to_data(x_min_plot)
+            .unwrap_or(x_min_plot);
+        let x_max = self
+            .x_axis_scale
+            .plot_to_data(x_max_plot)
+            .unwrap_or(x_max_plot);
+        let y_min = self
+            .y_axis_scale
+            .plot_to_data(y_min_plot)
+            .unwrap_or(y_min_plot);
+        let y_max = self
+            .y_axis_scale
+            .plot_to_data(y_max_plot)
+            .unwrap_or(y_max_plot);
+        Some(ViewportInfo {
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+            plot_area: *bounds,
+        })
     }
 
     /// Set the y-axis scale mode.
