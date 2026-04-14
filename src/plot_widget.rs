@@ -281,6 +281,16 @@ impl PlotWidget {
         self.y_lim = Some((min, max));
     }
 
+    /// Pixel rectangle of the plot area (excluding axes, labels, legend).
+    ///
+    /// Returns `None` before the first frame has been rendered. Useful for
+    /// pixel-aware downsampling requests against a streaming data source
+    /// when only the pixel dimensions are needed.
+    #[must_use]
+    pub fn plot_area_bounds(&self) -> Option<Rectangle> {
+        self.camera_bounds.as_ref().map(|(_, r)| *r)
+    }
+
     /// Set the y-axis scale mode.
     ///
     /// This does not modify tick producer/formatter settings.
