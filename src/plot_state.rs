@@ -78,6 +78,10 @@ pub struct PlotState {
     pub(crate) crosshairs_position: Vec2,
     pub(crate) x_axis_formatter: Option<TickFormatter>,
     pub(crate) y_axis_formatter: Option<TickFormatter>,
+    pub(crate) prev_data_max_x: Option<f64>,
+    pub(crate) follow_reset_seen: u64,
+    pub(crate) last_point_y: Option<f64>,
+    pub(crate) prev_last_point_y: Option<f64>,
 }
 
 impl Default for PlotState {
@@ -128,6 +132,10 @@ impl Default for PlotState {
             y_axis_formatter: None,
             x_ticks: Vec::new(),
             y_ticks: Vec::new(),
+            prev_data_max_x: None,
+            follow_reset_seen: 0,
+            last_point_y: None,
+            prev_last_point_y: None,
         }
     }
 }
@@ -160,6 +168,8 @@ impl PlotState {
         let mut data_max_x: Option<f64> = None;
         let mut data_min_y: Option<f64> = None;
         let mut data_max_y: Option<f64> = None;
+        let mut rightmost_x: f64 = f64::NEG_INFINITY;
+        let mut rightmost_y: Option<f64> = None;
         let axis_ranges = self.camera.axis_ranges();
 
         // Process each series
@@ -209,6 +219,10 @@ impl PlotState {
                         Some(data_min_y.map_or(transformed[1], |min| min.min(transformed[1])));
                     data_max_y =
                         Some(data_max_y.map_or(transformed[1], |max| max.max(transformed[1])));
+                }
+                if transformed[0] >= rightmost_x {
+                    rightmost_x = transformed[0];
+                    rightmost_y = Some(transformed[1]);
                 }
 
                 // Only create points if we have markers OR lines (lines need points for geometry)
@@ -325,6 +339,7 @@ impl PlotState {
         self.hlines = hlines.into();
         self.data_min = data_min;
         self.data_max = data_max;
+        self.last_point_y = rightmost_y;
         self.legend_collapsed = widget.legend_collapsed;
         self.x_lim = widget.x_lim;
         self.y_lim = widget.y_lim;
@@ -381,6 +396,28 @@ impl PlotState {
         if update_axis_links {
             self.update_axis_links();
         }
+    }
+
+    /// Only scales the Y-axis according to data bounds; does not touch the X camera.
+    /// In follow mode: x is controlled by follow_x, y adapts to data.
+    pub(crate) fn autoscale_y_only(&mut self) {
+        let (Some(data_min), Some(data_max)) = (self.data_min, self.data_max) else {
+            return;
+        };
+        let y_min = if let Some((y_min, _)) = self.y_lim {
+            self.y_axis_scale.data_to_plot(y_min).unwrap_or(data_min.y)
+        } else {
+            data_min.y
+        };
+        let y_max = if let Some((_, y_max)) = self.y_lim {
+            self.y_axis_scale.data_to_plot(y_max).unwrap_or(data_max.y)
+        } else {
+            data_max.y
+        };
+        let range = (y_max - y_min).max(1e-6);
+        let padding = range * 0.05;
+        self.camera.half_extents.y = (range + padding) / 2.0;
+        self.camera.position.y = (y_min + y_max) / 2.0;
     }
 
     pub(crate) fn update_ticks(
@@ -725,7 +762,13 @@ impl PlotState {
 
                 match widget.controls.scroll_action(self.modifiers) {
                     Some(ScrollAction::Zoom) => {
-                        self.zoom_at_cursor(y, viewport);
+                        // Determine zoom axes from modifiers:
+                        //   Shift → Y-axis only
+                        //   Alt   → X-axis only
+                        //   neither → both axes
+                        let zoom_x = !self.modifiers.shift();
+                        let zoom_y = !self.modifiers.alt();
+                        self.zoom_at_cursor(y, viewport, zoom_x, zoom_y);
                         needs_redraw = true;
                     }
                     Some(ScrollAction::Pan) => {
@@ -872,7 +915,7 @@ impl PlotState {
         }
     }
 
-    fn zoom_at_cursor(&mut self, scroll_y: f32, viewport: DVec2) {
+    fn zoom_at_cursor(&mut self, scroll_y: f32, viewport: DVec2, zoom_x: bool, zoom_y: bool) {
         let zoom_factor = if scroll_y > 0.0 { 0.95 } else { 1.05 };
 
         let cursor_render_before = self.camera.screen_to_render(
@@ -880,14 +923,26 @@ impl PlotState {
             viewport,
         );
 
-        self.camera.half_extents *= zoom_factor;
+        if zoom_x {
+            self.camera.half_extents.x *= zoom_factor;
+        }
+        if zoom_y {
+            self.camera.half_extents.y *= zoom_factor;
+        }
 
         let cursor_render_after = self.camera.screen_to_render(
             DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
             viewport,
         );
 
-        self.camera.position += cursor_render_before - cursor_render_after;
+        // Only adjust the axes that were zoomed so the cursor stays anchored.
+        let render_delta = cursor_render_before - cursor_render_after;
+        if zoom_x {
+            self.camera.position.x += render_delta.x;
+        }
+        if zoom_y {
+            self.camera.position.y += render_delta.y;
+        }
         self.update_axis_links();
     }
 
