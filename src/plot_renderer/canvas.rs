@@ -340,6 +340,7 @@ fn draw_crosshairs(frame: &mut Frame, state: &PlotState) {
     frame.stroke(&vertical, stroke);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_marker(
     frame: &mut Frame,
     world_position: [f64; 2],
