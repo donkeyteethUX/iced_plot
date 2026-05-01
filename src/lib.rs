@@ -52,6 +52,7 @@ pub use controls::{PanControls, PickControls, PlotControls, ZoomControls};
 pub use fill::Fill;
 pub use grid::TickWeight;
 pub use message::{DragEvent, HoverPickEvent, PlotUiMessage, PointId, TooltipContext};
+pub use plot_renderer::PlotRenderStrategy;
 pub use plot_widget::{HighlightPoint, PlotWidget};
 pub use plot_widget_builder::PlotWidgetBuilder;
 pub use point::{MarkerType, Point};

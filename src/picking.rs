@@ -72,13 +72,14 @@ impl PickingState {
         instance_id: u64,
         cursor: Vec2,
         hover_radius_px: f32,
+        force_cpu: bool,
         points: &[Point],
         series: &[SeriesSpan],
         camera: &Camera,
         bounds: &Rectangle,
         valid_point_id: impl Fn(&PointId) -> bool,
     ) -> HoverRequest {
-        if points.len() < CPU_PICK_THRESHOLD {
+        if force_cpu || points.len() < CPU_PICK_THRESHOLD {
             if let Some(point) =
                 cpu_pick_hit(points, series, camera, bounds, cursor, hover_radius_px)
                 && valid_point_id(&point)
@@ -103,6 +104,7 @@ impl PickingState {
         instance_id: u64,
         cursor: Vec2,
         hover_radius_px: f32,
+        force_cpu: bool,
         points: &[Point],
         series: &[SeriesSpan],
         camera: &Camera,
@@ -115,7 +117,7 @@ impl PickingState {
             return Some(point);
         }
 
-        if points.len() < CPU_PICK_THRESHOLD {
+        if force_cpu || points.len() < CPU_PICK_THRESHOLD {
             if let Some(point) =
                 cpu_pick_hit(points, series, camera, bounds, cursor, hover_radius_px)
                 && valid_point_id(&point)

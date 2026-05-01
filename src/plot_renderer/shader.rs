@@ -1,6 +1,9 @@
 //! GPU renderer for PlotWidget.
+use super::{
+    CROSSHAIR_RGBA, SELECTION_FILL_RGBA, highlight_marker_plot_position,
+    highlight_mask_plot_position, highlight_mask_rgba,
+};
 use crate::LineStyle;
-use crate::axis_scale::data_point_to_plot;
 use crate::picking::PickingPass;
 use crate::{LineType, Size, camera::CameraUniform, grid::Grid, plot_state::PlotState};
 use iced::widget::shader::Viewport;
@@ -427,7 +430,7 @@ impl PlotRenderer {
         if self.pipelines.marker.is_some() {
             return;
         }
-        let shader = device.create_shader_module(include_wgsl!("shaders/markers.wgsl"));
+        let shader = device.create_shader_module(include_wgsl!("../shaders/markers.wgsl"));
         let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("markers layout"),
             bind_group_layouts: &[&self.camera_bgl],
@@ -507,7 +510,7 @@ impl PlotRenderer {
         if self.pipelines.line.is_some() {
             return;
         }
-        let shader = device.create_shader_module(include_wgsl!("shaders/line.wgsl"));
+        let shader = device.create_shader_module(include_wgsl!("../shaders/line.wgsl"));
         let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("line layout"),
             bind_group_layouts: &[&self.camera_bgl],
@@ -617,7 +620,7 @@ impl PlotRenderer {
         if self.pipelines.fill.is_some() {
             return;
         }
-        let shader = device.create_shader_module(include_wgsl!("shaders/fill.wgsl"));
+        let shader = device.create_shader_module(include_wgsl!("../shaders/fill.wgsl"));
         let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("fill layout"),
             bind_group_layouts: &[&self.camera_bgl],
@@ -678,7 +681,7 @@ impl PlotRenderer {
         if self.pipelines.overlay.is_some() {
             return;
         }
-        let shader = device.create_shader_module(include_wgsl!("shaders/selection.wgsl"));
+        let shader = device.create_shader_module(include_wgsl!("../shaders/selection.wgsl"));
         let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("overlay layout"),
             bind_group_layouts: &[],
@@ -740,7 +743,7 @@ impl PlotRenderer {
         if self.pipelines.line_overlay.is_some() {
             return;
         }
-        let shader = device.create_shader_module(include_wgsl!("shaders/selection.wgsl"));
+        let shader = device.create_shader_module(include_wgsl!("../shaders/selection.wgsl"));
         let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("line overlay layout"),
             bind_group_layouts: &[],
@@ -1130,7 +1133,6 @@ impl PlotRenderer {
             return;
         }
         if state.selection.active || state.selection.moved {
-            const FILL: [f32; 4] = [0.2, 0.6, 1.0, 0.2];
             let p0 = state.selection.start * self.scale_factor;
             let p1 = state.selection.end * self.scale_factor;
             let min_x = p0.x.min(p1.x);
@@ -1144,7 +1146,7 @@ impl PlotRenderer {
             let mut data: Vec<f32> = Vec::new();
             for v in [tl, tr, bl, br] {
                 data.extend_from_slice(&v);
-                data.extend_from_slice(&FILL);
+                data.extend_from_slice(&SELECTION_FILL_RGBA);
             }
             let raw = bytemuck::cast_slice(&data);
             self.buffers.selection = Some(VertexBuffer {
@@ -1186,19 +1188,7 @@ impl PlotRenderer {
             if let Some(mask_padding) = highlight_point.mask_padding
                 && let Some(marker_style) = highlight_point.marker_style
             {
-                // For world-space markers, the position is the bottom-left corner,
-                // but we need to center the mask_box at the marker's center.
-                // Adjust position if marker is world-space (same as shader does)
-                let mut world_pos = [highlight_point.x, highlight_point.y];
-                if let crate::Size::World(size) = marker_style.size {
-                    let half_size = size * 0.5;
-                    world_pos[0] += half_size;
-                    world_pos[1] += half_size;
-                }
-
-                let Some(world_pos) =
-                    data_point_to_plot(world_pos, state.x_axis_scale, state.y_axis_scale)
-                else {
+                let Some(world_pos) = highlight_mask_plot_position(highlight_point, state) else {
                     continue;
                 };
 
@@ -1215,12 +1205,7 @@ impl PlotRenderer {
                 let tr = [ndc[0] + dx, ndc[1] + dy];
                 let bl = [ndc[0] - dx, ndc[1] - dy];
                 let br = [ndc[0] + dx, ndc[1] - dy];
-                let point_is_very_bright = highlight_point.color.relative_luminance() > 0.9;
-                let color = if point_is_very_bright {
-                    [0.0, 0.0, 0.0, 0.25]
-                } else {
-                    [1.0, 1.0, 1.0, 0.25]
-                };
+                let color = highlight_mask_rgba(highlight_point.color);
                 for v in [tl, tr, bl, br] {
                     mask_box_data.extend_from_slice(&v);
                     mask_box_data.extend_from_slice(&color);
@@ -1229,11 +1214,7 @@ impl PlotRenderer {
 
             // Build marker if marker_style is Some
             if let Some(marker_style) = highlight_point.marker_style {
-                let Some(plot_pos) = data_point_to_plot(
-                    [highlight_point.x, highlight_point.y],
-                    state.x_axis_scale,
-                    state.y_axis_scale,
-                ) else {
+                let Some(plot_pos) = highlight_marker_plot_position(highlight_point, state) else {
                     continue;
                 };
                 let render_pos = self.world_to_render_pos(plot_pos, &state.camera);
@@ -1304,9 +1285,6 @@ impl PlotRenderer {
         // Convert cursor position to clip coordinates
         let cursor_clip = self.screen_to_clip(pos.x, pos.y);
 
-        // Thin gray line color (semi-transparent)
-        let color = [0.5, 0.5, 0.5, 0.5];
-
         let mut data: Vec<f32> = Vec::new();
 
         // Horizontal line (left to right through cursor)
@@ -1319,15 +1297,15 @@ impl PlotRenderer {
 
         // Add horizontal line vertices
         data.extend_from_slice(&left);
-        data.extend_from_slice(&color);
+        data.extend_from_slice(&CROSSHAIR_RGBA);
         data.extend_from_slice(&right);
-        data.extend_from_slice(&color);
+        data.extend_from_slice(&CROSSHAIR_RGBA);
 
         // Add vertical line vertices
         data.extend_from_slice(&top);
-        data.extend_from_slice(&color);
+        data.extend_from_slice(&CROSSHAIR_RGBA);
         data.extend_from_slice(&bottom);
-        data.extend_from_slice(&color);
+        data.extend_from_slice(&CROSSHAIR_RGBA);
 
         let raw = bytemuck::cast_slice(&data);
         self.buffers.crosshairs = Some(VertexBuffer {

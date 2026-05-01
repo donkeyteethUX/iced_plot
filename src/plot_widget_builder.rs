@@ -7,6 +7,7 @@ use crate::axis_scale::AxisScale;
 use crate::controls::PlotControls;
 use crate::fill::Fill;
 use crate::message::TooltipContext;
+use crate::plot_renderer::PlotRenderStrategy;
 use crate::plot_widget::{CursorProvider, HighlightPoint, HighlightPointProvider, PlotWidget};
 use crate::reference_lines::{HLine, VLine};
 use crate::series::{Series, SeriesError};
@@ -38,6 +39,7 @@ pub struct PlotWidgetBuilder {
     cursor_overlay: Option<bool>,
     cursor_provider: Option<CursorProvider>,
     crosshairs: Option<bool>,
+    render_strategy: Option<PlotRenderStrategy>,
     controls: Option<PlotControls>,
     disable_legend: bool,
     x_lim: Option<(f64, f64)>,
@@ -139,6 +141,12 @@ impl PlotWidgetBuilder {
     /// Enable or disable crosshairs that follow the cursor position.
     pub fn with_crosshairs(mut self, enabled: bool) -> Self {
         self.crosshairs = Some(enabled);
+        self
+    }
+
+    /// Select which rendering path the plot should use.
+    pub fn with_render_strategy(mut self, strategy: PlotRenderStrategy) -> Self {
+        self.render_strategy = Some(strategy);
         self
     }
 
@@ -415,6 +423,9 @@ impl PlotWidgetBuilder {
         }
         if let Some(enabled) = self.crosshairs {
             w.set_crosshairs(enabled);
+        }
+        if let Some(strategy) = self.render_strategy {
+            w.set_render_strategy(strategy);
         }
         if let Some(link) = self.x_axis_link {
             w.set_x_axis_link(link);
