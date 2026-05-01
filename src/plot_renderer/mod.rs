@@ -21,7 +21,7 @@ pub enum PlotRenderStrategy {
 }
 
 impl PlotRenderStrategy {
-    /// From [`iced::system::Information`]'s `graphics_backend`.
+    /// From `iced::system::Information`'s `graphics_backend`.
     pub fn from_graphics_backend(graphics_backend: &str) -> Self {
         #[cfg(feature = "canvas")]
         {

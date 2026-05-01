@@ -1223,6 +1223,7 @@ fn update_cursor_overlay_on_move(
 }
 
 fn invalidate_static_canvas(widget: &PlotWidget) {
+    _ = widget;
     #[cfg(feature = "canvas")]
     {
         widget.canvas_caches.static_layer.clear();
@@ -1230,6 +1231,7 @@ fn invalidate_static_canvas(widget: &PlotWidget) {
 }
 
 fn invalidate_overlay_canvas(widget: &PlotWidget) {
+    _ = widget;
     #[cfg(feature = "canvas")]
     {
         widget.canvas_caches.overlay_layer.clear();
