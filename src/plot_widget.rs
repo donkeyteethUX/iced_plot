@@ -69,6 +69,13 @@ pub struct PlotWidget {
     pub(crate) y_axis_label: String,
     pub(crate) x_lim: Option<(f64, f64)>,
     pub(crate) y_lim: Option<(f64, f64)>,
+    /// Follow mode: automatically scale Y-axis on each data update.
+    /// X remains under user control (pan/zoom is preserved).
+    pub(crate) autoscale_y_on_updates: bool,
+    /// Follow mode: locks camera X to the right edge (data_max.x) on each data update.
+    /// Zoom level (half_extents.x) is preserved — user can zoom in/out.
+    pub(crate) follow_right_edge: bool,
+    pub(crate) follow_reset_counter: u64,
     pub(crate) x_axis_scale: AxisScale,
     pub(crate) y_axis_scale: AxisScale,
     pub(crate) x_axis_link: Option<AxisLink>,
@@ -126,6 +133,9 @@ impl PlotWidget {
             y_axis_label: String::new(),
             x_lim: None,
             y_lim: None,
+            autoscale_y_on_updates: false,
+            follow_right_edge: false,
+            follow_reset_counter: 0,
             x_axis_scale: AxisScale::Linear,
             y_axis_scale: AxisScale::Linear,
             x_axis_link: None,
@@ -279,6 +289,26 @@ impl PlotWidget {
     /// If set, these will override autoscaling for the y-axis.
     pub fn set_y_lim(&mut self, min: f64, max: f64) {
         self.y_lim = Some((min, max));
+    }
+
+    /// Clear the x-axis limits, allowing autoscaling to use data bounds.
+    pub fn clear_x_lim(&mut self) {
+        self.x_lim = None;
+    }
+
+    /// Follow mode: only scale Y-axis on each data update.
+    /// X camera is preserved under user pan/zoom state.
+    pub fn set_autoscale_y_on_updates(&mut self, enabled: bool) {
+        self.autoscale_y_on_updates = enabled;
+    }
+
+    /// Follow mode: lock camera X to data right edge (data_max.x) on each update.
+    /// User's zoom level (half_extents.x) is preserved — only position changes.
+    pub fn set_follow_right_edge(&mut self, enabled: bool) {
+        if enabled {
+            self.follow_reset_counter = self.follow_reset_counter.wrapping_add(1);
+        }
+        self.follow_right_edge = enabled;
     }
 
     /// Set the y-axis scale mode.
@@ -1301,6 +1331,30 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
             if self.autoscale_on_updates || limits_changed || first_time_widget_view {
                 // Initial autoscale shouldn't update axis links.
                 state.autoscale(!first_time_widget_view);
+            } else if self.autoscale_y_on_updates {
+                // Takip modu: sadece Y güncellenir, X kamerası kullanıcıda kalır.
+                state.autoscale_y_only();
+            }
+
+            // Takip modu: kamera X ve Y'yi veri delta'sı kadar kaydır; zoom ve kullanıcı konumu korunur.
+            if self.follow_right_edge && !self.autoscale_on_updates {
+                if state.follow_reset_seen != self.follow_reset_counter {
+                    state.prev_data_max_x = None;
+                    state.prev_last_point_y = None;
+                    state.follow_reset_seen = self.follow_reset_counter;
+                }
+                if let Some(data_max) = state.data_max {
+                    if let Some(prev_x) = state.prev_data_max_x {
+                        state.camera.position.x += data_max.x - prev_x;
+                    }
+                    state.prev_data_max_x = Some(data_max.x);
+                }
+                if let Some(last_y) = state.last_point_y {
+                    if let Some(prev_y) = state.prev_last_point_y {
+                        state.camera.position.y += last_y - prev_y;
+                    }
+                    state.prev_last_point_y = Some(last_y);
+                }
             }
 
             state.data_src_version = self.data_version;

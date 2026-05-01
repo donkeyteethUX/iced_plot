@@ -75,6 +75,10 @@ pub struct PlotState {
     pub(crate) crosshairs_position: Vec2,
     pub(crate) x_axis_formatter: Option<TickFormatter>,
     pub(crate) y_axis_formatter: Option<TickFormatter>,
+    pub(crate) prev_data_max_x: Option<f64>,
+    pub(crate) follow_reset_seen: u64,
+    pub(crate) last_point_y: Option<f64>,
+    pub(crate) prev_last_point_y: Option<f64>,
 }
 
 impl Default for PlotState {
@@ -123,6 +127,10 @@ impl Default for PlotState {
             y_axis_formatter: None,
             x_ticks: Vec::new(),
             y_ticks: Vec::new(),
+            prev_data_max_x: None,
+            follow_reset_seen: 0,
+            last_point_y: None,
+            prev_last_point_y: None,
         }
     }
 }
@@ -153,6 +161,8 @@ impl PlotState {
         let mut series_spans = Vec::new();
         let mut data_min: Option<DVec2> = None;
         let mut data_max: Option<DVec2> = None;
+        let mut rightmost_x: f64 = f64::NEG_INFINITY;
+        let mut rightmost_y: Option<f64> = None;
 
         // Process each series
         for (id, series) in &widget.series {
@@ -178,6 +188,10 @@ impl PlotState {
                 let p = DVec2::new(transformed[0], transformed[1]);
                 data_min = Some(data_min.map_or(p, |m| m.min(p)));
                 data_max = Some(data_max.map_or(p, |m| m.max(p)));
+                if p.x >= rightmost_x {
+                    rightmost_x = p.x;
+                    rightmost_y = Some(p.y);
+                }
 
                 // Only create points if we have markers OR lines (lines need points for geometry)
                 if series.marker_style.is_some() || series.line_style.is_some() {
@@ -274,6 +288,7 @@ impl PlotState {
         self.hlines = hlines.into();
         self.data_min = data_min;
         self.data_max = data_max;
+        self.last_point_y = rightmost_y;
         self.legend_collapsed = widget.legend_collapsed;
         self.x_lim = widget.x_lim;
         self.y_lim = widget.y_lim;
@@ -332,6 +347,28 @@ impl PlotState {
         }
     }
 
+    /// Only scales the Y-axis according to data bounds; does not touch the X camera.
+    /// In follow mode: x is controlled by follow_x, y adapts to data.
+    pub(crate) fn autoscale_y_only(&mut self) {
+        let (Some(data_min), Some(data_max)) = (self.data_min, self.data_max) else {
+            return;
+        };
+        let y_min = if let Some((y_min, _)) = self.y_lim {
+            self.y_axis_scale.data_to_plot(y_min).unwrap_or(data_min.y)
+        } else {
+            data_min.y
+        };
+        let y_max = if let Some((_, y_max)) = self.y_lim {
+            self.y_axis_scale.data_to_plot(y_max).unwrap_or(data_max.y)
+        } else {
+            data_max.y
+        };
+        let range = (y_max - y_min).max(1e-6);
+        let padding = range * 0.05;
+        self.camera.half_extents.y = (range + padding) / 2.0;
+        self.camera.position.y = (y_min + y_max) / 2.0;
+    }
+
     pub(crate) fn update_ticks(
         &mut self,
         x_tick_producer: Option<&TickProducer>,
@@ -384,16 +421,33 @@ impl PlotState {
             None => Vec::new(),
         };
 
+        // Minimum pixel spacing between y-axis tick labels (prevents overlap on small plots)
+        const MIN_Y_TICK_SPACING_PX: f32 = 16.0;
+
         self.y_ticks.clear();
+        let mut raw_y_ticks: Vec<PositionedTick> = Vec::new();
         for tick in y_tick_values {
             let Some(tick_plot) = self.y_axis_scale.data_to_plot(tick.value) else {
                 continue;
             };
-            // Convert world position to screen position
             if let Some(screen_pos) =
                 world_to_screen_position_y(tick_plot, &self.camera, &self.bounds)
             {
-                self.y_ticks.push(PositionedTick { screen_pos, tick });
+                raw_y_ticks.push(PositionedTick { screen_pos, tick });
+            }
+        }
+        // Filter: keep only ticks that are at least MIN_Y_TICK_SPACING_PX apart.
+        // screen_pos is top-to-bottom (increasing = lower on screen), so we
+        // track the last kept tick and skip ticks that are too close to it.
+        let mut last_kept_pos: Option<f32> = None;
+        for tick in raw_y_ticks {
+            let keep = match last_kept_pos {
+                None => true,
+                Some(prev) => (tick.screen_pos - prev).abs() >= MIN_Y_TICK_SPACING_PX,
+            };
+            if keep {
+                last_kept_pos = Some(tick.screen_pos);
+                self.y_ticks.push(tick);
             }
         }
     }
@@ -627,14 +681,26 @@ impl PlotState {
                     // Apply zoom factor based on scroll direction
                     let zoom_factor = if y > 0.0 { 0.95 } else { 1.05 };
 
+                    // Determine zoom axes:
+                    //   Ctrl+Shift → Y-axis only
+                    //   Ctrl+Alt   → X-axis only
+                    //   Ctrl only  → both axes
+                    let zoom_x = !self.modifiers.shift();
+                    let zoom_y = !self.modifiers.alt();
+
                     // Convert cursor position to render coordinates before zoom (without offset)
                     let cursor_render_before = self.camera.screen_to_render(
                         DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
                         viewport,
                     );
 
-                    // Apply zoom by scaling half_extents
-                    self.camera.half_extents *= zoom_factor;
+                    // Apply zoom by scaling half_extents on selected axes
+                    if zoom_x {
+                        self.camera.half_extents.x *= zoom_factor;
+                    }
+                    if zoom_y {
+                        self.camera.half_extents.y *= zoom_factor;
+                    }
 
                     // Convert cursor position to render coordinates after zoom
                     let cursor_render_after = self.camera.screen_to_render(
@@ -642,10 +708,15 @@ impl PlotState {
                         viewport,
                     );
 
-                    // Adjust camera position (in render space) to keep cursor at same position
+                    // Adjust camera position to keep cursor at the same data point.
+                    // Only adjust the axes that were zoomed.
                     let render_delta = cursor_render_before - cursor_render_after;
-                    // Convert render delta back to world space and adjust camera position
-                    self.camera.position += render_delta;
+                    if zoom_x {
+                        self.camera.position.x += render_delta.x;
+                    }
+                    if zoom_y {
+                        self.camera.position.y += render_delta.y;
+                    }
 
                     self.update_axis_links();
                     needs_redraw = true;
