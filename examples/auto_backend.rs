@@ -42,7 +42,11 @@ impl App {
                 x_offset: 0.0,
                 y_offset: 0.0,
             },
-            PlotRenderStrategy::auto().map(Message::RenderStrategyDetected),
+            iced::system::information().map(|information| {
+                Message::RenderStrategyDetected(PlotRenderStrategy::from_graphics_backend(
+                    &information.graphics_backend,
+                ))
+            }),
         )
     }
 
@@ -90,13 +94,12 @@ impl App {
     fn controls_overlay(&self) -> Element<'_, Message> {
         let panel = column![
             text(format!("Render Strategy: {:?}", self.render_strategy)).size(16),
-            text(
-                if matches!(self.render_strategy, PlotRenderStrategy::Canvas){
-                    "iced_tiny_skia::Renderer has bug with canvas's offset, which is fixed by iced v0.15"
-                }else{
-                    "Run with CPU backend:\nICED_BACKEND=\"tiny-skia\" cargo run --example auto_backend"
-                }
-            ).style(text::secondary),
+            text(if matches!(self.render_strategy, PlotRenderStrategy::Canvas) {
+                "iced_tiny_skia::Renderer has bug with canvas's offset, which is fixed by iced v0.15.0-dev"
+            } else {
+                "Run with CPU backend:\nICED_BACKEND=\"tiny-skia\" cargo run --features canvas --example auto_backend"
+            })
+            .style(text::secondary),
             offset_slider("x offset", self.x_offset, Message::XOffsetChanged),
             offset_slider("y offset", self.y_offset, Message::YOffsetChanged),
         ]
@@ -130,7 +133,7 @@ fn offset_slider(
 ) -> Element<'static, Message> {
     row![
         text(format!("{label}: {value:.0}px"))
-            .width(Length::Fixed(130.0))
+            .width(Length::Fixed(150.0))
             .wrapping(text::Wrapping::None),
         slider(OFFSET_RANGE, value, on_change)
             .step(OFFSET_STEP)

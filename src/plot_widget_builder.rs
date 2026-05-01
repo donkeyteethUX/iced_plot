@@ -7,9 +7,8 @@ use crate::axis_scale::AxisScale;
 use crate::controls::PlotControls;
 use crate::fill::Fill;
 use crate::message::TooltipContext;
-use crate::plot_widget::{
-    CursorProvider, HighlightPoint, HighlightPointProvider, PlotRenderStrategy, PlotWidget,
-};
+use crate::plot_renderer::PlotRenderStrategy;
+use crate::plot_widget::{CursorProvider, HighlightPoint, HighlightPointProvider, PlotWidget};
 use crate::reference_lines::{HLine, VLine};
 use crate::series::{Series, SeriesError};
 use crate::style::{PlotStyle, StyleFn};

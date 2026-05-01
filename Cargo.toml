@@ -13,12 +13,21 @@ keywords    = ["iced", "plot", "widget", "wgpu", "plotting"]
 [dependencies]
 bytemuck = { version = "1.25", features = ["derive"] }
 glam     = "0.25"
-iced     = { version = "0.14", features = ["canvas", "sysinfo"] }
+iced     = "0.14"
 indexmap = "2.13"
+
+[features]
+default = []
+canvas  = ["iced/canvas"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
+iced       = { version = "0.14", features = ["canvas", "sysinfo"] }
 rand       = "0.10"
 rand_distr = "0.6"
+
+[[example]]
+name              = "auto_backend"
+required-features = ["canvas"]

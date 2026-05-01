@@ -1,31 +1,59 @@
-mod canvas;
+#[cfg(feature = "canvas")]
+pub mod canvas;
 mod shader;
-pub(crate) use canvas::draw as canvas_draw;
 pub(crate) use shader::{PlotRenderer, RenderParams};
 
 use crate::{
     axis_scale::data_point_to_plot, plot_state::PlotState, plot_widget::HighlightPoint,
-    point::MarkerType, series::Size,
+    series::Size,
 };
 use iced::Color;
+
+/// Ways in which the widget can be rendered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlotRenderStrategy {
+    /// Use the `wgpu` shader path.
+    #[default]
+    Shader,
+    /// Use the `canvas` path for CPU renderers such as `tiny-skia`.
+    #[cfg(feature = "canvas")]
+    Canvas,
+}
+
+impl PlotRenderStrategy {
+    /// From [`iced::system::Information`]'s `graphics_backend`.
+    pub fn from_graphics_backend(graphics_backend: &str) -> Self {
+        #[cfg(feature = "canvas")]
+        {
+            match graphics_backend.trim() {
+                "tiny-skia" => Self::Canvas,
+                _ => Self::Shader,
+            }
+        }
+        #[cfg(not(feature = "canvas"))]
+        {
+            _ = graphics_backend;
+            Self::Shader
+        }
+    }
+    pub(crate) fn force_cpu_picking(self) -> bool {
+        #[cfg(feature = "canvas")]
+        {
+            matches!(self, Self::Canvas)
+        }
+        #[cfg(not(feature = "canvas"))]
+        {
+            let _ = self;
+            false
+        }
+    }
+}
 
 const SELECTION_FILL_RGBA: [f32; 4] = [0.2, 0.6, 1.0, 0.2];
 const CROSSHAIR_RGBA: [f32; 4] = [0.5, 0.5, 0.5, 0.5];
 
 fn color_to_rgba(color: Color) -> [f32; 4] {
     [color.r, color.g, color.b, color.a]
-}
-
-fn rgba_to_color(rgba: [f32; 4]) -> Color {
-    Color::from_rgba(rgba[0], rgba[1], rgba[2], rgba[3])
-}
-
-fn selection_fill_color() -> Color {
-    rgba_to_color(SELECTION_FILL_RGBA)
-}
-
-fn crosshair_color() -> Color {
-    rgba_to_color(CROSSHAIR_RGBA)
 }
 
 fn highlight_mask_color(color: Color) -> Color {
@@ -38,17 +66,6 @@ fn highlight_mask_color(color: Color) -> Color {
 
 fn highlight_mask_rgba(color: Color) -> [f32; 4] {
     color_to_rgba(highlight_mask_color(color))
-}
-
-fn marker_type_from_u32(marker: u32) -> MarkerType {
-    match marker {
-        0 => MarkerType::FilledCircle,
-        1 => MarkerType::EmptyCircle,
-        2 => MarkerType::Square,
-        3 => MarkerType::Star,
-        4 => MarkerType::Triangle,
-        _ => MarkerType::FilledCircle,
-    }
 }
 
 fn highlight_marker_plot_position(

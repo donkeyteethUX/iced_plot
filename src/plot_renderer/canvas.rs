@@ -1,6 +1,6 @@
 use super::{
-    crosshair_color, highlight_marker_plot_position, highlight_mask_color,
-    highlight_mask_plot_position, marker_type_from_u32, selection_fill_color,
+    CROSSHAIR_RGBA, SELECTION_FILL_RGBA, highlight_marker_plot_position, highlight_mask_color,
+    highlight_mask_plot_position,
 };
 use crate::{
     LineType, Size,
@@ -12,36 +12,68 @@ use crate::{
 };
 use iced::{
     Color, Rectangle,
-    widget::canvas::{self, Frame as CanvasFrame, Geometry as CanvasGeometry},
+    widget::canvas::{self, Frame, Geometry},
 };
+
+fn rgba_to_color(rgba: [f32; 4]) -> Color {
+    Color::from_rgba(rgba[0], rgba[1], rgba[2], rgba[3])
+}
+
+fn selection_fill_color() -> Color {
+    rgba_to_color(SELECTION_FILL_RGBA)
+}
+
+fn crosshair_color() -> Color {
+    rgba_to_color(CROSSHAIR_RGBA)
+}
+
+fn marker_type_from_u32(marker: u32) -> MarkerType {
+    match marker {
+        0 => MarkerType::FilledCircle,
+        1 => MarkerType::EmptyCircle,
+        2 => MarkerType::Square,
+        3 => MarkerType::Star,
+        4 => MarkerType::Triangle,
+        _ => MarkerType::FilledCircle,
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct CanvasCaches {
+    pub(crate) static_layer: canvas::Cache,
+    pub(crate) overlay_layer: canvas::Cache,
+}
 
 pub(crate) fn draw(
     renderer: &iced::Renderer,
-    static_layer: &canvas::Cache,
-    overlay_layer: &canvas::Cache,
+    caches: &CanvasCaches,
     state: &PlotState,
     bounds: Rectangle,
-) -> Vec<CanvasGeometry> {
+) -> Vec<Geometry> {
     let frame_bounds = Rectangle::with_size(bounds.size());
 
-    let static_layer = static_layer.draw_with_bounds(renderer, frame_bounds, |frame| {
-        draw_grid(frame, state, bounds);
-        draw_fills(frame, state, bounds);
-        draw_lines(frame, state, bounds);
-        draw_reference_lines(frame, state, bounds);
-        draw_markers(frame, state, bounds);
-    });
+    let static_layer = caches
+        .static_layer
+        .draw_with_bounds(renderer, frame_bounds, |frame| {
+            draw_grid(frame, state, bounds);
+            draw_fills(frame, state, bounds);
+            draw_lines(frame, state, bounds);
+            draw_reference_lines(frame, state, bounds);
+            draw_markers(frame, state, bounds);
+        });
 
-    let overlay_layer = overlay_layer.draw_with_bounds(renderer, frame_bounds, |frame| {
-        draw_highlights(frame, state, bounds);
-        draw_selection(frame, state);
-        draw_crosshairs(frame, state);
-    });
+    let overlay_layer = caches
+        .overlay_layer
+        .draw_with_bounds(renderer, frame_bounds, |frame| {
+            draw_highlights(frame, state, bounds);
+            draw_selection(frame, state);
+            draw_crosshairs(frame, state);
+        });
 
     vec![static_layer, overlay_layer]
 }
 
-fn draw_grid(frame: &mut CanvasFrame, state: &PlotState, bounds: Rectangle) {
+fn draw_grid(frame: &mut Frame, state: &PlotState, bounds: Rectangle) {
     for tick in &state.x_ticks {
         let color = match tick.tick.line_type {
             TickWeight::Major => state.grid_style.major,
@@ -69,7 +101,7 @@ fn draw_grid(frame: &mut CanvasFrame, state: &PlotState, bounds: Rectangle) {
     }
 }
 
-fn draw_fills(frame: &mut CanvasFrame, state: &PlotState, bounds: Rectangle) {
+fn draw_fills(frame: &mut Frame, state: &PlotState, bounds: Rectangle) {
     for fill in state.fills.iter() {
         for triangle in fill.vertices.chunks_exact(3) {
             let points = [
@@ -88,7 +120,7 @@ fn draw_fills(frame: &mut CanvasFrame, state: &PlotState, bounds: Rectangle) {
     }
 }
 
-fn draw_lines(frame: &mut CanvasFrame, state: &PlotState, bounds: Rectangle) {
+fn draw_lines(frame: &mut Frame, state: &PlotState, bounds: Rectangle) {
     for series in state.series.iter() {
         let Some(line_style) = series.line_style else {
             continue;
@@ -143,7 +175,7 @@ fn draw_lines(frame: &mut CanvasFrame, state: &PlotState, bounds: Rectangle) {
     }
 }
 
-fn draw_reference_lines(frame: &mut CanvasFrame, state: &PlotState, bounds: Rectangle) {
+fn draw_reference_lines(frame: &mut Frame, state: &PlotState, bounds: Rectangle) {
     for vline in state.vlines.iter() {
         let Some(x) = world_to_screen_position_x(
             state.x_axis_scale.data_to_plot(vline.x).unwrap_or_default(),
@@ -191,7 +223,7 @@ fn draw_reference_lines(frame: &mut CanvasFrame, state: &PlotState, bounds: Rect
     }
 }
 
-fn draw_markers(frame: &mut CanvasFrame, state: &PlotState, bounds: Rectangle) {
+fn draw_markers(frame: &mut Frame, state: &PlotState, bounds: Rectangle) {
     for series in state.series.iter() {
         if series.marker == u32::MAX {
             continue;
@@ -217,7 +249,7 @@ fn draw_markers(frame: &mut CanvasFrame, state: &PlotState, bounds: Rectangle) {
     }
 }
 
-fn draw_highlights(frame: &mut CanvasFrame, state: &PlotState, bounds: Rectangle) {
+fn draw_highlights(frame: &mut Frame, state: &PlotState, bounds: Rectangle) {
     for highlight in state.highlighted_points.iter() {
         if let Some(marker_style) = highlight.marker_style
             && let Some(plot_pos) = highlight_marker_plot_position(highlight, state)
@@ -276,7 +308,7 @@ fn draw_highlights(frame: &mut CanvasFrame, state: &PlotState, bounds: Rectangle
     }
 }
 
-fn draw_selection(frame: &mut CanvasFrame, state: &PlotState) {
+fn draw_selection(frame: &mut Frame, state: &PlotState) {
     if !(state.selection.active || state.selection.moved) {
         return;
     }
@@ -289,7 +321,7 @@ fn draw_selection(frame: &mut CanvasFrame, state: &PlotState) {
     frame.fill(&rect, selection_fill_color());
 }
 
-fn draw_crosshairs(frame: &mut CanvasFrame, state: &PlotState) {
+fn draw_crosshairs(frame: &mut Frame, state: &PlotState) {
     if !state.crosshairs_enabled {
         return;
     }
@@ -309,7 +341,7 @@ fn draw_crosshairs(frame: &mut CanvasFrame, state: &PlotState) {
 }
 
 fn draw_marker(
-    frame: &mut CanvasFrame,
+    frame: &mut Frame,
     world_position: [f64; 2],
     size: f32,
     size_mode: u32,
@@ -379,13 +411,7 @@ fn draw_marker(
     }
 }
 
-fn stroke_segment(
-    frame: &mut CanvasFrame,
-    p0: iced::Point,
-    p1: iced::Point,
-    width: f32,
-    color: Color,
-) {
+fn stroke_segment(frame: &mut Frame, p0: iced::Point, p1: iced::Point, width: f32, color: Color) {
     let path = canvas::Path::line(p0, p1);
     frame.stroke(
         &path,
@@ -396,7 +422,7 @@ fn stroke_segment(
 }
 
 fn draw_styled_line_segment(
-    frame: &mut CanvasFrame,
+    frame: &mut Frame,
     p0: iced::Point,
     p1: iced::Point,
     line_type: LineType,

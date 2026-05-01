@@ -15,9 +15,7 @@ use iced::{
     padding::{self, Padding},
     wgpu::TextureFormat,
     widget::{
-        self,
-        canvas::{self, Geometry as CanvasGeometry},
-        container,
+        self, container,
         shader::{self, Pipeline, Viewport},
         stack,
     },
@@ -35,7 +33,7 @@ use crate::{
     legend::{self, LegendEntry},
     message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
     picking,
-    plot_renderer::{self, PlotRenderer, RenderParams},
+    plot_renderer::{PlotRenderStrategy, PlotRenderer, RenderParams},
     plot_state::PlotState,
     series::{SeriesError, ShapeId},
     style::{PlotStyle, StyleFn},
@@ -52,48 +50,6 @@ pub(crate) type CursorProvider = Arc<dyn Fn(f64, f64) -> String + Send + Sync>;
 /// Returns the tooltip text to display for the point, if any.
 pub(crate) type HighlightPointProvider =
     Arc<dyn Fn(TooltipContext<'_>, &mut HighlightPoint) -> Option<String> + Send + Sync>;
-
-/// A resolved plot rendering path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PlotRenderStrategy {
-    /// Use the `wgpu` shader path.
-    #[default]
-    Shader,
-    /// Use the `canvas` path for CPU renderers such as `tiny-skia`.
-    Canvas,
-}
-
-impl PlotRenderStrategy {
-    /// Detect the active renderer backend once using `iced::system::information()`.
-    ///
-    /// This is intended to be called by the application and then shared across
-    /// multiple [`PlotWidget`] instances.
-    pub fn auto() -> iced::Task<Self> {
-        iced::system::information().map(|information| Self::from_system_information(&information))
-    }
-
-    /// Resolve a rendering strategy from iced system information.
-    pub fn from_system_information(information: &iced::system::Information) -> Self {
-        Self::from_graphics_backend(&information.graphics_backend)
-    }
-
-    /// Resolve a rendering strategy from iced's graphics backend string.
-    ///
-    /// `tiny-skia` uses the canvas path. Everything else is treated as a
-    /// `wgpu`-backed renderer and uses the shader path.
-    pub fn from_graphics_backend(graphics_backend: &str) -> Self {
-        match graphics_backend.trim() {
-            "tiny-skia" => Self::Canvas,
-            _ => Self::Shader,
-        }
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct PlotCanvasCaches {
-    pub(crate) static_layer: canvas::Cache,
-    pub(crate) overlay_layer: canvas::Cache,
-}
 
 /// A plot widget that renders data series with interactive features.
 pub struct PlotWidget {
@@ -126,7 +82,8 @@ pub struct PlotWidget {
     pub(crate) crosshairs_enabled: bool,
     pub(crate) render_strategy: PlotRenderStrategy,
     pub(crate) controls_overlay_open: bool,
-    pub(crate) canvas_caches: PlotCanvasCaches,
+    #[cfg(feature = "canvas")]
+    pub(crate) canvas_caches: crate::plot_renderer::canvas::CanvasCaches,
     pub(crate) x_axis_formatter: Option<TickFormatter>,
     pub(crate) y_axis_formatter: Option<TickFormatter>,
     pub(crate) x_tick_producer: Option<TickProducer>,
@@ -185,7 +142,8 @@ impl PlotWidget {
             crosshairs_enabled: false,
             render_strategy: PlotRenderStrategy::default(),
             controls_overlay_open: false,
-            canvas_caches: PlotCanvasCaches::default(),
+            #[cfg(feature = "canvas")]
+            canvas_caches: crate::plot_renderer::canvas::CanvasCaches::default(),
             x_axis_formatter: Some(Arc::new(ticks::default_formatter)),
             y_axis_formatter: Some(Arc::new(ticks::default_formatter)),
             x_tick_producer: Some(Arc::new(ticks::default_tick_producer)),
@@ -641,6 +599,7 @@ impl PlotWidget {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into(),
+            #[cfg(feature = "canvas")]
             PlotRenderStrategy::Canvas => widget::canvas(self)
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -723,8 +682,11 @@ impl PlotWidget {
     /// Set the rendering strategy used by the plot.
     pub fn set_render_strategy(&mut self, strategy: PlotRenderStrategy) {
         self.render_strategy = strategy;
-        self.canvas_caches.static_layer.clear();
-        self.canvas_caches.overlay_layer.clear();
+        #[cfg(feature = "canvas")]
+        {
+            self.canvas_caches.static_layer.clear();
+            self.canvas_caches.overlay_layer.clear();
+        }
     }
 
     /// Set full interaction controls behavior for the plot.
@@ -1195,7 +1157,7 @@ fn maybe_submit_hover_request(
         bounds,
         ..
     } = state;
-    let force_cpu_picking = matches!(widget.render_strategy, PlotRenderStrategy::Canvas);
+    let force_cpu_picking = widget.render_strategy.force_cpu_picking();
 
     match pick_state.request_hover(
         widget.instance_id,
@@ -1261,11 +1223,17 @@ fn update_cursor_overlay_on_move(
 }
 
 fn invalidate_static_canvas(widget: &PlotWidget) {
-    widget.canvas_caches.static_layer.clear();
+    #[cfg(feature = "canvas")]
+    {
+        widget.canvas_caches.static_layer.clear();
+    }
 }
 
 fn invalidate_overlay_canvas(widget: &PlotWidget) {
-    widget.canvas_caches.overlay_layer.clear();
+    #[cfg(feature = "canvas")]
+    {
+        widget.canvas_caches.overlay_layer.clear();
+    }
 }
 
 fn consume_gpu_pick_results(
@@ -1602,7 +1570,8 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
     }
 }
 
-impl canvas::Program<PlotUiMessage> for PlotWidget {
+#[cfg(feature = "canvas")]
+impl iced::widget::canvas::Program<PlotUiMessage> for PlotWidget {
     type State = PlotState;
 
     fn update(
@@ -1611,7 +1580,7 @@ impl canvas::Program<PlotUiMessage> for PlotWidget {
         event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> Option<canvas::Action<PlotUiMessage>> {
+    ) -> Option<iced::widget::canvas::Action<PlotUiMessage>> {
         update_plot_program::<true>(self, state, event, bounds, cursor)
     }
 
@@ -1622,14 +1591,8 @@ impl canvas::Program<PlotUiMessage> for PlotWidget {
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
-    ) -> Vec<CanvasGeometry> {
-        plot_renderer::canvas_draw(
-            renderer,
-            &self.canvas_caches.static_layer,
-            &self.canvas_caches.overlay_layer,
-            state,
-            bounds,
-        )
+    ) -> Vec<iced::widget::canvas::Geometry> {
+        crate::plot_renderer::canvas::draw(renderer, &self.canvas_caches, state, bounds)
     }
 
     fn mouse_interaction(
@@ -1718,7 +1681,7 @@ impl PlotWidget {
             bounds,
             ..
         } = state;
-        let force_cpu_picking = matches!(self.render_strategy, PlotRenderStrategy::Canvas);
+        let force_cpu_picking = self.render_strategy.force_cpu_picking();
 
         pick_state.request_pick_hit(
             self.instance_id,
@@ -1820,38 +1783,5 @@ pub(crate) fn world_to_screen_position_y(
         None
     } else {
         Some(screen_y)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::PlotRenderStrategy;
-
-    #[test]
-    fn backend_parser_uses_canvas_for_tiny_skia() {
-        assert_eq!(
-            PlotRenderStrategy::from_graphics_backend("tiny-skia"),
-            PlotRenderStrategy::Canvas
-        );
-    }
-
-    #[test]
-    fn backend_parser_uses_shader_for_non_tiny_skia_renderers() {
-        assert_eq!(
-            PlotRenderStrategy::from_graphics_backend("Vulkan"),
-            PlotRenderStrategy::Shader
-        );
-        assert_eq!(
-            PlotRenderStrategy::from_graphics_backend("Metal"),
-            PlotRenderStrategy::Shader
-        );
-        assert_eq!(
-            PlotRenderStrategy::from_graphics_backend("Dx12"),
-            PlotRenderStrategy::Shader
-        );
-        assert_eq!(
-            PlotRenderStrategy::from_graphics_backend(""),
-            PlotRenderStrategy::Shader
-        );
     }
 }
