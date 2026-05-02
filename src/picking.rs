@@ -209,6 +209,9 @@ fn cpu_pick_hit(
         if span_idx >= series.len() {
             break;
         }
+        if !series[span_idx].pickable {
+            continue;
+        }
 
         let world = marker_center_world(pt);
         let ndc_x = (world.x - camera.position.x) / camera.half_extents.x;
@@ -681,7 +684,8 @@ impl PickingPass {
                 entry_point: Some("vs_main"),
                 compilation_options: PipelineCompilationOptions::default(),
                 buffers: &[VertexBufferLayout {
-                    // Must match markers: 36 bytes per instance
+                    // Must match markers: 36 bytes per instance.
+                    // Location 4 packs size_mode in bit 0 and pickable in bit 1.
                     array_stride: 36,
                     step_mode: VertexStepMode::Instance,
                     attributes: &[
@@ -762,6 +766,9 @@ impl PickingPass {
         }
 
         let span: &SeriesSpan = &series[span_idx];
+        if !span.pickable {
+            return None;
+        }
         if local_idx >= span.point_indices.len() {
             return None;
         }
@@ -772,5 +779,73 @@ impl PickingPass {
             series_id: span.id,
             point_index,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use glam::{DVec2, Vec2};
+    use iced::Rectangle;
+
+    use super::cpu_pick_hit;
+    use crate::{
+        Color, LineStyle, Point, PointId, ShapeId, camera::Camera, plot_state::SeriesSpan,
+    };
+
+    #[test]
+    fn cpu_pick_skips_unpickable_series() {
+        let points = [Point::new(0.0, 0.0, 6.0), Point::new(0.1, 0.0, 6.0)];
+        let series = [
+            SeriesSpan {
+                id: ShapeId(1),
+                start: 0,
+                len: 1,
+                point_indices: Arc::from([0usize]),
+                line_style: Some(LineStyle::solid()),
+                color: Color::BLACK,
+                marker: 0,
+                pickable: false,
+            },
+            SeriesSpan {
+                id: ShapeId(2),
+                start: 1,
+                len: 1,
+                point_indices: Arc::from([0usize]),
+                line_style: Some(LineStyle::solid()),
+                color: Color::BLACK,
+                marker: 0,
+                pickable: true,
+            },
+        ];
+        let camera = Camera {
+            position: DVec2::ZERO,
+            half_extents: DVec2::ONE,
+            render_offset: DVec2::ZERO,
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+
+        let hit = cpu_pick_hit(
+            &points,
+            &series,
+            &camera,
+            &bounds,
+            Vec2::new(50.0, 50.0),
+            8.0,
+        );
+
+        assert_eq!(
+            hit,
+            Some(PointId {
+                series_id: ShapeId(2),
+                point_index: 0,
+            })
+        );
     }
 }

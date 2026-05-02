@@ -217,6 +217,7 @@ impl PlotState {
                 line_style: series.line_style,
                 color,
                 marker,
+                pickable: series.pickable,
             });
 
             // If this series has a world-space marker, the data_max should be adjusted to account for the marker size.
@@ -975,6 +976,7 @@ pub(crate) struct SeriesSpan {
     pub(crate) line_style: Option<LineStyle>,
     pub(crate) color: Color,
     pub(crate) marker: u32,
+    pub(crate) pickable: bool,
 }
 
 #[derive(Default, Debug, Clone)]

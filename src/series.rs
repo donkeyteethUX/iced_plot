@@ -304,6 +304,9 @@ pub struct Series {
 
     /// Line style for connecting markers. If None, no line is drawn.
     pub line_style: Option<LineStyle>,
+
+    /// Can be hovered or picked. Defaults to `true`.
+    pub pickable: bool,
 }
 
 impl Series {
@@ -317,6 +320,7 @@ impl Series {
             color: Color::from_rgb(0.3, 0.3, 0.9),
             marker_style: Some(marker_style),
             line_style: Some(line_style),
+            pickable: true,
         }
     }
 
@@ -330,6 +334,7 @@ impl Series {
             color: Color::from_rgb(0.3, 0.3, 0.9),
             marker_style: None,
             line_style: Some(line_style),
+            pickable: true,
         }
     }
 
@@ -343,6 +348,7 @@ impl Series {
             color: Color::from_rgb(0.3, 0.3, 0.9),
             marker_style: Some(marker_style),
             line_style: None,
+            pickable: true,
         }
     }
 
@@ -390,6 +396,12 @@ impl Series {
     /// Set per-point colors for the series. Length must match the number of positions.
     pub fn with_point_colors(mut self, colors: Vec<Color>) -> Self {
         self.point_colors = Some(colors);
+        self
+    }
+
+    /// Enable or disable interactive hover/pick behavior for this series.
+    pub fn with_pickable(mut self, pickable: bool) -> Self {
+        self.pickable = pickable;
         self
     }
 

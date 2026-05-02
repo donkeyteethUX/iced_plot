@@ -1655,7 +1655,7 @@ impl PlotWidget {
     fn valid_point_id(&self, point_id: &PointId) -> bool {
         self.series
             .get(&point_id.series_id)
-            .map(|series| point_id.point_index < series.positions.len())
+            .map(|series| series.pickable && point_id.point_index < series.positions.len())
             .unwrap_or(false)
     }
 }

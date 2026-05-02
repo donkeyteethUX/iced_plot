@@ -70,7 +70,8 @@ fn new() -> PlotWidget {
         })
         .collect();
     let s2 = Series::markers_only(positions, MarkerStyle::circle(6.0))
-        .with_label("cosine_markers_only")
+        .with_label("cosine_markers_only (not pickable)")
+        .with_pickable(false)
         .with_color(Color::from_rgb(0.9, 0.3, 0.3));
 
     let positions = (0..30)
