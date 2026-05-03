@@ -445,7 +445,7 @@ impl PlotRenderer {
                 compilation_options: PipelineCompilationOptions::default(),
                 buffers: &[VertexBufferLayout {
                     // Explicit 36-byte stride: vec2<f32> position (8) + vec4<f32> color (16)
-                    // + u32 marker (4) + f32 size (4) + u32 size_mode (4) = 36
+                    // + u32 marker (4) + f32 size (4) + u32 size_mode/pickable flags (4) = 36
                     array_stride: 36u64,
                     step_mode: VertexStepMode::Instance,
                     attributes: &[
@@ -839,7 +839,7 @@ impl PlotRenderer {
                 writer.write_color(color);
                 writer.write_u32(s.marker);
                 writer.write_f32(p.size);
-                writer.write_u32(p.size_mode);
+                writer.write_u32(crate::point::marker_flags(p.size_mode, s.pickable));
 
                 let original_idx = s.point_indices.get(local_i).copied().unwrap_or(local_i);
                 id_map.push((span_idx as u32, original_idx as u32));
@@ -1223,7 +1223,7 @@ impl PlotRenderer {
                 marker_writer.write_color(&highlight_point.color);
                 marker_writer.write_u32(marker_style.marker_type as u32);
                 marker_writer.write_f32(size);
-                marker_writer.write_u32(size_mode);
+                marker_writer.write_u32(crate::point::marker_flags(size_mode, true));
             }
         }
 
