@@ -2,7 +2,12 @@ use core::fmt;
 
 use iced::Rectangle;
 
-use crate::{Color, camera::Camera, point::MarkerType};
+use crate::{
+    Color,
+    camera::Camera,
+    point::MarkerType,
+    transform::{PositionTransform, Transform},
+};
 
 /// Line styling options for series connections.
 ///
@@ -288,6 +293,9 @@ pub struct Series {
     /// Series point positions.
     pub positions: Vec<[f64; 2]>,
 
+    /// How this series interprets or converts point positions before drawing.
+    pub transform: PositionTransform,
+
     /// Optional per-point colors. Must match the length of `positions` if set.
     pub point_colors: Option<Vec<Color>>,
 
@@ -315,6 +323,7 @@ impl Series {
         Self {
             id: ShapeId::new(),
             positions,
+            transform: PositionTransform::default(),
             point_colors: None,
             label: None,
             color: Color::from_rgb(0.3, 0.3, 0.9),
@@ -329,6 +338,7 @@ impl Series {
         Self {
             id: ShapeId::new(),
             positions,
+            transform: PositionTransform::default(),
             point_colors: None,
             label: None,
             color: Color::from_rgb(0.3, 0.3, 0.9),
@@ -343,6 +353,7 @@ impl Series {
         Self {
             id: ShapeId::new(),
             positions,
+            transform: PositionTransform::default(),
             point_colors: None,
             label: None,
             color: Color::from_rgb(0.3, 0.3, 0.9),
@@ -396,6 +407,54 @@ impl Series {
     /// Set per-point colors for the series. Length must match the number of positions.
     pub fn with_point_colors(mut self, colors: Vec<Color>) -> Self {
         self.point_colors = Some(colors);
+        self
+    }
+
+    /// Set how this series interprets or converts x/y values before drawing.
+    ///
+    /// For normal data values, conversion runs before the plot's axis scale.
+    /// `Transform::axes()` uses normalized plot positions instead.
+    pub fn with_transform(mut self, transform: PositionTransform) -> Self {
+        self.transform = transform;
+        self
+    }
+
+    /// Set how this series interprets or converts x values before drawing.
+    ///
+    /// For normal data values, conversion runs before the plot's x-axis scale.
+    /// `Transform::axes()` uses normalized plot positions instead.
+    pub fn with_transform_x(mut self, transform: Transform) -> Self {
+        self.transform.x = Some(transform);
+        self
+    }
+
+    /// Set how this series interprets or converts y values before drawing.
+    ///
+    /// For normal data values, conversion runs before the plot's y-axis scale.
+    /// `Transform::axes()` uses normalized plot positions instead.
+    pub fn with_transform_y(mut self, transform: Transform) -> Self {
+        self.transform.y = Some(transform);
+        self
+    }
+
+    /// Interpret all positions as normalized plot coordinates.
+    ///
+    /// `(0.0, 0.0)` is the lower-left of the plot area and `(1.0, 1.0)` is
+    /// the upper-right.
+    pub fn with_axes_transform(mut self) -> Self {
+        self.transform = PositionTransform::axes();
+        self
+    }
+
+    /// Set how this series interprets or converts x values before drawing.
+    pub fn with_x_transform(mut self, transform: Transform) -> Self {
+        self.transform.x = Some(transform);
+        self
+    }
+
+    /// Set how this series interprets or converts y values before drawing.
+    pub fn with_y_transform(mut self, transform: Transform) -> Self {
+        self.transform.y = Some(transform);
         self
     }
 
