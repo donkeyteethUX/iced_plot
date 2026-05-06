@@ -1,3 +1,4 @@
+use core::fmt;
 use std::{
     collections::{HashMap, HashSet},
     sync::{
@@ -24,9 +25,9 @@ use indexmap::IndexMap;
 
 use crate::{
     AxisScale, DragEvent, Fill, HLine, HoverPickEvent, MarkerStyle, PlotUiMessage, PointId, Series,
-    Size, TooltipContext, VLine, axes_labels,
+    Size, TooltipContext, Transform, VLine, axes_labels,
     axis_link::AxisLink,
-    axis_scale::{data_point_to_plot, plot_point_to_data},
+    axis_scale::plot_point_to_data,
     camera::Camera,
     controls::PlotControls,
     default_style,
@@ -38,6 +39,7 @@ use crate::{
     series::{SeriesError, ShapeId},
     style::{PlotStyle, StyleFn},
     ticks::{self, PositionedTick, TickFormatter, TickProducer},
+    transform::{PositionTransform, data_point_to_plot_with_transform},
 };
 
 const PLOT_CONTENT_PADDING: f32 = 2.0;
@@ -325,9 +327,16 @@ impl PlotWidget {
         camera_bounds: &(Camera, Rectangle),
         x_axis_scale: AxisScale,
         y_axis_scale: AxisScale,
+        transform: &PositionTransform,
     ) -> Option<[f32; 2]> {
-        let world = data_point_to_plot(world, x_axis_scale, y_axis_scale)?;
         let (camera, bounds) = camera_bounds;
+        let world = data_point_to_plot_with_transform(
+            world,
+            x_axis_scale,
+            y_axis_scale,
+            transform,
+            Some(camera.axis_ranges()),
+        )?;
         if let (Some(screen_x), Some(screen_y)) = (
             world_to_screen_position_x(world[0], camera, bounds),
             world_to_screen_position_y(world[1], camera, bounds),
@@ -369,6 +378,7 @@ impl PlotWidget {
                         camera_bounds,
                         self.x_axis_scale,
                         self.y_axis_scale,
+                        &highlight_point.transform,
                     );
                 }
             }
@@ -496,6 +506,7 @@ impl PlotWidget {
             let mut highlight_point = HighlightPoint {
                 x: position[0],
                 y: position[1],
+                transform: series.transform.clone(),
                 color: series
                     .point_colors
                     .as_ref()
@@ -518,6 +529,7 @@ impl PlotWidget {
                     camera_bounds,
                     self.x_axis_scale,
                     self.y_axis_scale,
+                    &series.transform,
                 ),
                 text,
             });
@@ -1054,6 +1066,35 @@ impl PlotWidget {
             || self.vlines.contains_key(&id)
             || self.hlines.contains_key(&id)
     }
+
+    fn shape_uses_axes_transform(&self, id: ShapeId) -> bool {
+        self.series
+            .get(&id)
+            .map(|series| &series.transform)
+            .is_some_and(PositionTransform::uses_axes_coordinates)
+            || self
+                .vlines
+                .get(&id)
+                .and_then(|vline| vline.transform.as_ref())
+                .is_some_and(|transform| transform.uses_axes_coordinates())
+            || self
+                .hlines
+                .get(&id)
+                .and_then(|hline| hline.transform.as_ref())
+                .is_some_and(|transform| transform.uses_axes_coordinates())
+    }
+
+    fn has_visible_dynamic_geometry_transforms(&self) -> bool {
+        self.series.iter().any(|(id, series)| {
+            !self.hidden_shapes.contains(id) && series.transform.uses_axes_coordinates()
+        }) || self.fills.iter().any(|(id, fill)| {
+            !self.hidden_shapes.contains(id)
+                && !self.hidden_shapes.contains(&fill.begin)
+                && !self.hidden_shapes.contains(&fill.end)
+                && (self.shape_uses_axes_transform(fill.begin)
+                    || self.shape_uses_axes_transform(fill.end))
+        })
+    }
 }
 
 #[doc(hidden)]
@@ -1451,6 +1492,14 @@ fn update_plot_program<const IS_CANVAS: bool>(
         invalidation.all();
     }
 
+    if (state.camera != prev_camera || state.bounds != prev_bounds)
+        && widget.has_visible_dynamic_geometry_transforms()
+    {
+        state.rebuild_from_widget(widget);
+        effects.needs_redraw = true;
+        invalidation.all();
+    }
+
     // Hover/pick highlight mask boxes are baked in clip space. Rebuild them through the
     // existing highlight_version path whenever camera or viewport bounds change.
     if !state.highlighted_points.is_empty()
@@ -1722,21 +1771,40 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 ///
 /// + `x` and `y` to change the position of the highlight point (not recommended);
 /// + `color` to change the color of the highlight point;
+/// + `transform` to change how the highlight x/y values are interpreted before drawing;
 /// + `marker_style` to change the marker style of the highlight point;
 /// + `mask_padding` to change the mask padding of the highlight point;
 ///
 ///  to change the highlight point.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HighlightPoint {
-    /// Data-space coordinates
+    /// Raw x value for the highlight point.
     pub x: f64,
-    /// Data-space coordinates
+    /// Raw y value for the highlight point.
     pub y: f64,
+    /// How to interpret or convert the x/y values before drawing.
+    pub transform: PositionTransform,
     pub color: Color,
     /// Optional marker style for the series. If None, no markers are drawn.
     pub marker_style: Option<MarkerStyle>,
     /// Mask padding in pixels. If None, no mask is drawn.
     pub mask_padding: Option<f32>,
+}
+
+pub struct PositionDisplay<'a> {
+    pos: f64,
+    transform: &'a Option<Transform>,
+}
+impl fmt::Display for PositionDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(transform) = self.transform
+            && transform.uses_axes_coordinates()
+        {
+            write!(f, "{:.1}%", self.pos * 100.0)
+        } else {
+            write!(f, "{:.2}", self.pos)
+        }
+    }
 }
 
 impl HighlightPoint {
@@ -1752,6 +1820,18 @@ impl HighlightPoint {
                     *size *= factor;
                 }
             }
+        }
+    }
+    pub fn display_x(&self) -> PositionDisplay<'_> {
+        PositionDisplay {
+            pos: self.x,
+            transform: &self.transform.x,
+        }
+    }
+    pub fn display_y(&self) -> PositionDisplay<'_> {
+        PositionDisplay {
+            pos: self.y,
+            transform: &self.transform.y,
         }
     }
 }

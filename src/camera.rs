@@ -106,6 +106,24 @@ impl Camera {
         self.position - self.render_offset
     }
 
+    pub(crate) fn x_range(&self) -> [f64; 2] {
+        [
+            self.position.x - self.half_extents.x,
+            self.position.x + self.half_extents.x,
+        ]
+    }
+
+    pub(crate) fn y_range(&self) -> [f64; 2] {
+        [
+            self.position.y - self.half_extents.y,
+            self.position.y + self.half_extents.y,
+        ]
+    }
+
+    pub(crate) fn axis_ranges(&self) -> ([f64; 2], [f64; 2]) {
+        (self.x_range(), self.y_range())
+    }
+
     /// Convert screen coordinates to render coordinates (without offset)
     pub fn screen_to_render(&self, screen_pos: DVec2, screen_size: DVec2) -> DVec2 {
         let ndc_x = (screen_pos.x / screen_size.x) * 2.0 - 1.0;

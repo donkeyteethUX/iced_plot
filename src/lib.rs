@@ -41,6 +41,7 @@ pub(crate) mod reference_lines;
 pub(crate) mod series;
 pub(crate) mod style;
 pub(crate) mod ticks;
+pub(crate) mod transform;
 
 // Iced re-exports.
 pub use iced::Color;
@@ -63,3 +64,4 @@ pub use ticks::{
     Tick, TickFormatter, TickProducer, default_formatter, default_tick_producer, log_formatter,
     log_tick_producer,
 };
+pub use transform::{CoordinateSystem, PositionTransform, Transform};

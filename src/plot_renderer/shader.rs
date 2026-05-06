@@ -5,6 +5,7 @@ use super::{
 };
 use crate::LineStyle;
 use crate::picking::PickingPass;
+use crate::transform::data_value_to_plot_with_axis_range;
 use crate::{LineType, Size, camera::CameraUniform, grid::Grid, plot_state::PlotState};
 use iced::widget::shader::Viewport;
 use iced::{Rectangle, wgpu::*};
@@ -1035,7 +1036,12 @@ impl PlotRenderer {
 
         // Add vertical lines
         for vline in state.vlines.iter() {
-            let Some(vx_plot) = state.x_axis_scale.data_to_plot(vline.x) else {
+            let Some(vx_plot) = data_value_to_plot_with_axis_range(
+                vline.x,
+                state.x_axis_scale,
+                vline.transform.as_ref(),
+                Some(state.camera.x_range()),
+            ) else {
                 continue;
             };
             // Check if the stroked vline still overlaps the viewport.
@@ -1071,7 +1077,12 @@ impl PlotRenderer {
 
         // Add horizontal lines
         for hline in state.hlines.iter() {
-            let Some(hy_plot) = state.y_axis_scale.data_to_plot(hline.y) else {
+            let Some(hy_plot) = data_value_to_plot_with_axis_range(
+                hline.y,
+                state.y_axis_scale,
+                hline.transform.as_ref(),
+                Some(state.camera.y_range()),
+            ) else {
                 continue;
             };
             // Check if the stroked hline still overlaps the viewport.
