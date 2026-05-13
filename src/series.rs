@@ -446,18 +446,6 @@ impl Series {
         self
     }
 
-    /// Set how this series interprets or converts x values before drawing.
-    pub fn with_x_transform(mut self, transform: Transform) -> Self {
-        self.transform.x = Some(transform);
-        self
-    }
-
-    /// Set how this series interprets or converts y values before drawing.
-    pub fn with_y_transform(mut self, transform: Transform) -> Self {
-        self.transform.y = Some(transform);
-        self
-    }
-
     /// Enable or disable interactive hover/pick behavior for this series.
     pub fn with_pickable(mut self, pickable: bool) -> Self {
         self.pickable = pickable;

@@ -529,7 +529,7 @@ impl PlotWidget {
                     camera_bounds,
                     self.x_axis_scale,
                     self.y_axis_scale,
-                    &series.transform,
+                    &highlight_point.transform,
                 ),
                 text,
             });
