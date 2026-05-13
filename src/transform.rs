@@ -18,19 +18,21 @@ pub enum CoordinateSystem {
     Axes,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 enum TransformOperation {
+    #[default]
     Identity,
-    Affine { scale: f64, translate: f64 },
-    Log { base: f64 },
-    Exp { base: f64 },
+    Affine {
+        scale: f64,
+        translate: f64,
+    },
+    Log {
+        base: f64,
+    },
+    Exp {
+        base: f64,
+    },
     Then(Box<TransformOperation>, Box<TransformOperation>),
-}
-
-impl Default for TransformOperation {
-    fn default() -> Self {
-        Self::Identity
-    }
 }
 
 impl TransformOperation {
