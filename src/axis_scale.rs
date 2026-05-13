@@ -17,38 +17,13 @@ pub enum AxisScale {
 impl AxisScale {
     /// Transform raw data value into plot-space value.
     pub(crate) fn data_to_plot(self, value: f64) -> Option<f64> {
-        match self {
-            Self::Linear => value.is_finite().then_some(value),
-            Self::Log { base } => (value.is_finite() && value > 0.0)
-                .then(|| value.log(base))
-                .filter(|v| v.is_finite()),
-        }
+        crate::transform::data_value_to_plot(value, self, None)
     }
 
     /// Transform plot-space value into raw data value.
     pub(crate) fn plot_to_data(self, value: f64) -> Option<f64> {
-        match self {
-            Self::Linear => value.is_finite().then_some(value),
-            Self::Log { base } => {
-                if !value.is_finite() {
-                    return None;
-                }
-                let out = base.powf(value);
-                (out.is_finite() && out > 0.0).then_some(out)
-            }
-        }
+        crate::transform::plot_value_to_data(value, self)
     }
-}
-
-pub(crate) fn data_point_to_plot(
-    point: [f64; 2],
-    x_scale: AxisScale,
-    y_scale: AxisScale,
-) -> Option<[f64; 2]> {
-    Some([
-        x_scale.data_to_plot(point[0])?,
-        y_scale.data_to_plot(point[1])?,
-    ])
 }
 
 pub(crate) fn plot_point_to_data(
@@ -56,8 +31,5 @@ pub(crate) fn plot_point_to_data(
     x_scale: AxisScale,
     y_scale: AxisScale,
 ) -> Option<[f64; 2]> {
-    Some([
-        x_scale.plot_to_data(point[0])?,
-        y_scale.plot_to_data(point[1])?,
-    ])
+    crate::transform::plot_point_to_data(point, x_scale, y_scale)
 }

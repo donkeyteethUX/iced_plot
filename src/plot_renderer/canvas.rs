@@ -9,6 +9,7 @@ use crate::{
     plot_state::PlotState,
     plot_widget::{world_to_screen_position_x, world_to_screen_position_y},
     point::{MARKER_SIZE_WORLD, MarkerType},
+    transform::{data_point_to_plot_with_transform, data_value_to_plot_with_axis_range},
 };
 use iced::{
     Color, Rectangle,
@@ -177,11 +178,15 @@ fn draw_lines(frame: &mut Frame, state: &PlotState, bounds: Rectangle) {
 
 fn draw_reference_lines(frame: &mut Frame, state: &PlotState, bounds: Rectangle) {
     for vline in state.vlines.iter() {
-        let Some(x) = world_to_screen_position_x(
-            state.x_axis_scale.data_to_plot(vline.x).unwrap_or_default(),
-            &state.camera,
-            &bounds,
+        let Some(vx_plot) = data_value_to_plot_with_axis_range(
+            vline.x,
+            state.x_axis_scale,
+            vline.transform.as_ref(),
+            Some(state.camera.x_range()),
         ) else {
+            continue;
+        };
+        let Some(x) = world_to_screen_position_x(vx_plot, &state.camera, &bounds) else {
             continue;
         };
         draw_styled_line_segment(
@@ -200,11 +205,15 @@ fn draw_reference_lines(frame: &mut Frame, state: &PlotState, bounds: Rectangle)
     }
 
     for hline in state.hlines.iter() {
-        let Some(y) = world_to_screen_position_y(
-            state.y_axis_scale.data_to_plot(hline.y).unwrap_or_default(),
-            &state.camera,
-            &bounds,
+        let Some(hy_plot) = data_value_to_plot_with_axis_range(
+            hline.y,
+            state.y_axis_scale,
+            hline.transform.as_ref(),
+            Some(state.camera.y_range()),
         ) else {
+            continue;
+        };
+        let Some(y) = world_to_screen_position_y(hy_plot, &state.camera, &bounds) else {
             continue;
         };
         draw_styled_line_segment(
@@ -280,10 +289,26 @@ fn draw_highlights(frame: &mut Frame, state: &PlotState, bounds: Rectangle) {
         if marker_style.marker_type == MarkerType::Square
             && let Size::World(size) = marker_style.size
         {
-            let top_left =
-                world_to_canvas_point([highlight.x, highlight.y + size], &state.camera, &bounds);
-            let bottom_right =
-                world_to_canvas_point([highlight.x + size, highlight.y], &state.camera, &bounds);
+            let Some(top_left_plot) = data_point_to_plot_with_transform(
+                [highlight.x, highlight.y + size],
+                state.x_axis_scale,
+                state.y_axis_scale,
+                &highlight.transform,
+                Some(state.camera.axis_ranges()),
+            ) else {
+                continue;
+            };
+            let Some(bottom_right_plot) = data_point_to_plot_with_transform(
+                [highlight.x + size, highlight.y],
+                state.x_axis_scale,
+                state.y_axis_scale,
+                &highlight.transform,
+                Some(state.camera.axis_ranges()),
+            ) else {
+                continue;
+            };
+            let top_left = world_to_canvas_point(top_left_plot, &state.camera, &bounds);
+            let bottom_right = world_to_canvas_point(bottom_right_plot, &state.camera, &bounds);
             frame.fill_rectangle(
                 iced::Point::new(
                     top_left.x.min(bottom_right.x),

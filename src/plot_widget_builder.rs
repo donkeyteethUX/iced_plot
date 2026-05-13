@@ -346,11 +346,17 @@ impl PlotWidgetBuilder {
         point: &mut HighlightPoint,
     ) -> Option<String> {
         if ctx.series_label.is_empty() {
-            Some(format!("x: {:.2}, y: {:.2}", point.x, point.y))
+            Some(format!(
+                "x: {}, y: {}",
+                point.display_x(),
+                point.display_y()
+            ))
         } else {
             Some(format!(
-                "{}\nx: {:.2}, y: {:.2}",
-                ctx.series_label, point.x, point.y
+                "{}\nx: {}, y: {}",
+                ctx.series_label,
+                point.display_x(),
+                point.display_y()
             ))
         }
     }

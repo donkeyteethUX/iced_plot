@@ -10,12 +10,13 @@ use iced::{
 use crate::{
     AxisLink, AxisScale, DragEvent, HLine, HoverPickEvent, LineStyle, PlotWidget, Point, ShapeId,
     Size, VLine,
-    axis_scale::{data_point_to_plot, plot_point_to_data},
+    axis_scale::plot_point_to_data,
     camera::Camera,
     picking::PickingState,
     plot_widget::{HighlightPoint, world_to_screen_position_x, world_to_screen_position_y},
     style::GridStyle,
     ticks::{PositionedTick, TickFormatter, TickProducer},
+    transform::{data_point_to_plot_with_transform, data_value_to_plot_with_axis_range},
 };
 
 #[derive(Clone)]
@@ -134,7 +135,7 @@ impl PlotState {
     pub(crate) fn sync_highlighted_points_from_widget(&mut self, widget: &PlotWidget) -> bool {
         let highlighted_points: Vec<_> = widget
             .visible_highlighted_points()
-            .map(|(highlight_point, _)| *highlight_point)
+            .map(|(highlight_point, _)| highlight_point.clone())
             .collect();
 
         if self.highlighted_points.as_ref() != highlighted_points.as_slice() {
@@ -151,8 +152,11 @@ impl PlotState {
         let mut points = Vec::new();
         let mut point_colors = Vec::new();
         let mut series_spans = Vec::new();
-        let mut data_min: Option<DVec2> = None;
-        let mut data_max: Option<DVec2> = None;
+        let mut data_min_x: Option<f64> = None;
+        let mut data_max_x: Option<f64> = None;
+        let mut data_min_y: Option<f64> = None;
+        let mut data_max_y: Option<f64> = None;
+        let axis_ranges = self.camera.axis_ranges();
 
         // Process each series
         for (id, series) in &widget.series {
@@ -167,17 +171,41 @@ impl PlotState {
 
             let start = points.len();
             let mut point_indices = Vec::new();
+            let x_uses_axes = series
+                .transform
+                .x
+                .as_ref()
+                .is_some_and(|transform| transform.uses_axes_coordinates());
+            let y_uses_axes = series
+                .transform
+                .y
+                .as_ref()
+                .is_some_and(|transform| transform.uses_axes_coordinates());
 
             // Add points and track bounds
             for (pos_index, &pos) in series.positions.iter().enumerate() {
-                let Some(transformed) =
-                    data_point_to_plot(pos, widget.x_axis_scale, widget.y_axis_scale)
-                else {
+                let Some(transformed) = data_point_to_plot_with_transform(
+                    pos,
+                    widget.x_axis_scale,
+                    widget.y_axis_scale,
+                    &series.transform,
+                    Some(axis_ranges),
+                ) else {
                     continue;
                 };
-                let p = DVec2::new(transformed[0], transformed[1]);
-                data_min = Some(data_min.map_or(p, |m| m.min(p)));
-                data_max = Some(data_max.map_or(p, |m| m.max(p)));
+
+                if !x_uses_axes {
+                    data_min_x =
+                        Some(data_min_x.map_or(transformed[0], |min| min.min(transformed[0])));
+                    data_max_x =
+                        Some(data_max_x.map_or(transformed[0], |max| max.max(transformed[0])));
+                }
+                if !y_uses_axes {
+                    data_min_y =
+                        Some(data_min_y.map_or(transformed[1], |min| min.min(transformed[1])));
+                    data_max_y =
+                        Some(data_max_y.map_or(transformed[1], |max| max.max(transformed[1])));
+                }
 
                 // Only create points if we have markers OR lines (lines need points for geometry)
                 if series.marker_style.is_some() || series.line_style.is_some() {
@@ -224,16 +252,26 @@ impl PlotState {
             if let Some(size) = series.marker_style.as_ref().and_then(|m| match m.size {
                 Size::World(size) => Some(size),
                 Size::Pixels(_) => None,
-            }) && let Some(data_max) = &mut data_max
-            {
-                if widget.x_axis_scale == AxisScale::Linear {
-                    data_max.x += size;
+            }) {
+                if !x_uses_axes
+                    && widget.x_axis_scale == AxisScale::Linear
+                    && let Some(max) = &mut data_max_x
+                {
+                    *max += size;
                 }
-                if widget.y_axis_scale == AxisScale::Linear {
-                    data_max.y += size;
+                if !y_uses_axes
+                    && widget.y_axis_scale == AxisScale::Linear
+                    && let Some(max) = &mut data_max_y
+                {
+                    *max += size;
                 }
             }
         }
+
+        let data_min = (data_min_x.is_some() || data_min_y.is_some())
+            .then(|| DVec2::new(data_min_x.unwrap_or(-1.0), data_min_y.unwrap_or(-1.0)));
+        let data_max = (data_max_x.is_some() || data_max_y.is_some())
+            .then(|| DVec2::new(data_max_x.unwrap_or(1.0), data_max_y.unwrap_or(1.0)));
 
         // Filter visible reference lines
         let vlines: Vec<_> = widget
@@ -262,8 +300,16 @@ impl PlotState {
                     && !widget.hidden_shapes.contains(&fill.end)
             })
             .filter_map(|(_, fill)| {
-                build_fill_span(widget, fill.begin, fill.end, fill.color, x_domain, y_domain)
-                    .filter(|span| !span.vertices.is_empty())
+                build_fill_span(
+                    widget,
+                    fill.begin,
+                    fill.end,
+                    fill.color,
+                    x_domain,
+                    y_domain,
+                    axis_ranges,
+                )
+                .filter(|span| !span.vertices.is_empty())
             })
             .collect();
 
@@ -702,8 +748,8 @@ pub(crate) struct FillSpan {
 
 enum FillEndpoint<'a> {
     Series(&'a crate::Series),
-    HLine(f64),
-    VLine(f64),
+    HLine(&'a HLine),
+    VLine(&'a VLine),
 }
 
 fn resolve_fill_endpoint<'a>(widget: &'a PlotWidget, id: ShapeId) -> Option<FillEndpoint<'a>> {
@@ -711,10 +757,10 @@ fn resolve_fill_endpoint<'a>(widget: &'a PlotWidget, id: ShapeId) -> Option<Fill
         return Some(FillEndpoint::Series(series));
     }
     if let Some(hline) = widget.hlines.get(&id) {
-        return Some(FillEndpoint::HLine(hline.y));
+        return Some(FillEndpoint::HLine(hline));
     }
     if let Some(vline) = widget.vlines.get(&id) {
-        return Some(FillEndpoint::VLine(vline.x));
+        return Some(FillEndpoint::VLine(vline));
     }
     None
 }
@@ -761,11 +807,20 @@ fn transformed_series_points(
     series: &crate::Series,
     x_axis_scale: AxisScale,
     y_axis_scale: AxisScale,
+    axis_ranges: ([f64; 2], [f64; 2]),
 ) -> Vec<[f64; 2]> {
     series
         .positions
         .iter()
-        .filter_map(|&p| data_point_to_plot(p, x_axis_scale, y_axis_scale))
+        .filter_map(|&p| {
+            data_point_to_plot_with_transform(
+                p,
+                x_axis_scale,
+                y_axis_scale,
+                &series.transform,
+                Some(axis_ranges),
+            )
+        })
         .collect()
 }
 
@@ -846,6 +901,7 @@ fn build_fill_span(
     color: Color,
     x_domain: Option<(f64, f64)>,
     y_domain: Option<(f64, f64)>,
+    axis_ranges: ([f64; 2], [f64; 2]),
 ) -> Option<FillSpan> {
     let begin_endpoint = resolve_fill_endpoint(widget, begin)?;
     let end_endpoint = resolve_fill_endpoint(widget, end)?;
@@ -858,11 +914,13 @@ fn build_fill_span(
                 sa,
                 widget.x_axis_scale,
                 widget.y_axis_scale,
+                axis_ranges,
             ));
             let b = monotonic_increasing_x(transformed_series_points(
                 sb,
                 widget.x_axis_scale,
                 widget.y_axis_scale,
+                axis_ranges,
             ));
             if a.len() < 2 || b.len() < 2 {
                 return None;
@@ -918,11 +976,20 @@ fn build_fill_span(
                 }
             }
         }
-        (FillEndpoint::Series(series), FillEndpoint::HLine(y_data))
-        | (FillEndpoint::HLine(y_data), FillEndpoint::Series(series)) => {
-            let y_plot = widget.y_axis_scale.data_to_plot(y_data)?;
-            let points =
-                transformed_series_points(series, widget.x_axis_scale, widget.y_axis_scale);
+        (FillEndpoint::Series(series), FillEndpoint::HLine(hline))
+        | (FillEndpoint::HLine(hline), FillEndpoint::Series(series)) => {
+            let y_plot = data_value_to_plot_with_axis_range(
+                hline.y,
+                widget.y_axis_scale,
+                hline.transform.as_ref(),
+                Some(axis_ranges.1),
+            )?;
+            let points = transformed_series_points(
+                series,
+                widget.x_axis_scale,
+                widget.y_axis_scale,
+                axis_ranges,
+            );
             for segment in points.windows(2) {
                 let p0 = segment[0];
                 let p1 = segment[1];
@@ -931,11 +998,20 @@ fn build_fill_span(
                 push_quad_as_triangles(&mut vertices, p0, q0, p1, q1);
             }
         }
-        (FillEndpoint::Series(series), FillEndpoint::VLine(x_data))
-        | (FillEndpoint::VLine(x_data), FillEndpoint::Series(series)) => {
-            let x_plot = widget.x_axis_scale.data_to_plot(x_data)?;
-            let points =
-                transformed_series_points(series, widget.x_axis_scale, widget.y_axis_scale);
+        (FillEndpoint::Series(series), FillEndpoint::VLine(vline))
+        | (FillEndpoint::VLine(vline), FillEndpoint::Series(series)) => {
+            let x_plot = data_value_to_plot_with_axis_range(
+                vline.x,
+                widget.x_axis_scale,
+                vline.transform.as_ref(),
+                Some(axis_ranges.0),
+            )?;
+            let points = transformed_series_points(
+                series,
+                widget.x_axis_scale,
+                widget.y_axis_scale,
+                axis_ranges,
+            );
             for segment in points.windows(2) {
                 let p0 = segment[0];
                 let p1 = segment[1];
@@ -944,16 +1020,36 @@ fn build_fill_span(
                 push_quad_as_triangles(&mut vertices, p0, q0, p1, q1);
             }
         }
-        (FillEndpoint::HLine(y0_data), FillEndpoint::HLine(y1_data)) => {
+        (FillEndpoint::HLine(hline0), FillEndpoint::HLine(hline1)) => {
             let (x0, x1) = x_domain?;
-            let y0 = widget.y_axis_scale.data_to_plot(y0_data)?;
-            let y1 = widget.y_axis_scale.data_to_plot(y1_data)?;
+            let y0 = data_value_to_plot_with_axis_range(
+                hline0.y,
+                widget.y_axis_scale,
+                hline0.transform.as_ref(),
+                Some(axis_ranges.1),
+            )?;
+            let y1 = data_value_to_plot_with_axis_range(
+                hline1.y,
+                widget.y_axis_scale,
+                hline1.transform.as_ref(),
+                Some(axis_ranges.1),
+            )?;
             push_quad_as_triangles(&mut vertices, [x0, y0], [x0, y1], [x1, y0], [x1, y1]);
         }
-        (FillEndpoint::VLine(x0_data), FillEndpoint::VLine(x1_data)) => {
+        (FillEndpoint::VLine(vline0), FillEndpoint::VLine(vline1)) => {
             let (y0, y1) = y_domain?;
-            let x0 = widget.x_axis_scale.data_to_plot(x0_data)?;
-            let x1 = widget.x_axis_scale.data_to_plot(x1_data)?;
+            let x0 = data_value_to_plot_with_axis_range(
+                vline0.x,
+                widget.x_axis_scale,
+                vline0.transform.as_ref(),
+                Some(axis_ranges.0),
+            )?;
+            let x1 = data_value_to_plot_with_axis_range(
+                vline1.x,
+                widget.x_axis_scale,
+                vline1.transform.as_ref(),
+                Some(axis_ranges.0),
+            )?;
             push_quad_as_triangles(&mut vertices, [x0, y0], [x1, y0], [x0, y1], [x1, y1]);
         }
         _ => {
@@ -997,4 +1093,30 @@ pub(crate) struct PanState {
 #[derive(Default, Debug, Clone)]
 pub(crate) struct DragState {
     pub(crate) active: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::DVec2;
+
+    use super::*;
+    use crate::Series;
+
+    #[test]
+    fn axes_transform_series_maps_to_camera_range_and_skips_autoscale_bounds() {
+        let mut widget = PlotWidget::new();
+        widget
+            .add_series(Series::circles(vec![[0.4, 0.6]], 5.0).with_axes_transform())
+            .unwrap();
+
+        let mut state = PlotState::default();
+        state.camera.position = DVec2::new(10.0, 20.0);
+        state.camera.half_extents = DVec2::new(5.0, 10.0);
+
+        state.rebuild_from_widget(&widget);
+
+        assert_eq!(state.points[0].position, [9.0, 22.0]);
+        assert_eq!(state.data_min, None);
+        assert_eq!(state.data_max, None);
+    }
 }

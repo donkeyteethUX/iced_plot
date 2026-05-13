@@ -4,8 +4,8 @@ mod shader;
 pub(crate) use shader::{PlotRenderer, RenderParams};
 
 use crate::{
-    axis_scale::data_point_to_plot, plot_state::PlotState, plot_widget::HighlightPoint,
-    series::Size,
+    plot_state::PlotState, plot_widget::HighlightPoint, series::Size,
+    transform::data_point_to_plot_with_transform,
 };
 use iced::Color;
 
@@ -72,10 +72,12 @@ fn highlight_marker_plot_position(
     highlight: &HighlightPoint,
     state: &PlotState,
 ) -> Option<[f64; 2]> {
-    data_point_to_plot(
+    data_point_to_plot_with_transform(
         [highlight.x, highlight.y],
         state.x_axis_scale,
         state.y_axis_scale,
+        &highlight.transform,
+        Some(state.camera.axis_ranges()),
     )
 }
 
@@ -89,5 +91,11 @@ fn highlight_mask_plot_position(highlight: &HighlightPoint, state: &PlotState) -
         world[1] += half;
     }
 
-    data_point_to_plot(world, state.x_axis_scale, state.y_axis_scale)
+    data_point_to_plot_with_transform(
+        world,
+        state.x_axis_scale,
+        state.y_axis_scale,
+        &highlight.transform,
+        Some(state.camera.axis_ranges()),
+    )
 }
