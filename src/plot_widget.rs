@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{
         Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -33,7 +33,7 @@ use crate::{
     default_style,
     legend::{self, LegendEntry},
     message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
-    picking,
+    picking, plot_overlay,
     plot_renderer::{PlotRenderStrategy, PlotRenderer, RenderParams},
     plot_state::PlotState,
     series::{SeriesError, ShapeId},
@@ -103,6 +103,7 @@ pub struct PlotWidget {
     pub(crate) cursor_ui: Option<CursorPositionUiPayload>,
     pub(crate) x_ticks: Vec<PositionedTick>,
     pub(crate) y_ticks: Vec<PositionedTick>,
+    pub(crate) shape_overlays_enabled: AtomicBool,
     // Camera and bounds for coordinate conversion (updated when ticks are updated)
     pub(crate) camera_bounds: Option<(Camera, Rectangle)>,
 }
@@ -160,6 +161,7 @@ impl PlotWidget {
             picked_points: IndexMap::new(),
             hovered_points: IndexMap::new(),
             cursor_ui: None,
+            shape_overlays_enabled: AtomicBool::new(false),
             camera_bounds: None,
         }
     }
@@ -345,6 +347,29 @@ impl PlotWidget {
         } else {
             None
         }
+    }
+
+    fn world_to_screen_position_unclipped(
+        world: [f64; 2],
+        camera_bounds: &(Camera, Rectangle),
+        x_axis_scale: AxisScale,
+        y_axis_scale: AxisScale,
+        transform: &PositionTransform,
+    ) -> Option<[f32; 2]> {
+        let (camera, bounds) = camera_bounds;
+        let world = data_point_to_plot_with_transform(
+            world,
+            x_axis_scale,
+            y_axis_scale,
+            transform,
+            Some(camera.axis_ranges()),
+        )?;
+        let ndc_x = (world[0] - camera.position.x) / camera.half_extents.x;
+        let ndc_y = (world[1] - camera.position.y) / camera.half_extents.y;
+        let screen_x = (ndc_x as f32 + 1.0) * 0.5 * bounds.width;
+        let screen_y = (1.0 - ndc_y as f32) * 0.5 * bounds.height;
+
+        (screen_x.is_finite() && screen_y.is_finite()).then_some([screen_x, screen_y])
     }
 
     /// Compute the world-space anchor point for a tooltip.
@@ -605,42 +630,70 @@ impl PlotWidget {
 
     /// View the plot widget.
     pub fn view<'a>(&'a self) -> iced::Element<'a, PlotUiMessage> {
-        let style = self.cached_style();
-        let plot: Element<'a, PlotUiMessage> = match self.render_strategy {
-            PlotRenderStrategy::Shader => widget::shader(self)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            #[cfg(feature = "canvas")]
-            PlotRenderStrategy::Canvas => widget::canvas(self)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-        };
+        self.shape_overlays_enabled.store(false, Ordering::Relaxed);
+        self.view_with_shape_elements(std::iter::empty(), std::iter::empty(), |message| message)
+    }
 
-        let inner_container = container(plot)
-            .padding(PLOT_CONTENT_PADDING)
-            .style(|theme: &Theme| self.update_style(theme).plot_area);
+    /// View the plot widget with external Iced elements anchored to plot coordinates.
+    pub fn view_with_shapes<'a, Message>(
+        &'a self,
+        shapes_bottom: impl Iterator<Item = plot_overlay::PlotOverlay<'a, Message>> + 'a,
+        shapes_top: impl Iterator<Item = plot_overlay::PlotOverlay<'a, Message>> + 'a,
+        map_plot: impl Fn(PlotUiMessage) -> Message + Copy + 'a,
+    ) -> iced::Element<'a, Message>
+    where
+        Message: 'a,
+    {
+        self.shape_overlays_enabled.store(true, Ordering::Relaxed);
+
+        let shapes_bottom = shapes_bottom.filter_map(|shape| self.view_shape_overlay(shape));
+        let shapes_top = shapes_top.filter_map(|shape| self.view_shape_overlay(shape));
+        self.view_with_shape_elements(shapes_bottom, shapes_top, map_plot)
+    }
+
+    fn view_with_shape_elements<'a, Message, MapPlot>(
+        &'a self,
+        shapes_bottom: impl Iterator<Item = Element<'a, Message>>,
+        shapes_top: impl Iterator<Item = Element<'a, Message>>,
+        map_plot: MapPlot,
+    ) -> iced::Element<'a, Message>
+    where
+        Message: 'a,
+        MapPlot: Fn(PlotUiMessage) -> Message + Copy + 'a,
+    {
+        let style = self.cached_style();
+
+        let tooltip_overlays = self
+            .visible_highlighted_points()
+            .filter_map(|(_, tooltip)| self.view_tooltip_overlay(tooltip, &self.camera_bounds))
+            .map(|element| element.map(map_plot));
+        let shapes_top = shapes_top.chain(tooltip_overlays);
+
+        let inner_container = self.view_plot_area(shapes_bottom, shapes_top, map_plot);
 
         let legend = if self.legend_enabled {
             legend::legend(self, self.legend_collapsed)
         } else {
             None
         };
-        let elements = stack![
-            inner_container,
-            stack(
-                self.visible_highlighted_points()
-                    .filter_map(|(_, tooltip)| {
-                        tooltip.as_ref().and_then(|tooltip| {
-                            self.view_tooltip_overlay(tooltip, &self.camera_bounds)
-                        })
-                    })
-            ),
-            self.view_top_right_overlay(legend.is_some()),
-            self.view_tick_labels(),
-            legend,
-        ];
+        let has_legend = legend.is_some();
+
+        let mut layers = Vec::new();
+        layers.push(inner_container);
+        layers.push(self.view_top_right_overlay(has_legend).map(map_plot));
+
+        if let Some(tick_labels) = self.view_tick_labels() {
+            layers.push(tick_labels.map(map_plot));
+        }
+
+        if let Some(legend) = legend {
+            layers.push(legend.map(map_plot));
+        }
+
+        let elements: Element<'a, Message> = stack(layers)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
 
         container(axes_labels::stack_with_labels(
             elements,
@@ -652,6 +705,64 @@ impl PlotWidget {
         .padding(3.0)
         .style(|theme: &Theme| self.update_style(theme).frame)
         .into()
+    }
+
+    fn view_plot_area<'a, Message, MapPlot>(
+        &'a self,
+        shapes_bottom: impl Iterator<Item = Element<'a, Message>>,
+        shapes_top: impl Iterator<Item = Element<'a, Message>>,
+        map_plot: MapPlot,
+    ) -> Element<'a, Message>
+    where
+        Message: 'a,
+        MapPlot: Fn(PlotUiMessage) -> Message + Copy + 'a,
+    {
+        let plot: Element<'a, PlotUiMessage> = match self.render_strategy {
+            PlotRenderStrategy::Shader => widget::shader(self)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            #[cfg(feature = "canvas")]
+            PlotRenderStrategy::Canvas => widget::canvas(self)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+        };
+        let plot = plot.map(map_plot);
+
+        let plot_layers = shapes_bottom.chain(std::iter::once(plot)).chain(shapes_top);
+
+        container(stack(plot_layers).width(Length::Fill).height(Length::Fill))
+            .clip(true)
+            .padding(PLOT_CONTENT_PADDING)
+            .style(|theme: &Theme| self.update_style(theme).plot_area)
+            .into()
+    }
+
+    fn view_shape_overlay<'a, Message>(
+        &'a self,
+        shape: plot_overlay::PlotOverlay<'a, Message>,
+    ) -> Option<Element<'a, Message>>
+    where
+        Message: 'a,
+    {
+        let camera_bounds = self.camera_bounds.as_ref()?;
+        let mut screen_xy = Self::world_to_screen_position_unclipped(
+            shape.anchor_position,
+            camera_bounds,
+            self.x_axis_scale,
+            self.y_axis_scale,
+            &shape.anchor_position_transform,
+        )?;
+        screen_xy[0] += shape.anchor_offset[0];
+        screen_xy[1] -= shape.anchor_offset[1];
+
+        Some(plot_overlay::positioned_overlay(
+            shape.element,
+            screen_xy,
+            shape.align_to_anchor_horizontal,
+            shape.align_to_anchor_vertical,
+        ))
     }
 
     /// Enable or disable autoscaling on updates (default: enabled)
@@ -832,35 +943,30 @@ impl PlotWidget {
 
     fn view_tooltip_overlay<'a>(
         &'a self,
-        payload: &'a TooltipUiPayload,
+        payload: &'a Option<TooltipUiPayload>,
         camera_bounds: &Option<(Camera, Rectangle)>,
     ) -> Option<Element<'a, PlotUiMessage>> {
         // Offset a bit from point position
         const OFFSET: f32 = 8.0;
+        let payload = payload.as_ref()?;
         let [screen_x, screen_y] = payload.screen_xy?;
 
-        // default: top-left aligned
-        let mut top = screen_y + OFFSET;
-        let mut right = 0.0;
-        let mut bottom = 0.0;
-        let mut left = screen_x + OFFSET;
-        let mut align_x = alignment::Horizontal::Left;
-        let mut align_y = Vertical::Top;
+        let mut anchor = [screen_x + OFFSET, screen_y + OFFSET];
+        let mut horizontal_position = Horizontal::Right;
+        let mut vertical_position = Vertical::Bottom;
 
         // flip the tooltip if the point is outside this percentage of the bounds
         const FLIP_PCT: f32 = 0.8;
         if let Some((_, bounds)) = &camera_bounds {
             if screen_y > bounds.height * FLIP_PCT {
-                // flip the tooltip to the bottom aligned
-                top = 0.0;
-                bottom = bounds.height - screen_y + OFFSET;
-                align_y = Vertical::Bottom;
+                // Place the tooltip above the point.
+                anchor[1] = screen_y - OFFSET;
+                vertical_position = Vertical::Top;
             }
             if screen_x > bounds.width * FLIP_PCT {
-                // flip the tooltip to the right aligned
-                left = 0.0;
-                right = bounds.width - screen_x + OFFSET;
-                align_x = alignment::Horizontal::Right;
+                // Place the tooltip to the left of the point.
+                anchor[0] = screen_x - OFFSET;
+                horizontal_position = Horizontal::Left;
             }
         }
 
@@ -873,21 +979,12 @@ impl PlotWidget {
         .style(|theme| self.update_style(theme).tooltip);
 
         // Position tooltip at fixed location relative to point, not following cursor
-        Some(
-            container(tooltip_bubble)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .padding(Padding {
-                    top,
-                    right,
-                    bottom,
-                    left,
-                })
-                .align_x(align_x)
-                .align_y(align_y)
-                .style(container::transparent)
-                .into(),
-        )
+        Some(plot_overlay::positioned_overlay(
+            tooltip_bubble.into(),
+            anchor,
+            horizontal_position,
+            vertical_position,
+        ))
     }
 
     fn view_cursor_overlay(&self) -> Option<Element<'_, PlotUiMessage>> {
@@ -1119,7 +1216,7 @@ struct UpdateEffects {
     cursor_ui: Option<CursorPositionUiPayload>,
     clear_cursor_position: bool,
     /// Request publishing `camera_bounds` even when ticks didn't change.
-    /// This is used to keep tooltip overlays in sync when tick producers are disabled.
+    /// This keeps overlays in sync when tick producers are disabled.
     publish_camera_bounds: bool,
 }
 
@@ -1159,6 +1256,10 @@ fn widget_has_any_tooltips(widget: &PlotWidget) -> bool {
         .values()
         .chain(widget.picked_points.values())
         .any(|(_, tooltip)| tooltip.is_some())
+}
+
+fn widget_needs_camera_bounds(widget: &PlotWidget) -> bool {
+    widget_has_any_tooltips(widget) || widget.shape_overlays_enabled.load(Ordering::Relaxed)
 }
 
 fn clear_hover_effect(widget: &PlotWidget, state: &mut PlotState, effects: &mut UpdateEffects) {
@@ -1334,10 +1435,10 @@ fn update_ticks_and_build_payload(
         (first_time_widget_view || (state.y_ticks != old_y)).then(|| state.y_ticks.clone());
 
     // If tick producers are disabled, ticks might never change. Still publish camera/bounds
-    // when tooltips exist so the widget can keep tooltip screen positions in sync.
+    // when overlays need them so screen-space positions stay in sync.
     if publish_x.is_none()
         && publish_y.is_none()
-        && widget_has_any_tooltips(widget)
+        && widget_needs_camera_bounds(widget)
         && widget.camera_bounds != Some((state.camera, state.bounds))
     {
         effects.publish_camera_bounds = true;
