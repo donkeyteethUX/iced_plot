@@ -8,8 +8,8 @@ use iced::{
 };
 
 use crate::{
-    AxisLink, AxisScale, DragEvent, HLine, HoverPickEvent, LineStyle, PlotWidget, Point, ShapeId,
-    Size, VLine,
+    AxisLink, AxisScale, ClickAction, DragAction, DragEvent, HLine, HoverPickEvent, KeyAction,
+    LineStyle, PanDirection, PlotWidget, Point, ScrollAction, ShapeId, Size, VLine,
     axis_scale::plot_point_to_data,
     camera::Camera,
     picking::PickingState,
@@ -53,8 +53,10 @@ pub struct PlotState {
     // Interaction state
     pub(crate) cursor_position: Vec2,
     pub(crate) last_click_time: Option<Instant>,
+    pub(crate) last_click_button: Option<mouse::Button>,
     pub(crate) legend_collapsed: bool,
     pub(crate) modifiers: keyboard::Modifiers,
+    pub(crate) press: ButtonPressState,
     pub(crate) selection: SelectionState,
     pub(crate) pan: PanState,
     pub(crate) drag: DragState,
@@ -105,8 +107,10 @@ impl Default for PlotState {
             grid_style: GridStyle::default(),
             cursor_position: Vec2::ZERO,
             last_click_time: None,
+            last_click_button: None,
             legend_collapsed: false,
             modifiers: keyboard::Modifiers::default(),
+            press: ButtonPressState::default(),
             selection: SelectionState::default(),
             pan: PanState::default(),
             drag: DragState::default(),
@@ -461,9 +465,6 @@ impl PlotState {
         publish_hover_pick: &mut Option<HoverPickEvent>,
         publish_drag_event: &mut Option<DragEvent>,
     ) -> bool {
-        const SELECTION_DELTA_THRESHOLD: f32 = 4.0; // pixels
-        const SELECTION_PADDING: f32 = 0.02; // fractional padding in world units relative to selection size
-
         // Only request redraws when something actually changes or when we need
         // to service a picking request for a new cursor position.
         let mut needs_redraw = false;
@@ -543,88 +544,80 @@ impl PlotState {
                     needs_redraw = true;
                 }
             }
-            Event::ButtonPressed(mouse::Button::Left) => {
-                // Only start panning if the press started inside our bounds
-                // (Drags will continue even if the cursor leaves later)
+            Event::ButtonPressed(button) => {
+                // Only start button-driven interactions when the press starts
+                // inside our bounds. Drags continue even if the cursor leaves.
                 let inside = self.cursor_inside();
                 if !inside {
                     return needs_redraw;
                 }
-                let now = Instant::now();
-                let double = if let Some(prev) = self.last_click_time {
-                    now.duration_since(prev).as_millis() < 350
-                } else {
-                    false
-                };
-                self.last_click_time = Some(now);
-                if double && widget.controls.zoom.double_click_autoscale {
-                    self.autoscale(true);
-                    needs_redraw = true;
-                } else {
-                    if self.pick_enabled
-                        && widget.controls.pick.click_to_pick
-                        && !self.pan.active
-                        && !self.selection.active
-                    {
-                        // check if the cursor is hovering over a point
-                        let picked =
-                            if let Some(HoverPickEvent::Hover(point_id)) = *publish_hover_pick {
-                                Some(point_id)
-                            } else {
-                                widget.pick_hit(self)
-                            };
 
-                        if let Some(point_id) = picked {
-                            // Upgrade the "hover" to a "pick".
-                            *publish_hover_pick = Some(HoverPickEvent::Pick(point_id));
+                self.press.active = true;
+                self.press.button = Some(button);
+                self.press.start = self.cursor_position;
+
+                let double_click_pending = self.is_double_click(button)
+                    && widget
+                        .controls
+                        .interaction
+                        .double_click_action(button)
+                        .is_some();
+
+                if !double_click_pending {
+                    match widget.controls.interaction.drag_action(button) {
+                        Some(DragAction::BoxZoom) => {
+                            self.selection.active = true;
+                            self.selection.button = Some(button);
+                            self.selection.start = self.cursor_position;
+                            self.selection.end = self.cursor_position;
+                            self.selection.moved = false;
+                            needs_redraw = true;
                         }
+                        Some(DragAction::Pan) => {
+                            self.pan.active = true;
+                            self.pan.button = Some(button);
+                            self.pan.start_cursor = self.cursor_position.into();
+                            self.pan.start_camera_center = self.camera.position;
+                        }
+                        _ => {}
                     }
 
-                    self.drag.active = true;
-                    if let Some(world) = self.cursor_world_data(viewport) {
-                        *publish_drag_event = Some(DragEvent::Start { world });
-                    }
-
-                    if widget.controls.pan.drag_to_pan {
-                        // Start panning
-                        self.pan.active = true;
-                        self.pan.start_cursor = self.cursor_position.into();
-                        self.pan.start_camera_center = self.camera.position;
+                    if button == mouse::Button::Left
+                        && !matches!(
+                            widget.controls.interaction.drag_action(button),
+                            Some(DragAction::BoxZoom)
+                        )
+                    {
+                        self.drag.active = true;
+                        if let Some(world) = self.cursor_world_data(viewport) {
+                            *publish_drag_event = Some(DragEvent::Start { world });
+                        }
                     }
                 }
             }
-            Event::ButtonReleased(mouse::Button::Left) => {
-                if self.drag.active
+            Event::ButtonReleased(button) => {
+                let click_candidate = self.press.button == Some(button)
+                    && (self.cursor_position - self.press.start).length()
+                        <= widget.controls.interaction.drag_delta_threshold;
+
+                if button == mouse::Button::Left
+                    && self.drag.active
                     && let Some(world) = self.cursor_world_data(viewport)
                 {
                     *publish_drag_event = Some(DragEvent::End { world });
+                    self.drag.active = false;
                 }
-                self.drag.active = false;
-                if self.pan.active {
+                if button == mouse::Button::Left {
+                    self.drag.active = false;
+                }
+                if self.pan.active && self.pan.button == Some(button) {
                     self.pan.active = false;
+                    self.pan.button = None;
                 }
-            }
-            Event::ButtonPressed(mouse::Button::Right) => {
-                if !widget.controls.zoom.box_zoom {
-                    return needs_redraw;
-                }
-                // Only start selection if inside our bounds
-                let inside = self.cursor_inside();
-                if !inside {
-                    return needs_redraw;
-                }
-                // Start selection
-                self.selection.active = true;
-                self.selection.start = self.cursor_position;
-                self.selection.end = self.cursor_position;
-                self.selection.moved = false;
-                needs_redraw = true;
-            }
-            Event::ButtonReleased(mouse::Button::Right) => {
-                if self.selection.active {
+                if self.selection.active && self.selection.button == Some(button) {
                     self.selection.end = self.cursor_position;
                     let delta = self.selection.end - self.selection.start;
-                    let dragged = delta.length() > SELECTION_DELTA_THRESHOLD;
+                    let dragged = delta.length() > widget.controls.interaction.drag_delta_threshold;
                     // Perform zoom if user actually dragged a region of non-trivial size
                     if dragged {
                         // Convert screen (pixels) to world coords using camera helper
@@ -645,14 +638,24 @@ impl PlotState {
                         self.camera.set_bounds_preserve_offset(
                             min_v,
                             max_v,
-                            SELECTION_PADDING as f64,
+                            widget.controls.interaction.selection_padding,
                         );
                         self.update_axis_links();
                     }
                     // Clear selection overlay after release
                     self.selection.active = false;
+                    self.selection.button = None;
                     self.selection.moved = false;
                     needs_redraw = true;
+                }
+
+                if click_candidate && self.handle_mouse_click(button, widget, publish_hover_pick) {
+                    needs_redraw = true;
+                }
+
+                if self.press.button == Some(button) {
+                    self.press.active = false;
+                    self.press.button = None;
                 }
             }
             Event::WheelScrolled { delta } => {
@@ -667,42 +670,22 @@ impl PlotState {
                     iced::mouse::ScrollDelta::Pixels { x, y } => (x, y),
                 };
 
-                // Only zoom when Ctrl is held down
-                if widget.controls.zoom.scroll_with_ctrl
-                    && self.modifiers.contains(keyboard::Modifiers::CTRL)
-                {
-                    // Apply zoom factor based on scroll direction
-                    let zoom_factor = if y > 0.0 { 0.95 } else { 1.05 };
-
-                    // Convert cursor position to render coordinates before zoom (without offset)
-                    let cursor_render_before = self.camera.screen_to_render(
-                        DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
-                        viewport,
-                    );
-
-                    // Apply zoom by scaling half_extents
-                    self.camera.half_extents *= zoom_factor;
-
-                    // Convert cursor position to render coordinates after zoom
-                    let cursor_render_after = self.camera.screen_to_render(
-                        DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
-                        viewport,
-                    );
-
-                    // Adjust camera position (in render space) to keep cursor at same position
-                    let render_delta = cursor_render_before - cursor_render_after;
-                    // Convert render delta back to world space and adjust camera position
-                    self.camera.position += render_delta;
-
-                    self.update_axis_links();
-                    needs_redraw = true;
-                } else if widget.controls.pan.scroll_to_pan {
-                    let world_pan_x = -x as f64 * (self.camera.half_extents.x / (viewport.x / 2.0));
-                    let world_pan_y = y as f64 * (self.camera.half_extents.y / (viewport.y / 2.0));
-                    self.camera.position.x += world_pan_x;
-                    self.camera.position.y += world_pan_y;
-                    self.update_axis_links();
-                    needs_redraw = true;
+                match widget.controls.interaction.scroll_action(self.modifiers) {
+                    Some(ScrollAction::Zoom) => {
+                        self.zoom_at_cursor(y, viewport);
+                        needs_redraw = true;
+                    }
+                    Some(ScrollAction::Pan) => {
+                        let world_pan_x =
+                            -x as f64 * (self.camera.half_extents.x / (viewport.x / 2.0));
+                        let world_pan_y =
+                            y as f64 * (self.camera.half_extents.y / (viewport.y / 2.0));
+                        self.camera.position.x += world_pan_x;
+                        self.camera.position.y += world_pan_y;
+                        self.update_axis_links();
+                        needs_redraw = true;
+                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -712,11 +695,40 @@ impl PlotState {
         needs_redraw
     }
 
-    pub(crate) fn handle_keyboard_event(&mut self, event: &keyboard::Event) -> bool {
+    pub(crate) fn handle_keyboard_event(
+        &mut self,
+        event: &keyboard::Event,
+        widget: &PlotWidget,
+        cursor: mouse::Cursor,
+    ) -> bool {
         if let keyboard::Event::ModifiersChanged(modifiers) = event {
             self.modifiers = *modifiers;
         }
-        false // No need to redraw
+
+        let cursor_over = cursor.is_over(self.bounds);
+
+        let keyboard::Event::KeyPressed { key, .. } = event else {
+            return false;
+        };
+
+        if !cursor_over {
+            return false;
+        }
+
+        match widget.controls.interaction.key_action(key) {
+            Some(KeyAction::Autoscale) => {
+                self.autoscale(true);
+                true
+            }
+            Some(KeyAction::PanBy {
+                direction,
+                fraction,
+            }) => {
+                self.pan_by(direction, fraction);
+                true
+            }
+            _ => false,
+        }
     }
 
     fn update_axis_links(&mut self) {
@@ -728,6 +740,112 @@ impl PlotState {
             link.set(self.camera.position.y, self.camera.half_extents.y);
             self.y_link_version = link.version();
         }
+    }
+
+    fn is_double_click(&self, button: mouse::Button) -> bool {
+        self.last_click_button == Some(button)
+            && self
+                .last_click_time
+                .is_some_and(|prev| Instant::now().duration_since(prev).as_millis() < 350)
+    }
+
+    fn handle_mouse_click(
+        &mut self,
+        button: mouse::Button,
+        widget: &PlotWidget,
+        publish_hover_pick: &mut Option<HoverPickEvent>,
+    ) -> bool {
+        let now = Instant::now();
+        let double = self.is_double_click(button);
+        let double_action = widget.controls.interaction.double_click_action(button);
+        let click_action = widget.controls.interaction.click_action(button);
+
+        let handled = if double {
+            double_action
+                .or(click_action)
+                .is_some_and(|action| self.apply_click_action(action, widget, publish_hover_pick))
+        } else {
+            click_action
+                .is_some_and(|action| self.apply_click_action(action, widget, publish_hover_pick))
+        };
+
+        self.last_click_time = Some(now);
+        self.last_click_button = Some(button);
+        handled
+    }
+
+    fn apply_click_action(
+        &mut self,
+        action: ClickAction,
+        widget: &PlotWidget,
+        publish_hover_pick: &mut Option<HoverPickEvent>,
+    ) -> bool {
+        match action {
+            ClickAction::Autoscale => {
+                self.autoscale(true);
+                true
+            }
+            ClickAction::Pick => {
+                self.pick_highlighted_point(widget, publish_hover_pick);
+                false
+            }
+            ClickAction::ClearPick => {
+                *publish_hover_pick = Some(HoverPickEvent::ClearPick);
+                false
+            }
+        }
+    }
+
+    fn pick_highlighted_point(
+        &mut self,
+        widget: &PlotWidget,
+        publish_hover_pick: &mut Option<HoverPickEvent>,
+    ) {
+        if !self.pick_enabled || self.pan.active || self.selection.active {
+            return;
+        }
+
+        let picked = if let Some(HoverPickEvent::Hover(point_id)) = *publish_hover_pick {
+            Some(point_id)
+        } else {
+            widget.pick_hit(self)
+        };
+
+        if let Some(point_id) = picked {
+            *publish_hover_pick = Some(HoverPickEvent::Pick(point_id));
+        }
+    }
+
+    fn zoom_at_cursor(&mut self, scroll_y: f32, viewport: DVec2) {
+        let zoom_factor = if scroll_y > 0.0 { 0.95 } else { 1.05 };
+
+        let cursor_render_before = self.camera.screen_to_render(
+            DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
+            viewport,
+        );
+
+        self.camera.half_extents *= zoom_factor;
+
+        let cursor_render_after = self.camera.screen_to_render(
+            DVec2::new(self.cursor_position.x as f64, self.cursor_position.y as f64),
+            viewport,
+        );
+
+        self.camera.position += cursor_render_before - cursor_render_after;
+        self.update_axis_links();
+    }
+
+    fn pan_by(&mut self, direction: PanDirection, fraction: f64) {
+        let delta = self.camera.half_extents * (2.0 * fraction);
+        let pan_delta = match direction {
+            PanDirection::Left => DVec2::new(-delta.x, 0.0),
+            PanDirection::Right => DVec2::new(delta.x, 0.0),
+            PanDirection::Up => DVec2::new(0.0, delta.y),
+            PanDirection::Down => DVec2::new(0.0, -delta.y),
+        };
+
+        self.camera.position += pan_delta;
+        self.update_axis_links();
     }
 
     fn cursor_world_data(&self, viewport: DVec2) -> Option<[f64; 2]> {
@@ -1076,8 +1194,16 @@ pub(crate) struct SeriesSpan {
 }
 
 #[derive(Default, Debug, Clone)]
+pub(crate) struct ButtonPressState {
+    pub(crate) active: bool,
+    pub(crate) button: Option<mouse::Button>,
+    pub(crate) start: Vec2,
+}
+
+#[derive(Default, Debug, Clone)]
 pub(crate) struct SelectionState {
     pub(crate) active: bool,
+    pub(crate) button: Option<mouse::Button>,
     pub(crate) start: Vec2,
     pub(crate) end: Vec2,
     pub(crate) moved: bool,
@@ -1086,6 +1212,7 @@ pub(crate) struct SelectionState {
 #[derive(Default, Debug, Clone)]
 pub(crate) struct PanState {
     pub(crate) active: bool,
+    pub(crate) button: Option<mouse::Button>,
     pub(crate) start_cursor: DVec2,
     pub(crate) start_camera_center: DVec2,
 }
@@ -1098,9 +1225,10 @@ pub(crate) struct DragState {
 #[cfg(test)]
 mod tests {
     use glam::DVec2;
+    use iced::Point;
 
     use super::*;
-    use crate::Series;
+    use crate::{PointId, Series};
 
     #[test]
     fn axes_transform_series_maps_to_camera_range_and_skips_autoscale_bounds() {
@@ -1118,5 +1246,243 @@ mod tests {
         assert_eq!(state.points[0].position, [9.0, 22.0]);
         assert_eq!(state.data_min, None);
         assert_eq!(state.data_max, None);
+    }
+
+    #[test]
+    fn arrow_keys_use_configured_pan_fraction_when_enabled_and_hovered() {
+        let mut widget = PlotWidget::new();
+        widget.controls.interaction.bind_key(
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight),
+            KeyAction::PanBy {
+                direction: PanDirection::Right,
+                fraction: 0.25,
+            },
+        );
+
+        let mut state = PlotState::default();
+        state.bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        state.camera.position = DVec2::ZERO;
+        state.camera.half_extents = DVec2::new(10.0, 20.0);
+
+        let changed = state.handle_keyboard_event(
+            &arrow_key_event(
+                keyboard::key::Named::ArrowRight,
+                keyboard::key::Code::ArrowRight,
+            ),
+            &widget,
+            mouse::Cursor::Available(Point::new(50.0, 50.0)),
+        );
+
+        assert!(changed);
+        assert_eq!(state.camera.position, DVec2::new(5.0, 0.0));
+    }
+
+    #[test]
+    fn arrow_keys_do_not_pan_when_disabled() {
+        let mut widget = PlotWidget::new();
+        widget.controls.interaction.unbind_arrow_pan();
+
+        let mut state = PlotState::default();
+        state.bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        state.camera.position = DVec2::ZERO;
+        state.camera.half_extents = DVec2::new(10.0, 20.0);
+
+        let changed = state.handle_keyboard_event(
+            &arrow_key_event(keyboard::key::Named::ArrowUp, keyboard::key::Code::ArrowUp),
+            &widget,
+            mouse::Cursor::Available(Point::new(50.0, 50.0)),
+        );
+
+        assert!(!changed);
+        assert_eq!(state.camera.position, DVec2::ZERO);
+    }
+
+    #[test]
+    fn configured_mouse_button_starts_and_stops_drag_pan() {
+        let mut widget = PlotWidget::new();
+        widget
+            .controls
+            .interaction
+            .set_drag_action(DragAction::Pan, Some(mouse::Button::Middle));
+
+        let mut state = PlotState::default();
+        state.bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        state.cursor_position = Vec2::new(50.0, 50.0);
+
+        let mut hover_pick = None;
+        let mut drag_event = None;
+        state.handle_mouse_event(
+            Event::ButtonPressed(mouse::Button::Middle),
+            mouse::Cursor::Available(Point::new(50.0, 50.0)),
+            &widget,
+            &mut hover_pick,
+            &mut drag_event,
+        );
+
+        assert!(state.pan.active);
+        assert_eq!(state.pan.button, Some(mouse::Button::Middle));
+
+        state.handle_mouse_event(
+            Event::ButtonReleased(mouse::Button::Middle),
+            mouse::Cursor::Available(Point::new(50.0, 50.0)),
+            &widget,
+            &mut hover_pick,
+            &mut drag_event,
+        );
+
+        assert!(!state.pan.active);
+        assert_eq!(state.pan.button, None);
+    }
+
+    #[test]
+    fn left_click_picks_when_left_button_is_box_zoom() {
+        let mut widget = PlotWidget::new();
+        widget
+            .controls
+            .interaction
+            .set_drag_action(DragAction::Pan, Some(mouse::Button::Right))
+            .set_drag_action(DragAction::BoxZoom, Some(mouse::Button::Left));
+
+        let mut state = PlotState::default();
+        state.bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        state.cursor_position = Vec2::new(50.0, 50.0);
+
+        let point_id = PointId {
+            series_id: ShapeId::new(),
+            point_index: 0,
+        };
+        let mut hover_pick = Some(HoverPickEvent::Hover(point_id));
+        let mut drag_event = None;
+
+        state.handle_mouse_event(
+            Event::ButtonPressed(mouse::Button::Left),
+            mouse::Cursor::Available(Point::new(50.0, 50.0)),
+            &widget,
+            &mut hover_pick,
+            &mut drag_event,
+        );
+
+        state.handle_mouse_event(
+            Event::ButtonReleased(mouse::Button::Left),
+            mouse::Cursor::Available(Point::new(50.0, 50.0)),
+            &widget,
+            &mut hover_pick,
+            &mut drag_event,
+        );
+
+        assert!(matches!(hover_pick, Some(HoverPickEvent::Pick(id)) if id == point_id));
+        assert!(!state.selection.active);
+    }
+
+    #[test]
+    fn left_double_click_autoscales_when_left_button_is_box_zoom() {
+        let mut widget = PlotWidget::new();
+        widget
+            .controls
+            .interaction
+            .set_drag_action(DragAction::Pan, Some(mouse::Button::Right))
+            .set_drag_action(DragAction::BoxZoom, Some(mouse::Button::Left));
+
+        let mut state = PlotState::default();
+        state.bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        state.cursor_position = Vec2::new(50.0, 50.0);
+        state.data_min = Some(DVec2::new(10.0, 20.0));
+        state.data_max = Some(DVec2::new(30.0, 60.0));
+        state.camera.position = DVec2::ZERO;
+
+        let mut hover_pick = None;
+        let mut drag_event = None;
+        for _ in 0..2 {
+            state.handle_mouse_event(
+                Event::ButtonPressed(mouse::Button::Left),
+                mouse::Cursor::Available(Point::new(50.0, 50.0)),
+                &widget,
+                &mut hover_pick,
+                &mut drag_event,
+            );
+            state.handle_mouse_event(
+                Event::ButtonReleased(mouse::Button::Left),
+                mouse::Cursor::Available(Point::new(50.0, 50.0)),
+                &widget,
+                &mut hover_pick,
+                &mut drag_event,
+            );
+        }
+
+        assert_eq!(state.camera.position, DVec2::new(20.0, 40.0));
+        assert!(!state.selection.active);
+    }
+
+    #[test]
+    fn configured_key_autoscales_when_hovered() {
+        let mut widget = PlotWidget::new();
+        widget.controls.interaction.bind_key(
+            keyboard::Key::Named(keyboard::key::Named::Home),
+            KeyAction::Autoscale,
+        );
+
+        let mut state = PlotState::default();
+        state.bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        state.data_min = Some(DVec2::new(10.0, 20.0));
+        state.data_max = Some(DVec2::new(30.0, 60.0));
+        state.camera.position = DVec2::ZERO;
+
+        let changed = state.handle_keyboard_event(
+            &key_event(
+                keyboard::Key::Named(keyboard::key::Named::Home),
+                keyboard::key::Code::Home,
+            ),
+            &widget,
+            mouse::Cursor::Available(Point::new(50.0, 50.0)),
+        );
+
+        assert!(changed);
+        assert_eq!(state.camera.position, DVec2::new(20.0, 40.0));
+    }
+
+    fn arrow_key_event(named: keyboard::key::Named, code: keyboard::key::Code) -> keyboard::Event {
+        key_event(keyboard::Key::Named(named), code)
+    }
+
+    fn key_event(key: keyboard::Key, code: keyboard::key::Code) -> keyboard::Event {
+        keyboard::Event::KeyPressed {
+            modified_key: key.clone(),
+            key,
+            physical_key: keyboard::key::Physical::Code(code),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::default(),
+            text: None,
+            repeat: false,
+        }
     }
 }

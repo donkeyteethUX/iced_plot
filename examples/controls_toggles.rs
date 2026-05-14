@@ -1,11 +1,11 @@
 //! Demonstrates toggling plot interaction controls at runtime.
 use iced::{
-    Element, Length,
+    Element, Length, keyboard, mouse,
     widget::{checkbox, column, container, row, text},
 };
 use iced_plot::{
-    Color, LineStyle, MarkerStyle, PlotControls, PlotUiMessage, PlotWidget, PlotWidgetBuilder,
-    Series,
+    ClickAction, Color, DragAction, KeyAction, LineStyle, MarkerStyle, PlotUiMessage, PlotWidget,
+    PlotWidgetBuilder, ScrollAction, Series,
 };
 
 fn main() -> iced::Result {
@@ -20,9 +20,11 @@ enum Message {
     Plot(PlotUiMessage),
     ToggleScrollToPan(bool),
     ToggleDragToPan(bool),
+    ToggleArrowsToPan(bool),
     ToggleBoxZoom(bool),
     ToggleCtrlScrollZoom(bool),
     ToggleDoubleClickAutoscale(bool),
+    ToggleKeyAutoscale(bool),
     ToggleClickToPick(bool),
     ToggleClearPickOnEscape(bool),
     ToggleHighlightOnHover(bool),
@@ -31,13 +33,10 @@ enum Message {
 
 struct App {
     widget: PlotWidget,
-    controls: PlotControls,
 }
 
 impl App {
     fn new() -> Self {
-        let controls = PlotControls::default();
-
         let line = Series::line_only(
             (0..240)
                 .map(|i| {
@@ -63,7 +62,6 @@ impl App {
         .with_color(Color::from_rgb(1.0, 0.5, 0.35));
 
         let widget = PlotWidgetBuilder::new()
-            .with_controls(controls)
             .with_x_label("x")
             .with_y_label("y")
             .with_crosshairs(true)
@@ -80,52 +78,164 @@ impl App {
             .add_series(markers)
             .build()
             .unwrap();
-
-        Self { widget, controls }
+        Self { widget }
     }
 
-    fn apply_controls(&mut self) {
-        self.widget.set_controls(self.controls);
+    fn set_drag(&mut self, button: mouse::Button, action: DragAction, enabled: bool) {
+        if enabled {
+            self.widget
+                .get_controls_mut()
+                .interaction
+                .bind_drag(button, action);
+        } else {
+            self.widget
+                .get_controls_mut()
+                .interaction
+                .unbind_drag(button);
+        }
+    }
+
+    fn drag_enabled(&self, button: mouse::Button, action: DragAction) -> bool {
+        self.widget
+            .get_controls()
+            .interaction
+            .drag_is_bound(button, action)
+    }
+
+    fn set_scroll(&mut self, modifiers: keyboard::Modifiers, action: ScrollAction, enabled: bool) {
+        if enabled {
+            self.widget
+                .get_controls_mut()
+                .interaction
+                .bind_scroll(modifiers, action);
+        } else {
+            self.widget
+                .get_controls_mut()
+                .interaction
+                .unbind_scroll(modifiers);
+        }
+    }
+
+    fn scroll_enabled(&self, modifiers: keyboard::Modifiers, action: ScrollAction) -> bool {
+        self.widget
+            .get_controls()
+            .interaction
+            .scroll_is_bound(modifiers, action)
+    }
+
+    fn set_click(&mut self, button: mouse::Button, action: ClickAction, enabled: bool) {
+        if enabled {
+            self.widget
+                .get_controls_mut()
+                .interaction
+                .bind_click(button, action);
+        } else {
+            self.widget
+                .get_controls_mut()
+                .interaction
+                .unbind_click(button);
+        }
+    }
+
+    fn click_enabled(&self, button: mouse::Button, action: ClickAction) -> bool {
+        self.widget
+            .get_controls()
+            .interaction
+            .click_is_bound(button, action)
+    }
+
+    fn set_double_click(&mut self, button: mouse::Button, action: ClickAction, enabled: bool) {
+        if enabled {
+            self.widget
+                .get_controls_mut()
+                .interaction
+                .bind_double_click(button, action);
+        } else {
+            self.widget
+                .get_controls_mut()
+                .interaction
+                .unbind_double_click(button);
+        }
+    }
+
+    fn double_click_enabled(&self, button: mouse::Button, action: ClickAction) -> bool {
+        self.widget
+            .get_controls()
+            .interaction
+            .double_click_is_bound(button, action)
+    }
+
+    fn set_key(&mut self, key: keyboard::Key, action: KeyAction, enabled: bool) {
+        if enabled {
+            self.widget
+                .get_controls_mut()
+                .interaction
+                .bind_key(key, action);
+        } else {
+            self.widget.get_controls_mut().interaction.unbind_key(&key);
+        }
+    }
+
+    fn key_enabled(&self, key: &keyboard::Key, action: KeyAction) -> bool {
+        self.widget
+            .get_controls()
+            .interaction
+            .key_is_bound(key, action)
     }
 
     fn update(&mut self, message: Message) {
         match message {
             Message::Plot(msg) => self.widget.update(msg),
             Message::ToggleScrollToPan(enabled) => {
-                self.controls.pan.scroll_to_pan = enabled;
-                self.apply_controls();
+                self.set_scroll(keyboard::Modifiers::NONE, ScrollAction::Pan, enabled);
             }
             Message::ToggleDragToPan(enabled) => {
-                self.controls.pan.drag_to_pan = enabled;
-                self.apply_controls();
+                self.set_drag(mouse::Button::Right, DragAction::Pan, enabled);
+            }
+            Message::ToggleArrowsToPan(enabled) => {
+                if enabled {
+                    self.widget
+                        .get_controls_mut()
+                        .interaction
+                        .bind_arrow_pan(0.1);
+                } else {
+                    self.widget
+                        .get_controls_mut()
+                        .interaction
+                        .unbind_arrow_pan();
+                }
             }
             Message::ToggleBoxZoom(enabled) => {
-                self.controls.zoom.box_zoom = enabled;
-                self.apply_controls();
+                self.set_drag(mouse::Button::Left, DragAction::BoxZoom, enabled);
             }
             Message::ToggleCtrlScrollZoom(enabled) => {
-                self.controls.zoom.scroll_with_ctrl = enabled;
-                self.apply_controls();
+                self.set_scroll(keyboard::Modifiers::CTRL, ScrollAction::Zoom, enabled);
             }
             Message::ToggleDoubleClickAutoscale(enabled) => {
-                self.controls.zoom.double_click_autoscale = enabled;
-                self.apply_controls();
+                self.set_double_click(mouse::Button::Left, ClickAction::Autoscale, enabled);
+            }
+            Message::ToggleKeyAutoscale(enabled) => {
+                self.set_key(
+                    keyboard::Key::Character("f".into()),
+                    KeyAction::Autoscale,
+                    enabled,
+                );
             }
             Message::ToggleClickToPick(enabled) => {
-                self.controls.pick.click_to_pick = enabled;
-                self.apply_controls();
+                self.set_click(mouse::Button::Left, ClickAction::Pick, enabled);
             }
             Message::ToggleClearPickOnEscape(enabled) => {
-                self.controls.pick.clear_on_escape = enabled;
-                self.apply_controls();
+                self.set_key(
+                    keyboard::Key::Named(keyboard::key::Named::Escape),
+                    KeyAction::ClearPick,
+                    enabled,
+                );
             }
             Message::ToggleHighlightOnHover(enabled) => {
-                self.controls.highlight_on_hover = enabled;
-                self.apply_controls();
+                self.widget.get_controls_mut().highlight_on_hover = enabled;
             }
             Message::ToggleShowControlsHelp(enabled) => {
-                self.controls.show_controls_help = enabled;
-                self.apply_controls();
+                self.widget.get_controls_mut().show_controls_help = enabled;
             }
         }
     }
@@ -135,40 +245,64 @@ impl App {
             column![
                 text("Plot controls").size(18),
                 row![
-                    checkbox(self.controls.pan.scroll_to_pan)
-                        .label("Pan: scroll")
+                    text("Pan:"),
+                    checkbox(self.scroll_enabled(keyboard::Modifiers::NONE, ScrollAction::Pan))
+                        .label("scroll")
                         .on_toggle(Message::ToggleScrollToPan),
-                    checkbox(self.controls.pan.drag_to_pan)
-                        .label("Pan: drag")
+                    checkbox(self.drag_enabled(mouse::Button::Left, DragAction::Pan))
+                        .label("drag")
                         .on_toggle(Message::ToggleDragToPan),
+                    checkbox(
+                        self.widget
+                            .get_controls()
+                            .interaction
+                            .arrows_to_pan_enabled()
+                    )
+                    .label("arrows")
+                    .on_toggle(Message::ToggleArrowsToPan),
                 ]
                 .spacing(16),
                 row![
-                    checkbox(self.controls.zoom.box_zoom)
-                        .label("Zoom: box zoom with right-drag")
+                    text("Zoom:"),
+                    checkbox(self.drag_enabled(mouse::Button::Right, DragAction::BoxZoom))
+                        .label("box zoom with right-drag")
                         .on_toggle(Message::ToggleBoxZoom),
-                    checkbox(self.controls.zoom.scroll_with_ctrl)
-                        .label("Zoom: Ctrl+scroll")
+                    checkbox(self.scroll_enabled(keyboard::Modifiers::CTRL, ScrollAction::Zoom))
+                        .label("Ctrl+scroll")
                         .on_toggle(Message::ToggleCtrlScrollZoom),
-                    checkbox(self.controls.zoom.double_click_autoscale)
-                        .label("Zoom: double-click autoscale")
-                        .on_toggle(Message::ToggleDoubleClickAutoscale),
+                    checkbox(
+                        self.double_click_enabled(mouse::Button::Left, ClickAction::Autoscale)
+                    )
+                    .label("double-click autoscale")
+                    .on_toggle(Message::ToggleDoubleClickAutoscale),
+                    checkbox(
+                        self.key_enabled(
+                            &keyboard::Key::Character("f".into()),
+                            KeyAction::Autoscale,
+                        )
+                    )
+                    .label("key \"f\" to autoscale")
+                    .on_toggle(Message::ToggleKeyAutoscale),
                 ]
                 .spacing(16),
                 row![
-                    checkbox(self.controls.pick.click_to_pick)
-                        .label("Pick: click to pick")
+                    text("Pick:"),
+                    checkbox(self.click_enabled(mouse::Button::Left, ClickAction::Pick))
+                        .label("click to pick")
                         .on_toggle(Message::ToggleClickToPick),
-                    checkbox(self.controls.pick.clear_on_escape)
-                        .label("Pick: Esc clears")
-                        .on_toggle(Message::ToggleClearPickOnEscape),
+                    checkbox(self.key_enabled(
+                        &keyboard::Key::Named(keyboard::key::Named::Escape),
+                        KeyAction::ClearPick,
+                    ))
+                    .label("Esc clears")
+                    .on_toggle(Message::ToggleClearPickOnEscape),
                 ]
                 .spacing(16),
                 row![
-                    checkbox(self.controls.highlight_on_hover)
+                    checkbox(self.widget.get_controls().highlight_on_hover)
                         .label("Highlight on hover")
                         .on_toggle(Message::ToggleHighlightOnHover),
-                    checkbox(self.controls.show_controls_help)
+                    checkbox(self.widget.get_controls().show_controls_help)
                         .label("Show controls help")
                         .on_toggle(Message::ToggleShowControlsHelp),
                 ]

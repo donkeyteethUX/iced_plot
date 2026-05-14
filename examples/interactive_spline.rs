@@ -2,12 +2,12 @@
 //!
 //! Demonstrates selectively disabling plot controls and handling drag events for custom interactivity.
 use iced::{
-    Element,
+    Element, mouse,
     widget::{column, text},
 };
 use iced_plot::{
-    Color, DragEvent, LineStyle, MarkerStyle, PanControls, PlotControls, PlotUiMessage, PlotWidget,
-    PlotWidgetBuilder, Series, ShapeId,
+    Color, DragEvent, LineStyle, MarkerStyle, PlotControls, PlotUiMessage, PlotWidget,
+    PlotWidgetBuilder, ScrollAction, Series, ShapeId,
 };
 
 fn main() -> iced::Result {
@@ -54,13 +54,11 @@ impl App {
             .with_label("catmull-rom spline")
             .with_color(Color::from_rgb(0.2, 0.8, 1.0));
 
-        let controls_cfg = PlotControls {
-            pan: PanControls {
-                scroll_to_pan: true,
-                drag_to_pan: false,
-            },
-            ..Default::default()
-        };
+        let mut controls_cfg = PlotControls::default();
+        controls_cfg.interaction.unbind_drag(mouse::Button::Left);
+        controls_cfg
+            .interaction
+            .bind_scroll(iced::keyboard::Modifiers::NONE, ScrollAction::Pan);
 
         let control_series_id = control_series.id;
         let control_poly_id = control_poly.id;

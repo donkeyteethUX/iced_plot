@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use iced::Theme;
+use iced::{Theme, keyboard, mouse};
 
 use crate::axis_link::AxisLink;
 use crate::axis_scale::AxisScale;
-use crate::controls::PlotControls;
+use crate::controls::{DragAction, KeyAction, PlotControls};
 use crate::fill::Fill;
 use crate::message::TooltipContext;
 use crate::plot_renderer::PlotRenderStrategy;
@@ -172,7 +172,70 @@ impl PlotWidgetBuilder {
     ///
     /// Useful if your application embeds plot widget inside a scrollable container.
     pub fn disable_scroll_to_pan(mut self) -> Self {
-        self.controls.get_or_insert_default().pan.scroll_to_pan = false;
+        self.controls
+            .get_or_insert_default()
+            .interaction
+            .unbind_scroll(keyboard::Modifiers::NONE);
+        self
+    }
+
+    /// Set the mouse button used for drag panning.
+    ///
+    /// Passing `None` disables drag panning.
+    pub fn with_drag_to_pan(mut self, button: Option<mouse::Button>) -> Self {
+        self.controls
+            .get_or_insert_default()
+            .interaction
+            .set_drag_action(DragAction::Pan, button);
+        self
+    }
+
+    /// Disable panning by dragging.
+    pub fn disable_drag_to_pan(mut self) -> Self {
+        self.controls
+            .get_or_insert_default()
+            .interaction
+            .set_drag_action(DragAction::Pan, None);
+        self
+    }
+
+    /// Disable panning with the arrow keys.
+    pub fn disable_arrows_to_pan(mut self) -> Self {
+        self.controls
+            .get_or_insert_default()
+            .interaction
+            .unbind_arrow_pan();
+        self
+    }
+
+    /// Set the mouse button used for box zoom.
+    ///
+    /// Passing `None` disables box zoom.
+    pub fn with_box_zoom(mut self, button: Option<mouse::Button>) -> Self {
+        self.controls
+            .get_or_insert_default()
+            .interaction
+            .set_drag_action(DragAction::BoxZoom, button);
+        self
+    }
+
+    /// Disable box zoom.
+    pub fn disable_box_zoom(mut self) -> Self {
+        self.controls
+            .get_or_insert_default()
+            .interaction
+            .set_drag_action(DragAction::BoxZoom, None);
+        self
+    }
+
+    /// Set the keyboard key used to reset/autoscale the plot.
+    ///
+    /// Passing `None` disables key-triggered autoscale.
+    pub fn with_key_autoscale(mut self, key: Option<keyboard::Key>) -> Self {
+        self.controls
+            .get_or_insert_default()
+            .interaction
+            .set_key_action(KeyAction::Autoscale, key);
         self
     }
 
