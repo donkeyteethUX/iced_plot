@@ -33,11 +33,10 @@ use crate::{
     default_style,
     legend::{self, LegendEntry},
     message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
-    picking,
+    picking, plot_overlay,
     plot_renderer::{PlotRenderStrategy, PlotRenderer, RenderParams},
     plot_state::PlotState,
     series::{SeriesError, ShapeId},
-    shape,
     style::{PlotStyle, StyleFn},
     ticks::{self, PositionedTick, TickFormatter, TickProducer},
     transform::{PositionTransform, data_point_to_plot_with_transform},
@@ -638,9 +637,10 @@ impl PlotWidget {
     /// View the plot widget with external Iced elements anchored to plot coordinates.
     pub fn view_with_shapes<'a, Message>(
         &'a self,
-        shapes_bottom: impl Iterator<Item = shape::Shape<'a, Message>> + 'a,
-        shapes_top: impl Iterator<Item = shape::Shape<'a, Message>> + 'a,
-    ) -> iced::Element<'a, shape::MessageWithShape<Message>>
+        shapes_bottom: impl Iterator<Item = plot_overlay::PlotOverlay<'a, Message>> + 'a,
+        shapes_top: impl Iterator<Item = plot_overlay::PlotOverlay<'a, Message>> + 'a,
+        map_plot: impl Fn(PlotUiMessage) -> Message + Copy + 'a,
+    ) -> iced::Element<'a, Message>
     where
         Message: 'a,
     {
@@ -648,7 +648,7 @@ impl PlotWidget {
 
         let shapes_bottom = shapes_bottom.filter_map(|shape| self.view_shape_overlay(shape));
         let shapes_top = shapes_top.filter_map(|shape| self.view_shape_overlay(shape));
-        self.view_with_shape_elements(shapes_bottom, shapes_top, shape::MessageWithShape::PlotMsg)
+        self.view_with_shape_elements(shapes_bottom, shapes_top, map_plot)
     }
 
     fn view_with_shape_elements<'a, Message, MapPlot>(
@@ -741,8 +741,8 @@ impl PlotWidget {
 
     fn view_shape_overlay<'a, Message>(
         &'a self,
-        shape: shape::Shape<'a, Message>,
-    ) -> Option<Element<'a, shape::MessageWithShape<Message>>>
+        shape: plot_overlay::PlotOverlay<'a, Message>,
+    ) -> Option<Element<'a, Message>>
     where
         Message: 'a,
     {
@@ -757,8 +757,8 @@ impl PlotWidget {
         screen_xy[0] += shape.anchor_offset[0];
         screen_xy[1] -= shape.anchor_offset[1];
 
-        Some(shape::positioned_overlay(
-            shape.element.map(shape::MessageWithShape::ShapeMsg),
+        Some(plot_overlay::positioned_overlay(
+            shape.element,
             screen_xy,
             shape.align_to_anchor_horizontal,
             shape.align_to_anchor_vertical,
@@ -979,7 +979,7 @@ impl PlotWidget {
         .style(|theme| self.update_style(theme).tooltip);
 
         // Position tooltip at fixed location relative to point, not following cursor
-        Some(shape::positioned_overlay(
+        Some(plot_overlay::positioned_overlay(
             tooltip_bubble.into(),
             anchor,
             horizontal_position,

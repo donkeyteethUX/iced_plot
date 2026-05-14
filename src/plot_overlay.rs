@@ -10,7 +10,8 @@ use iced::{
 
 use crate::{PositionTransform, Transform};
 
-pub struct Shape<'a, Message> {
+/// An Iced element anchored to a plot position and overlaid on the plot.
+pub struct PlotOverlay<'a, Message> {
     pub(crate) element: Element<'a, Message>,
     pub(crate) anchor_position: [f64; 2],
     pub(crate) anchor_position_transform: PositionTransform,
@@ -20,11 +21,11 @@ pub struct Shape<'a, Message> {
     pub(crate) align_to_anchor_horizontal: Horizontal,
 }
 
-impl<'a, Message> Shape<'a, Message> {
+impl<'a, Message> PlotOverlay<'a, Message> {
     /// Create an external Iced element anchored at a plot position.
     ///
     /// The position is interpreted as normal data coordinates by default. Use
-    /// [`Shape::with_axes_transform`] or [`Shape::with_transform`] for other
+    /// [`PlotOverlay::with_axes_transform`] or [`PlotOverlay::with_transform`] for other
     /// coordinate systems.
     pub fn new(element: impl Into<Element<'a, Message>>, anchor_position: [f64; 2]) -> Self {
         Self {
@@ -37,7 +38,7 @@ impl<'a, Message> Shape<'a, Message> {
         }
     }
 
-    /// Set the plot position (in `[x,y]` coordinates) used as the shape anchor.
+    /// Set the plot position (in `[x,y]` coordinates) used as the overlay anchor.
     pub fn with_anchor_position(mut self, anchor_position: [f64; 2]) -> Self {
         self.anchor_position = anchor_position;
         self
@@ -45,39 +46,39 @@ impl<'a, Message> Shape<'a, Message> {
 
     /// Set a pixel offset applied after anchor projection.
     ///
-    /// Positive x moves the shape right; positive y moves it up.
+    /// Positive x moves the overlay right; positive y moves it up.
     pub fn with_anchor_offset(mut self, anchor_offset: [f32; 2]) -> Self {
         self.anchor_offset = anchor_offset;
         self
     }
 
-    /// Set how the shape anchor position is transformed before placement.
+    /// Set how the overlay anchor position is transformed before placement.
     pub fn with_transform(mut self, transform: PositionTransform) -> Self {
         self.anchor_position_transform = transform;
         self
     }
 
-    /// Transform the x coordinate of the shape anchor.
+    /// Transform the x coordinate of the overlay anchor.
     pub fn with_transform_x(mut self, transform: Transform) -> Self {
         self.anchor_position_transform.x = Some(transform);
         self
     }
 
-    /// Transform the y coordinate of the shape anchor.
+    /// Transform the y coordinate of the overlay anchor.
     pub fn with_transform_y(mut self, transform: Transform) -> Self {
         self.anchor_position_transform.y = Some(transform);
         self
     }
 
-    /// Interpret the shape anchor as normalized plot coordinates.
+    /// Interpret the overlay anchor as normalized plot coordinates.
     pub fn with_axes_transform(mut self) -> Self {
         self.anchor_position_transform = PositionTransform::axes();
         self
     }
 
-    /// Set the shape position relative to its anchor.
+    /// Set the overlay position relative to its anchor.
     ///
-    /// For example, `(Horizontal::Center, Vertical::Top)` places the shape
+    /// For example, `(Horizontal::Center, Vertical::Top)` places the overlay
     /// above the anchor with its horizontal center aligned to it.
     pub fn align_to_anchor(mut self, horizontal: Horizontal, vertical: Vertical) -> Self {
         self.align_to_anchor_horizontal = horizontal;
@@ -85,23 +86,33 @@ impl<'a, Message> Shape<'a, Message> {
         self
     }
 
-    /// Set the shape's horizontal position relative to its anchor.
+    /// Set the overlay's horizontal position relative to its anchor.
     pub fn align_to_anchor_horizontal(mut self, horizontal: Horizontal) -> Self {
         self.align_to_anchor_horizontal = horizontal;
         self
     }
 
-    /// Set the shape's vertical position relative to its anchor.
+    /// Set the overlay's vertical position relative to its anchor.
     pub fn align_to_anchor_vertical(mut self, vertical: Vertical) -> Self {
         self.align_to_anchor_vertical = vertical;
         self
     }
-}
 
-#[derive(Debug, Clone)]
-pub enum MessageWithShape<Message> {
-    PlotMsg(crate::PlotUiMessage),
-    ShapeMsg(Message),
+    /// Map the overlay's message type into another message type.
+    pub fn map<B>(self, f: impl Fn(Message) -> B + 'a) -> PlotOverlay<'a, B>
+    where
+        B: 'a,
+        Message: 'a,
+    {
+        PlotOverlay {
+            element: self.element.map(f),
+            anchor_position: self.anchor_position,
+            anchor_position_transform: self.anchor_position_transform,
+            anchor_offset: self.anchor_offset,
+            align_to_anchor_vertical: self.align_to_anchor_vertical,
+            align_to_anchor_horizontal: self.align_to_anchor_horizontal,
+        }
+    }
 }
 
 pub(crate) fn positioned_overlay<'a, Message>(

@@ -6,7 +6,8 @@ use iced::{
     widget::{button, column, container, row, text},
 };
 use iced_plot::{
-    Color, LineStyle, MarkerStyle, MessageWithShape, PlotWidget, PlotWidgetBuilder, Series, Shape,
+    Color, LineStyle, MarkerStyle, PlotOverlay, PlotUiMessage, PlotWidget, PlotWidgetBuilder,
+    Series,
 };
 
 fn main() -> iced::Result {
@@ -25,7 +26,8 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Plot(MessageWithShape<ShapeMessage>),
+    Plot(PlotUiMessage),
+    Shape(ShapeMessage),
 }
 
 #[derive(Debug, Clone)]
@@ -47,14 +49,14 @@ impl App {
 
     fn update(&mut self, message: Message) {
         match message {
-            Message::Plot(MessageWithShape::PlotMsg(message)) => self.widget.update(message),
-            Message::Plot(MessageWithShape::ShapeMsg(ShapeMessage::ToggleAnnotation)) => {
+            Message::Plot(message) => self.widget.update(message),
+            Message::Shape(ShapeMessage::ToggleAnnotation) => {
                 self.annotation_expanded = !self.annotation_expanded;
             }
-            Message::Plot(MessageWithShape::ShapeMsg(ShapeMessage::CycleVertical)) => {
+            Message::Shape(ShapeMessage::CycleVertical) => {
                 self.shape_vertical = next_vertical(self.shape_vertical);
             }
-            Message::Plot(MessageWithShape::ShapeMsg(ShapeMessage::CycleHorizontal)) => {
+            Message::Shape(ShapeMessage::CycleHorizontal) => {
                 self.shape_horizontal = next_horizontal(self.shape_horizontal);
             }
         }
@@ -62,11 +64,10 @@ impl App {
 
     fn view(&self) -> Element<'_, Message> {
         self.widget
-            .view_with_shapes(self.bottom_shapes(), self.top_shapes())
-            .map(Message::Plot)
+            .view_with_shapes(self.bottom_shapes(), self.top_shapes(), Message::Plot)
     }
 
-    fn bottom_shapes(&self) -> impl Iterator<Item = Shape<'_, ShapeMessage>> {
+    fn bottom_shapes(&self) -> impl Iterator<Item = PlotOverlay<'_, Message>> {
         let region = container(text("axes-space region\n   (on bottom)").size(13.0))
             .width(Length::Fixed(190.0))
             .height(Length::Fixed(76.0))
@@ -75,13 +76,14 @@ impl App {
             .style(region_style);
 
         std::iter::once(
-            Shape::new(region, [0.5, 0.5])
+            PlotOverlay::new(region, [0.5, 0.5])
                 .with_axes_transform()
-                .align_to_anchor(alignment::Horizontal::Center, alignment::Vertical::Center),
+                .align_to_anchor(alignment::Horizontal::Center, alignment::Vertical::Center)
+                .map(Message::Shape),
         )
     }
 
-    fn top_shapes(&self) -> impl Iterator<Item = Shape<'_, ShapeMessage>> {
+    fn top_shapes(&self) -> impl Iterator<Item = PlotOverlay<'_, Message>> {
         let label = if self.annotation_expanded {
             column![
                 text("sin(x) peak").size(14.0),
@@ -94,7 +96,7 @@ impl App {
 
         let annotation = button(container(label).padding([4, 8]).style(annotation_style))
             .padding(0)
-            .on_press(ShapeMessage::ToggleAnnotation);
+            .on_press(Message::Shape(ShapeMessage::ToggleAnnotation));
 
         let alignment_controls = container(
             column![
@@ -105,13 +107,13 @@ impl App {
                         vertical_label(self.shape_vertical)
                     )))
                     .padding([4, 8])
-                    .on_press(ShapeMessage::CycleVertical),
+                    .on_press(Message::Shape(ShapeMessage::CycleVertical)),
                     button(text(format!(
                         "Align horizontal:\n{}",
                         horizontal_label(self.shape_horizontal)
                     )))
                     .padding([4, 8])
-                    .on_press(ShapeMessage::CycleHorizontal),
+                    .on_press(Message::Shape(ShapeMessage::CycleHorizontal)),
                 ]
                 .spacing(6),
             ]
@@ -121,10 +123,10 @@ impl App {
         .style(annotation_style);
 
         [
-            Shape::new(annotation, [FRAC_PI_2, 1.0])
+            PlotOverlay::new(annotation, [FRAC_PI_2, 1.0])
                 .align_to_anchor(alignment::Horizontal::Center, alignment::Vertical::Top)
                 .with_anchor_offset([20.0, 10.0]),
-            Shape::new(alignment_controls, [FRAC_PI_2 * 3.0, -1.0])
+            PlotOverlay::new(alignment_controls, [FRAC_PI_2 * 3.0, -1.0])
                 .align_to_anchor(self.shape_horizontal, self.shape_vertical),
         ]
         .into_iter()
