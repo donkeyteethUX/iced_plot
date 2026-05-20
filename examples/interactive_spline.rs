@@ -55,10 +55,8 @@ impl App {
             .with_color(Color::from_rgb(0.2, 0.8, 1.0));
 
         let mut controls_cfg = PlotControls::default();
-        controls_cfg.interaction.unbind_drag(mouse::Button::Left);
-        controls_cfg
-            .interaction
-            .bind_scroll(iced::keyboard::Modifiers::NONE, ScrollAction::Pan);
+        controls_cfg.unbind_drag(mouse::Button::Left);
+        controls_cfg.bind_scroll(iced::keyboard::Modifiers::NONE, ScrollAction::Pan);
 
         let control_series_id = control_series.id;
         let control_poly_id = control_poly.id;

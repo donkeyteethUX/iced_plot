@@ -557,14 +557,10 @@ impl PlotState {
                 self.press.start = self.cursor_position;
 
                 let double_click_pending = self.is_double_click(button)
-                    && widget
-                        .controls
-                        .interaction
-                        .double_click_action(button)
-                        .is_some();
+                    && widget.controls.double_click_action(button).is_some();
 
                 if !double_click_pending {
-                    match widget.controls.interaction.drag_action(button) {
+                    match widget.controls.drag_action(button) {
                         Some(DragAction::BoxZoom) => {
                             self.selection.active = true;
                             self.selection.button = Some(button);
@@ -582,13 +578,9 @@ impl PlotState {
                         _ => {}
                     }
 
-                    if button == mouse::Button::Left
-                        && !matches!(
-                            widget.controls.interaction.drag_action(button),
-                            Some(DragAction::BoxZoom)
-                        )
-                    {
+                    if widget.controls.drag_action(button).is_none() {
                         self.drag.active = true;
+                        self.drag.button = Some(button);
                         if let Some(world) = self.cursor_world_data(viewport) {
                             *publish_drag_event = Some(DragEvent::Start { world });
                         }
@@ -598,17 +590,19 @@ impl PlotState {
             Event::ButtonReleased(button) => {
                 let click_candidate = self.press.button == Some(button)
                     && (self.cursor_position - self.press.start).length()
-                        <= widget.controls.interaction.drag_delta_threshold;
+                        <= widget.controls.drag_delta_threshold();
 
-                if button == mouse::Button::Left
-                    && self.drag.active
+                if self.drag.active
+                    && self.drag.button == Some(button)
                     && let Some(world) = self.cursor_world_data(viewport)
                 {
                     *publish_drag_event = Some(DragEvent::End { world });
                     self.drag.active = false;
+                    self.drag.button = None;
                 }
-                if button == mouse::Button::Left {
+                if self.drag.button == Some(button) {
                     self.drag.active = false;
+                    self.drag.button = None;
                 }
                 if self.pan.active && self.pan.button == Some(button) {
                     self.pan.active = false;
@@ -617,7 +611,7 @@ impl PlotState {
                 if self.selection.active && self.selection.button == Some(button) {
                     self.selection.end = self.cursor_position;
                     let delta = self.selection.end - self.selection.start;
-                    let dragged = delta.length() > widget.controls.interaction.drag_delta_threshold;
+                    let dragged = delta.length() > widget.controls.drag_delta_threshold();
                     // Perform zoom if user actually dragged a region of non-trivial size
                     if dragged {
                         // Convert screen (pixels) to world coords using camera helper
@@ -638,7 +632,7 @@ impl PlotState {
                         self.camera.set_bounds_preserve_offset(
                             min_v,
                             max_v,
-                            widget.controls.interaction.selection_padding,
+                            widget.controls.selection_padding(),
                         );
                         self.update_axis_links();
                     }
@@ -670,7 +664,7 @@ impl PlotState {
                     iced::mouse::ScrollDelta::Pixels { x, y } => (x, y),
                 };
 
-                match widget.controls.interaction.scroll_action(self.modifiers) {
+                match widget.controls.scroll_action(self.modifiers) {
                     Some(ScrollAction::Zoom) => {
                         self.zoom_at_cursor(y, viewport);
                         needs_redraw = true;
@@ -715,7 +709,7 @@ impl PlotState {
             return false;
         }
 
-        match widget.controls.interaction.key_action(key) {
+        match widget.controls.key_action(key) {
             Some(KeyAction::Autoscale) => {
                 self.autoscale(true);
                 true
@@ -757,8 +751,8 @@ impl PlotState {
     ) -> bool {
         let now = Instant::now();
         let double = self.is_double_click(button);
-        let double_action = widget.controls.interaction.double_click_action(button);
-        let click_action = widget.controls.interaction.click_action(button);
+        let double_action = widget.controls.double_click_action(button);
+        let click_action = widget.controls.click_action(button);
 
         let handled = if double {
             double_action
@@ -1220,6 +1214,7 @@ pub(crate) struct PanState {
 #[derive(Default, Debug, Clone)]
 pub(crate) struct DragState {
     pub(crate) active: bool,
+    pub(crate) button: Option<mouse::Button>,
 }
 
 #[cfg(test)]
@@ -1251,7 +1246,7 @@ mod tests {
     #[test]
     fn arrow_keys_use_configured_pan_fraction_when_enabled_and_hovered() {
         let mut widget = PlotWidget::new();
-        widget.controls.interaction.bind_key(
+        widget.controls.bind_key(
             keyboard::Key::Named(keyboard::key::Named::ArrowRight),
             KeyAction::PanBy {
                 direction: PanDirection::Right,
@@ -1285,7 +1280,7 @@ mod tests {
     #[test]
     fn arrow_keys_do_not_pan_when_disabled() {
         let mut widget = PlotWidget::new();
-        widget.controls.interaction.unbind_arrow_pan();
+        widget.controls.unbind_arrow_pan();
 
         let mut state = PlotState::default();
         state.bounds = Rectangle {
@@ -1312,7 +1307,6 @@ mod tests {
         let mut widget = PlotWidget::new();
         widget
             .controls
-            .interaction
             .set_drag_action(DragAction::Pan, Some(mouse::Button::Middle));
 
         let mut state = PlotState::default();
@@ -1350,11 +1344,50 @@ mod tests {
     }
 
     #[test]
+    fn unbound_non_left_button_publishes_drag_events() {
+        let widget = PlotWidget::new();
+        let mut state = PlotState::default();
+        state.bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        state.cursor_position = Vec2::new(50.0, 50.0);
+
+        let mut hover_pick = None;
+        let mut drag_event = None;
+        state.handle_mouse_event(
+            Event::ButtonPressed(mouse::Button::Middle),
+            mouse::Cursor::Available(Point::new(50.0, 50.0)),
+            &widget,
+            &mut hover_pick,
+            &mut drag_event,
+        );
+
+        assert!(matches!(drag_event, Some(DragEvent::Start { .. })));
+        assert!(state.drag.active);
+        assert_eq!(state.drag.button, Some(mouse::Button::Middle));
+
+        drag_event = None;
+        state.handle_mouse_event(
+            Event::ButtonReleased(mouse::Button::Middle),
+            mouse::Cursor::Available(Point::new(50.0, 50.0)),
+            &widget,
+            &mut hover_pick,
+            &mut drag_event,
+        );
+
+        assert!(matches!(drag_event, Some(DragEvent::End { .. })));
+        assert!(!state.drag.active);
+        assert_eq!(state.drag.button, None);
+    }
+
+    #[test]
     fn left_click_picks_when_left_button_is_box_zoom() {
         let mut widget = PlotWidget::new();
         widget
             .controls
-            .interaction
             .set_drag_action(DragAction::Pan, Some(mouse::Button::Right))
             .set_drag_action(DragAction::BoxZoom, Some(mouse::Button::Left));
 
@@ -1399,7 +1432,6 @@ mod tests {
         let mut widget = PlotWidget::new();
         widget
             .controls
-            .interaction
             .set_drag_action(DragAction::Pan, Some(mouse::Button::Right))
             .set_drag_action(DragAction::BoxZoom, Some(mouse::Button::Left));
 
@@ -1441,7 +1473,7 @@ mod tests {
     #[test]
     fn configured_key_autoscales_when_hovered() {
         let mut widget = PlotWidget::new();
-        widget.controls.interaction.bind_key(
+        widget.controls.bind_key(
             keyboard::Key::Named(keyboard::key::Named::Home),
             KeyAction::Autoscale,
         );

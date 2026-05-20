@@ -7,43 +7,30 @@ use std::collections::HashMap;
 /// Configures user interaction behavior for [`crate::PlotWidget`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlotControls {
-    /// Controls how input triggers map to plot actions.
-    pub interaction: InteractionControls,
-
-    /// Enables point highlighting while hovering.
-    pub highlight_on_hover: bool,
-
-    /// Shows the in-canvas controls/help UI (`?` button).
-    pub show_controls_help: bool,
-}
-
-/// Trigger-to-action configuration grouped by input family.
-#[derive(Debug, Clone, PartialEq)]
-pub struct InteractionControls {
     /// Mouse button drag bindings.
-    pub drag: HashMap<mouse::Button, DragAction>,
+    drag: HashMap<mouse::Button, DragAction>,
 
     /// Scroll bindings keyed by active keyboard modifiers.
-    pub scroll: HashMap<keyboard::Modifiers, ScrollAction>,
+    scroll: HashMap<keyboard::Modifiers, ScrollAction>,
 
     /// Mouse click bindings.
-    pub click: HashMap<mouse::Button, ClickAction>,
+    click: HashMap<mouse::Button, ClickAction>,
 
     /// Mouse double-click bindings.
-    pub double_click: HashMap<mouse::Button, ClickAction>,
+    double_click: HashMap<mouse::Button, ClickAction>,
 
     /// Keyboard key bindings.
-    pub key: HashMap<keyboard::Key, KeyAction>,
+    key: HashMap<keyboard::Key, KeyAction>,
 
     /// Minimum drag distance, in screen pixels, before a drag gesture is treated
     /// as intentional instead of a click.
-    pub drag_delta_threshold: f32,
+    drag_delta_threshold: f32,
 
     /// Fractional padding added around a completed box-zoom selection.
     ///
     /// For example, the default `0.02` expands the selected world-space bounds
     /// by 2% before applying the new camera bounds.
-    pub selection_padding: f64,
+    selection_padding: f64,
 }
 
 /// Action that can be performed during a mouse drag.
@@ -115,16 +102,6 @@ pub enum PanDirection {
 
 impl Default for PlotControls {
     fn default() -> Self {
-        Self {
-            interaction: InteractionControls::default(),
-            highlight_on_hover: true,
-            show_controls_help: true,
-        }
-    }
-}
-
-impl Default for InteractionControls {
-    fn default() -> Self {
         let mut controls = Self {
             drag: HashMap::new(),
             scroll: HashMap::new(),
@@ -152,7 +129,7 @@ impl Default for InteractionControls {
     }
 }
 
-impl InteractionControls {
+impl PlotControls {
     /// Bind a mouse drag trigger to an action.
     pub fn bind_drag(&mut self, button: mouse::Button, action: DragAction) -> &mut Self {
         self.drag.insert(button, action);
@@ -268,6 +245,30 @@ impl InteractionControls {
     /// Return whether a key trigger is bound to an action.
     pub fn key_is_bound(&self, key: &keyboard::Key, action: KeyAction) -> bool {
         self.key_action(key) == Some(action)
+    }
+
+    /// Return the minimum drag distance, in screen pixels, required before a
+    /// press is treated as a drag instead of a click.
+    pub fn drag_delta_threshold(&self) -> f32 {
+        self.drag_delta_threshold
+    }
+
+    /// Set the minimum drag distance, in screen pixels, required before a press
+    /// is treated as a drag instead of a click.
+    pub fn set_drag_delta_threshold(&mut self, threshold: f32) -> &mut Self {
+        self.drag_delta_threshold = threshold.max(0.0);
+        self
+    }
+
+    /// Return the fractional padding added around box-zoom selections.
+    pub fn selection_padding(&self) -> f64 {
+        self.selection_padding
+    }
+
+    /// Set the fractional padding added around box-zoom selections.
+    pub fn set_selection_padding(&mut self, padding: f64) -> &mut Self {
+        self.selection_padding = padding.max(0.0);
+        self
     }
 
     /// Remove all drag bindings for a given action.
@@ -394,7 +395,7 @@ impl PlotControls {
         let mut content =
             widget::column![txt("Controls").style(widget::text::primary)].spacing(2.0);
 
-        let mut bindings = self.interaction.binding_descriptions();
+        let mut bindings = self.binding_descriptions();
         bindings.sort();
 
         for binding in bindings {
@@ -408,7 +409,7 @@ impl PlotControls {
     }
 }
 
-impl InteractionControls {
+impl PlotControls {
     fn binding_descriptions(&self) -> Vec<String> {
         let mut bindings = Vec::new();
 

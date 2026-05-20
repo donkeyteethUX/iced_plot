@@ -50,10 +50,7 @@ pub use iced::Color;
 // Re-exports of public types.
 pub use axis_link::AxisLink;
 pub use axis_scale::AxisScale;
-pub use controls::{
-    ClickAction, DragAction, InteractionControls, KeyAction, PanDirection, PlotControls,
-    ScrollAction,
-};
+pub use controls::{ClickAction, DragAction, KeyAction, PanDirection, PlotControls, ScrollAction};
 pub use fill::Fill;
 pub use grid::TickWeight;
 pub use message::{DragEvent, HoverPickEvent, PlotUiMessage, PointId, TooltipContext};

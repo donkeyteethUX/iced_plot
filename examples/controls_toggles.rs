@@ -83,104 +83,70 @@ impl App {
 
     fn set_drag(&mut self, button: mouse::Button, action: DragAction, enabled: bool) {
         if enabled {
-            self.widget
-                .get_controls_mut()
-                .interaction
-                .bind_drag(button, action);
+            self.widget.get_controls_mut().bind_drag(button, action);
         } else {
-            self.widget
-                .get_controls_mut()
-                .interaction
-                .unbind_drag(button);
+            self.widget.get_controls_mut().unbind_drag(button);
         }
     }
 
     fn drag_enabled(&self, button: mouse::Button, action: DragAction) -> bool {
-        self.widget
-            .get_controls()
-            .interaction
-            .drag_is_bound(button, action)
+        self.widget.get_controls().drag_is_bound(button, action)
     }
 
     fn set_scroll(&mut self, modifiers: keyboard::Modifiers, action: ScrollAction, enabled: bool) {
         if enabled {
             self.widget
                 .get_controls_mut()
-                .interaction
                 .bind_scroll(modifiers, action);
         } else {
-            self.widget
-                .get_controls_mut()
-                .interaction
-                .unbind_scroll(modifiers);
+            self.widget.get_controls_mut().unbind_scroll(modifiers);
         }
     }
 
     fn scroll_enabled(&self, modifiers: keyboard::Modifiers, action: ScrollAction) -> bool {
         self.widget
             .get_controls()
-            .interaction
             .scroll_is_bound(modifiers, action)
     }
 
     fn set_click(&mut self, button: mouse::Button, action: ClickAction, enabled: bool) {
         if enabled {
-            self.widget
-                .get_controls_mut()
-                .interaction
-                .bind_click(button, action);
+            self.widget.get_controls_mut().bind_click(button, action);
         } else {
-            self.widget
-                .get_controls_mut()
-                .interaction
-                .unbind_click(button);
+            self.widget.get_controls_mut().unbind_click(button);
         }
     }
 
     fn click_enabled(&self, button: mouse::Button, action: ClickAction) -> bool {
-        self.widget
-            .get_controls()
-            .interaction
-            .click_is_bound(button, action)
+        self.widget.get_controls().click_is_bound(button, action)
     }
 
     fn set_double_click(&mut self, button: mouse::Button, action: ClickAction, enabled: bool) {
         if enabled {
             self.widget
                 .get_controls_mut()
-                .interaction
                 .bind_double_click(button, action);
         } else {
-            self.widget
-                .get_controls_mut()
-                .interaction
-                .unbind_double_click(button);
+            self.widget.get_controls_mut().unbind_double_click(button);
         }
     }
 
     fn double_click_enabled(&self, button: mouse::Button, action: ClickAction) -> bool {
         self.widget
             .get_controls()
-            .interaction
             .double_click_is_bound(button, action)
     }
 
     fn set_key(&mut self, key: keyboard::Key, action: KeyAction, enabled: bool) {
         if enabled {
-            self.widget
-                .get_controls_mut()
-                .interaction
-                .bind_key(key, action);
+            self.widget.get_controls_mut().bind_key(key, action);
         } else {
-            self.widget.get_controls_mut().interaction.unbind_key(&key);
+            self.widget.get_controls_mut().unbind_key(&key);
         }
     }
 
     fn key_enabled(&self, key: &keyboard::Key, action: KeyAction) -> bool {
-        self.widget
-            .get_controls()
-            .interaction
-            .key_is_bound(key, action)
+        self.widget.get_controls().key_is_bound(key, action)
     }
 
     fn update(&mut self, message: Message) {
@@ -190,23 +156,17 @@ impl App {
                 self.set_scroll(keyboard::Modifiers::NONE, ScrollAction::Pan, enabled);
             }
             Message::ToggleDragToPan(enabled) => {
-                self.set_drag(mouse::Button::Right, DragAction::Pan, enabled);
+                self.set_drag(mouse::Button::Left, DragAction::Pan, enabled);
             }
             Message::ToggleArrowsToPan(enabled) => {
                 if enabled {
-                    self.widget
-                        .get_controls_mut()
-                        .interaction
-                        .bind_arrow_pan(0.1);
+                    self.widget.get_controls_mut().bind_arrow_pan(0.1);
                 } else {
-                    self.widget
-                        .get_controls_mut()
-                        .interaction
-                        .unbind_arrow_pan();
+                    self.widget.get_controls_mut().unbind_arrow_pan();
                 }
             }
             Message::ToggleBoxZoom(enabled) => {
-                self.set_drag(mouse::Button::Left, DragAction::BoxZoom, enabled);
+                self.set_drag(mouse::Button::Right, DragAction::BoxZoom, enabled);
             }
             Message::ToggleCtrlScrollZoom(enabled) => {
                 self.set_scroll(keyboard::Modifiers::CTRL, ScrollAction::Zoom, enabled);
@@ -232,10 +192,10 @@ impl App {
                 );
             }
             Message::ToggleHighlightOnHover(enabled) => {
-                self.widget.get_controls_mut().highlight_on_hover = enabled;
+                self.widget.set_highlight_on_hover(enabled);
             }
             Message::ToggleShowControlsHelp(enabled) => {
-                self.widget.get_controls_mut().show_controls_help = enabled;
+                self.widget.set_controls_help(enabled);
             }
         }
     }
@@ -252,14 +212,9 @@ impl App {
                     checkbox(self.drag_enabled(mouse::Button::Left, DragAction::Pan))
                         .label("drag")
                         .on_toggle(Message::ToggleDragToPan),
-                    checkbox(
-                        self.widget
-                            .get_controls()
-                            .interaction
-                            .arrows_to_pan_enabled()
-                    )
-                    .label("arrows")
-                    .on_toggle(Message::ToggleArrowsToPan),
+                    checkbox(self.widget.get_controls().arrows_to_pan_enabled())
+                        .label("arrows")
+                        .on_toggle(Message::ToggleArrowsToPan),
                 ]
                 .spacing(16),
                 row![
@@ -299,10 +254,10 @@ impl App {
                 ]
                 .spacing(16),
                 row![
-                    checkbox(self.widget.get_controls().highlight_on_hover)
+                    checkbox(self.widget.highlight_on_hover())
                         .label("Highlight on hover")
                         .on_toggle(Message::ToggleHighlightOnHover),
-                    checkbox(self.widget.get_controls().show_controls_help)
+                    checkbox(self.widget.controls_help_enabled())
                         .label("Show controls help")
                         .on_toggle(Message::ToggleShowControlsHelp),
                 ]

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use iced::{Theme, keyboard, mouse};
+use iced::Theme;
 
 use crate::axis_link::AxisLink;
 use crate::axis_scale::AxisScale;
-use crate::controls::{DragAction, KeyAction, PlotControls};
+use crate::controls::PlotControls;
 use crate::fill::Fill;
 use crate::message::TooltipContext;
 use crate::plot_renderer::PlotRenderStrategy;
@@ -34,6 +34,7 @@ pub struct PlotWidgetBuilder {
     y_label: Option<String>,
     autoscale_on_updates: Option<bool>,
     hover_radius_px: Option<f32>,
+    highlight_on_hover: Option<bool>,
     pick_highlight_provider: Option<HighlightPointProvider>,
     hover_highlight_provider: Option<HighlightPointProvider>,
     cursor_overlay: Option<bool>,
@@ -41,6 +42,7 @@ pub struct PlotWidgetBuilder {
     crosshairs: Option<bool>,
     render_strategy: Option<PlotRenderStrategy>,
     controls: Option<PlotControls>,
+    controls_help: Option<bool>,
     disable_legend: bool,
     x_lim: Option<(f64, f64)>,
     y_lim: Option<(f64, f64)>,
@@ -100,6 +102,12 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Enable or disable point highlighting while hovering.
+    pub fn with_highlight_on_hover(mut self, enabled: bool) -> Self {
+        self.highlight_on_hover = Some(enabled);
+        self
+    }
+
     /// Provide a custom highlighter for pick point.
     pub fn with_pick_highlight_provider<F>(mut self, provider: F) -> Self
     where
@@ -156,7 +164,7 @@ impl PlotWidgetBuilder {
     ///
     /// When controls/help UI is disabled, you still can toggle help overlay by calling `PlotWidget.update(PlotUiMessage::ToggleControlsOverlay)`
     pub fn disable_controls_help(mut self) -> Self {
-        self.controls.get_or_insert_default().show_controls_help = false;
+        self.controls_help = Some(false);
         self
     }
 
@@ -165,77 +173,6 @@ impl PlotWidgetBuilder {
     /// By default, when plot contains at least one labeled series, the legend is enabled.
     pub fn disable_legend(mut self) -> Self {
         self.disable_legend = true;
-        self
-    }
-
-    /// Disable the scroll to pan.
-    ///
-    /// Useful if your application embeds plot widget inside a scrollable container.
-    pub fn disable_scroll_to_pan(mut self) -> Self {
-        self.controls
-            .get_or_insert_default()
-            .interaction
-            .unbind_scroll(keyboard::Modifiers::NONE);
-        self
-    }
-
-    /// Set the mouse button used for drag panning.
-    ///
-    /// Passing `None` disables drag panning.
-    pub fn with_drag_to_pan(mut self, button: Option<mouse::Button>) -> Self {
-        self.controls
-            .get_or_insert_default()
-            .interaction
-            .set_drag_action(DragAction::Pan, button);
-        self
-    }
-
-    /// Disable panning by dragging.
-    pub fn disable_drag_to_pan(mut self) -> Self {
-        self.controls
-            .get_or_insert_default()
-            .interaction
-            .set_drag_action(DragAction::Pan, None);
-        self
-    }
-
-    /// Disable panning with the arrow keys.
-    pub fn disable_arrows_to_pan(mut self) -> Self {
-        self.controls
-            .get_or_insert_default()
-            .interaction
-            .unbind_arrow_pan();
-        self
-    }
-
-    /// Set the mouse button used for box zoom.
-    ///
-    /// Passing `None` disables box zoom.
-    pub fn with_box_zoom(mut self, button: Option<mouse::Button>) -> Self {
-        self.controls
-            .get_or_insert_default()
-            .interaction
-            .set_drag_action(DragAction::BoxZoom, button);
-        self
-    }
-
-    /// Disable box zoom.
-    pub fn disable_box_zoom(mut self) -> Self {
-        self.controls
-            .get_or_insert_default()
-            .interaction
-            .set_drag_action(DragAction::BoxZoom, None);
-        self
-    }
-
-    /// Set the keyboard key used to reset/autoscale the plot.
-    ///
-    /// Passing `None` disables key-triggered autoscale.
-    pub fn with_key_autoscale(mut self, key: Option<keyboard::Key>) -> Self {
-        self.controls
-            .get_or_insert_default()
-            .interaction
-            .set_key_action(KeyAction::Autoscale, key);
         self
     }
 
@@ -454,6 +391,9 @@ impl PlotWidgetBuilder {
         if let Some(controls) = self.controls {
             w.set_controls(controls);
         }
+        if let Some(enabled) = self.controls_help {
+            w.set_controls_help(enabled);
+        }
         if self.disable_legend {
             w.legend_enabled = false;
         }
@@ -463,6 +403,9 @@ impl PlotWidgetBuilder {
         }
         if let Some(r) = self.hover_radius_px {
             w.hover_radius_px(r);
+        }
+        if let Some(enabled) = self.highlight_on_hover {
+            w.set_highlight_on_hover(enabled);
         }
         if let Some(x) = self.x_label {
             w.set_x_axis_label(x);
