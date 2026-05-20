@@ -24,8 +24,8 @@ use iced::{
 use indexmap::IndexMap;
 
 use crate::{
-    AxisScale, DragEvent, Fill, HLine, HoverPickEvent, MarkerStyle, PlotUiMessage, PointId, Series,
-    Size, TooltipContext, Transform, VLine, axes_labels,
+    AxisScale, DragEvent, Fill, HLine, HoverPickEvent, KeyAction, MarkerStyle, PlotUiMessage,
+    PointId, Series, Size, TooltipContext, Transform, VLine, axes_labels,
     axis_link::AxisLink,
     axis_scale::plot_point_to_data,
     camera::Camera,
@@ -66,6 +66,8 @@ pub struct PlotWidget {
     // Configuration
     pub(crate) autoscale_on_updates: bool,
     pub(crate) controls: PlotControls,
+    pub(crate) highlight_on_hover: bool,
+    pub(crate) show_controls_help: bool,
     pub(crate) legend_enabled: bool,
     pub(crate) legend_collapsed: bool,
     pub(crate) x_axis_label: String,
@@ -127,6 +129,8 @@ impl PlotWidget {
             data_version: 1,
             autoscale_on_updates: false,
             controls: PlotControls::default(),
+            highlight_on_hover: true,
+            show_controls_help: true,
             legend_enabled: true,
             legend_collapsed: false,
             x_axis_label: String::new(),
@@ -817,6 +821,36 @@ impl PlotWidget {
         self.controls = controls;
     }
 
+    /// Get the full interaction controls behavior for the plot.
+    pub fn get_controls(&self) -> &PlotControls {
+        &self.controls
+    }
+
+    /// Get the mutable full interaction controls behavior for the plot.
+    pub fn get_controls_mut(&mut self) -> &mut PlotControls {
+        &mut self.controls
+    }
+
+    /// Enable or disable point highlighting while hovering.
+    pub fn set_highlight_on_hover(&mut self, enabled: bool) {
+        self.highlight_on_hover = enabled;
+    }
+
+    /// Return whether point highlighting while hovering is enabled.
+    pub fn highlight_on_hover(&self) -> bool {
+        self.highlight_on_hover
+    }
+
+    /// Enable or disable the in-canvas controls/help UI (`?` button + panel).
+    pub fn set_controls_help(&mut self, enabled: bool) {
+        self.show_controls_help = enabled;
+    }
+
+    /// Return whether the in-canvas controls/help UI is enabled.
+    pub fn controls_help_enabled(&self) -> bool {
+        self.show_controls_help
+    }
+
     /// Set a custom formatter for the x-axis tick labels.
     /// The formatter receives a GridMark (containing the tick value and step size)
     /// and the current visible range on the x-axis.
@@ -1004,7 +1038,7 @@ impl PlotWidget {
     }
 
     fn view_top_right_overlay(&self, has_legend: bool) -> Element<'_, PlotUiMessage> {
-        let help_btn = self.controls.show_controls_help.then(|| {
+        let help_btn = self.show_controls_help.then(|| {
             let help_label = if self.controls_overlay_open {
                 "×"
             } else {
@@ -1042,37 +1076,8 @@ impl PlotWidget {
             return None;
         }
 
-        let txt = |t| widget::text(t).size(12.0).style(widget::text::base);
-        let mut content =
-            widget::column![txt("Controls").style(widget::text::primary)].spacing(2.0);
-
-        if self.controls.pan.drag_to_pan {
-            content = content.push(txt("Left-drag: pan"));
-        }
-        if self.controls.zoom.box_zoom {
-            content = content.push(txt("Right-drag: box zoom"));
-        }
-        if self.controls.zoom.scroll_with_ctrl {
-            content = content.push(txt("Ctrl + scroll: zoom at cursor"));
-        }
-        if self.controls.pan.scroll_to_pan {
-            content = content.push(txt("Scroll: pan"));
-        }
-        if self.controls.zoom.double_click_autoscale {
-            content = content.push(txt("Double-click: reset / autoscale"));
-        }
-        if self.controls.pick.click_to_pick {
-            content = content.push(txt("Left-click point: pick"));
-        }
-        if self.controls.pick.clear_on_escape {
-            content = content.push(txt("Esc: clear picked points"));
-        }
-        if has_legend {
-            content = content.push(txt("Click icon in legend to toggle visibility."));
-        }
-
         Some(
-            container(content)
+            container(self.controls.view_controls_overlay_panel(has_legend))
                 .padding(8.0)
                 .style(|theme| self.update_style(theme).controls_panel)
                 .into(),
@@ -1461,9 +1466,9 @@ fn update_plot_program<const IS_CANVAS: bool>(
 
     // Keep these in sync early, since other phases depend on them.
     state.bounds = bounds;
-    state.hover_enabled = widget.controls.highlight_on_hover
+    state.hover_enabled = widget.highlight_on_hover
         && (widget.hover_highlight_provider.is_some() || widget.pick_highlight_provider.is_some());
-    state.pick_enabled = widget.controls.pick.click_to_pick;
+    state.pick_enabled = widget.controls.has_pick_action();
     state.hover_radius_px = widget.hover_radius_px;
     state.crosshairs_enabled = widget.crosshairs_enabled;
 
@@ -1572,16 +1577,13 @@ fn update_plot_program<const IS_CANVAS: bool>(
             }
         }
         iced::Event::Keyboard(keyboard_event) => {
-            if let keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(keyboard::key::Named::Escape),
-                ..
-            } = keyboard_event
-                && widget.controls.pick.clear_on_escape
+            if let keyboard::Event::KeyPressed { key, .. } = keyboard_event
+                && widget.controls.key_action(key) == Some(KeyAction::ClearPick)
             {
                 effects.hover_pick = Some(HoverPickEvent::ClearPick);
                 invalidation.overlay_layer();
             }
-            effects.needs_redraw |= state.handle_keyboard_event(keyboard_event);
+            effects.needs_redraw |= state.handle_keyboard_event(keyboard_event, widget, cursor);
         }
         _ => {}
     }

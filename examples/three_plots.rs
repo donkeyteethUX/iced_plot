@@ -3,6 +3,7 @@
 //! on one plot will synchronize the others.
 use iced_plot::HighlightPoint;
 use iced_plot::HoverPickEvent;
+use iced_plot::PlotControls;
 use iced_plot::PlotUiMessage;
 use iced_plot::PlotWidget;
 use iced_plot::PlotWidgetBuilder;
@@ -12,6 +13,7 @@ use iced_plot::{AxisLink, LineStyle, MarkerStyle, Series, ShapeId};
 use iced::Color;
 use iced::Element;
 use iced::Length;
+use iced::keyboard;
 use iced::widget::{column, scrollable};
 
 fn main() -> iced::Result {
@@ -148,6 +150,11 @@ impl App {
     fn new() -> Self {
         // Create a shared x-axis link so all three plots pan/zoom together on the x-axis
         let x_link = AxisLink::new();
+        let no_scroll_pan_controls = || {
+            let mut controls = PlotControls::default();
+            controls.unbind_scroll(keyboard::Modifiers::NONE);
+            controls
+        };
 
         let positions = (0..100)
             .map(|i| {
@@ -159,7 +166,7 @@ impl App {
         let s1 = Series::line_only(positions, LineStyle::solid()).with_label("sine_line_only");
         let s1_id = s1.id;
         let w1 = PlotWidgetBuilder::new()
-            .disable_scroll_to_pan()
+            .with_controls(no_scroll_pan_controls())
             .with_hover_highlight_provider(Self::hover_highlight_provider)
             .with_pick_highlight_provider(Self::pick_highlight_provider)
             .with_x_lim(-1.0, 10.0) // Set x-axis limits
@@ -182,7 +189,7 @@ impl App {
             .with_color([0.9, 0.3, 0.3]);
         let s2_id = s2.id;
         let w2 = PlotWidgetBuilder::new()
-            .disable_scroll_to_pan()
+            .with_controls(no_scroll_pan_controls())
             .with_hover_highlight_provider(Self::hover_highlight_provider)
             .with_pick_highlight_provider(Self::pick_highlight_provider)
             .with_x_axis_link(x_link.clone()) // Link the x-axis
@@ -205,7 +212,7 @@ impl App {
             .with_color([0.3, 0.9, 0.3]);
         let s3_id = s3.id;
         let w3 = PlotWidgetBuilder::new()
-            .disable_scroll_to_pan()
+            .with_controls(no_scroll_pan_controls())
             .with_hover_highlight_provider(Self::hover_highlight_provider)
             .with_pick_highlight_provider(Self::pick_highlight_provider)
             .with_x_axis_link(x_link.clone()) // Link the x-axis
