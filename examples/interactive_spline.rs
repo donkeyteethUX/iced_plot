@@ -98,7 +98,7 @@ impl App {
 
                 if let Some(drag_event) = drag_event {
                     match drag_event {
-                        DragEvent::Start { world } => {
+                        DragEvent::Start { world, .. } => {
                             self.active_control_point = nearest_control_point_index(
                                 &self.control_points,
                                 world,
@@ -106,7 +106,7 @@ impl App {
                             );
                             self.move_control_point(world);
                         }
-                        DragEvent::Update { world } => {
+                        DragEvent::Update { world, .. } => {
                             self.move_control_point(world);
                         }
                         DragEvent::End { .. } => {

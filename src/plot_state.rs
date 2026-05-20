@@ -515,9 +515,10 @@ impl PlotState {
                 }
 
                 if self.drag.active
+                    && let Some(button) = self.drag.button
                     && let Some(world) = self.cursor_world_data(viewport)
                 {
-                    *publish_drag_event = Some(DragEvent::Update { world });
+                    *publish_drag_event = Some(DragEvent::Update { button, world });
                 }
 
                 // Hover picking (only when not panning or selecting)
@@ -582,7 +583,7 @@ impl PlotState {
                         self.drag.active = true;
                         self.drag.button = Some(button);
                         if let Some(world) = self.cursor_world_data(viewport) {
-                            *publish_drag_event = Some(DragEvent::Start { world });
+                            *publish_drag_event = Some(DragEvent::Start { button, world });
                         }
                     }
                 }
@@ -596,7 +597,7 @@ impl PlotState {
                     && self.drag.button == Some(button)
                     && let Some(world) = self.cursor_world_data(viewport)
                 {
-                    *publish_drag_event = Some(DragEvent::End { world });
+                    *publish_drag_event = Some(DragEvent::End { button, world });
                     self.drag.active = false;
                     self.drag.button = None;
                 }
@@ -1254,12 +1255,14 @@ mod tests {
             },
         );
 
-        let mut state = PlotState::default();
-        state.bounds = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            ..PlotState::default()
         };
         state.camera.position = DVec2::ZERO;
         state.camera.half_extents = DVec2::new(10.0, 20.0);
@@ -1282,12 +1285,14 @@ mod tests {
         let mut widget = PlotWidget::new();
         widget.controls.unbind_arrow_pan();
 
-        let mut state = PlotState::default();
-        state.bounds = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            ..PlotState::default()
         };
         state.camera.position = DVec2::ZERO;
         state.camera.half_extents = DVec2::new(10.0, 20.0);
@@ -1309,14 +1314,16 @@ mod tests {
             .controls
             .set_drag_action(DragAction::Pan, Some(mouse::Button::Middle));
 
-        let mut state = PlotState::default();
-        state.bounds = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            cursor_position: Vec2::new(50.0, 50.0),
+            ..PlotState::default()
         };
-        state.cursor_position = Vec2::new(50.0, 50.0);
 
         let mut hover_pick = None;
         let mut drag_event = None;
@@ -1346,14 +1353,16 @@ mod tests {
     #[test]
     fn unbound_non_left_button_publishes_drag_events() {
         let widget = PlotWidget::new();
-        let mut state = PlotState::default();
-        state.bounds = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            cursor_position: Vec2::new(50.0, 50.0),
+            ..PlotState::default()
         };
-        state.cursor_position = Vec2::new(50.0, 50.0);
 
         let mut hover_pick = None;
         let mut drag_event = None;
@@ -1365,7 +1374,13 @@ mod tests {
             &mut drag_event,
         );
 
-        assert!(matches!(drag_event, Some(DragEvent::Start { .. })));
+        assert!(matches!(
+            drag_event,
+            Some(DragEvent::Start {
+                button: mouse::Button::Middle,
+                ..
+            })
+        ));
         assert!(state.drag.active);
         assert_eq!(state.drag.button, Some(mouse::Button::Middle));
 
@@ -1378,7 +1393,13 @@ mod tests {
             &mut drag_event,
         );
 
-        assert!(matches!(drag_event, Some(DragEvent::End { .. })));
+        assert!(matches!(
+            drag_event,
+            Some(DragEvent::End {
+                button: mouse::Button::Middle,
+                ..
+            })
+        ));
         assert!(!state.drag.active);
         assert_eq!(state.drag.button, None);
     }
@@ -1391,14 +1412,16 @@ mod tests {
             .set_drag_action(DragAction::Pan, Some(mouse::Button::Right))
             .set_drag_action(DragAction::BoxZoom, Some(mouse::Button::Left));
 
-        let mut state = PlotState::default();
-        state.bounds = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            cursor_position: Vec2::new(50.0, 50.0),
+            ..PlotState::default()
         };
-        state.cursor_position = Vec2::new(50.0, 50.0);
 
         let point_id = PointId {
             series_id: ShapeId::new(),
@@ -1435,16 +1458,18 @@ mod tests {
             .set_drag_action(DragAction::Pan, Some(mouse::Button::Right))
             .set_drag_action(DragAction::BoxZoom, Some(mouse::Button::Left));
 
-        let mut state = PlotState::default();
-        state.bounds = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            cursor_position: Vec2::new(50.0, 50.0),
+            data_min: Some(DVec2::new(10.0, 20.0)),
+            data_max: Some(DVec2::new(30.0, 60.0)),
+            ..PlotState::default()
         };
-        state.cursor_position = Vec2::new(50.0, 50.0);
-        state.data_min = Some(DVec2::new(10.0, 20.0));
-        state.data_max = Some(DVec2::new(30.0, 60.0));
         state.camera.position = DVec2::ZERO;
 
         let mut hover_pick = None;
@@ -1478,15 +1503,17 @@ mod tests {
             KeyAction::Autoscale,
         );
 
-        let mut state = PlotState::default();
-        state.bounds = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            data_min: Some(DVec2::new(10.0, 20.0)),
+            data_max: Some(DVec2::new(30.0, 60.0)),
+            ..PlotState::default()
         };
-        state.data_min = Some(DVec2::new(10.0, 20.0));
-        state.data_max = Some(DVec2::new(30.0, 60.0));
         state.camera.position = DVec2::ZERO;
 
         let changed = state.handle_keyboard_event(
