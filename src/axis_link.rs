@@ -24,13 +24,13 @@ impl AxisLink {
     }
 
     /// Get the current position and half extent
-    pub(crate) fn get(&self) -> (f64, f64, u64) {
+    pub fn get(&self) -> (f64, f64, u64) {
         let inner = self.inner.read().unwrap();
         (inner.position, inner.half_extent, inner.version)
     }
 
     /// Update the position and half extent, incrementing the version
-    pub(crate) fn set(&self, position: f64, half_extent: f64) {
+    pub fn set(&self, position: f64, half_extent: f64) {
         let mut inner = self.inner.write().unwrap();
         inner.position = position;
         inner.half_extent = half_extent;
