@@ -1,7 +1,7 @@
 use iced::{
     Element, Length, Point, Rectangle, Theme, Vector,
     advanced::{
-        Clipboard, Layout, Shell, Widget, layout, overlay, renderer,
+        Clipboard, Layout, Renderer as _, Shell, Widget, layout, overlay, renderer,
         widget::{Tree, tree},
     },
     alignment::{Horizontal, Vertical},
@@ -273,9 +273,11 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for PositionedOverlay<'_, M
             return;
         };
         if let Some(layout) = layout.children().next() {
-            self.content
-                .as_widget()
-                .draw(tree, renderer, theme, style, layout, cursor, &viewport);
+            renderer.with_layer(viewport, |renderer| {
+                self.content
+                    .as_widget()
+                    .draw(tree, renderer, theme, style, layout, cursor, &viewport);
+            });
         }
     }
 
