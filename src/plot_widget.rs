@@ -1565,8 +1565,15 @@ fn update_plot_program<const IS_CANVAS: bool>(
 
             match mouse_event {
                 iced::mouse::Event::CursorMoved { .. } => {
-                    maybe_submit_hover_request(widget, state, &mut effects);
-                    update_cursor_overlay_on_move(widget, state, &mut effects);
+                    if state.available_cursor_is_inside(cursor) {
+                        maybe_submit_hover_request(widget, state, &mut effects);
+                        update_cursor_overlay_on_move(widget, state, &mut effects);
+                    } else {
+                        clear_hover_effect(widget, state, &mut effects);
+                        if widget.cursor_overlay {
+                            effects.clear_cursor_position = true;
+                        }
+                    }
                     invalidation.overlay_layer();
                 }
                 iced::mouse::Event::CursorLeft => {
@@ -1578,6 +1585,7 @@ fn update_plot_program<const IS_CANVAS: bool>(
         }
         iced::Event::Keyboard(keyboard_event) => {
             if let keyboard::Event::KeyPressed { key, .. } = keyboard_event
+                && state.available_cursor_is_inside(cursor)
                 && widget.controls.key_action(key) == Some(KeyAction::ClearPick)
             {
                 effects.hover_pick = Some(HoverPickEvent::ClearPick);

@@ -457,6 +457,40 @@ impl PlotState {
         self.point_inside(self.cursor_position.x, self.cursor_position.y)
     }
 
+    fn cursor_local_position(&self, cursor: mouse::Cursor, allow_levitating: bool) -> Option<Vec2> {
+        let position = match cursor {
+            mouse::Cursor::Available(position) => position,
+            mouse::Cursor::Levitating(position) if allow_levitating => position,
+            mouse::Cursor::Levitating(_) | mouse::Cursor::Unavailable => return None,
+        };
+
+        Some(Vec2::new(
+            position.x - self.bounds.x,
+            position.y - self.bounds.y,
+        ))
+    }
+
+    fn available_cursor_local_position_inside(&self, cursor: mouse::Cursor) -> Option<Vec2> {
+        let position = self.cursor_local_position(cursor, false)?;
+        self.point_inside(position.x, position.y)
+            .then_some(position)
+    }
+
+    pub(crate) fn available_cursor_is_inside(&self, cursor: mouse::Cursor) -> bool {
+        self.available_cursor_local_position_inside(cursor)
+            .is_some()
+    }
+
+    pub(crate) fn drag_in_progress(&self) -> bool {
+        self.pan.active || self.selection.active || self.drag.active
+    }
+
+    fn drag_in_progress_for(&self, button: mouse::Button) -> bool {
+        (self.pan.active && self.pan.button == Some(button))
+            || (self.selection.active && self.selection.button == Some(button))
+            || (self.drag.active && self.drag.button == Some(button))
+    }
+
     pub(crate) fn handle_mouse_event(
         &mut self,
         event: Event,
@@ -472,17 +506,18 @@ impl PlotState {
         let viewport: DVec2 = Vec2::new(self.bounds.width, self.bounds.height).into();
 
         match event {
-            Event::CursorMoved { mut position } => {
-                if let mouse::Cursor::Available(p) | mouse::Cursor::Levitating(p) = cursor {
-                    // cursor position can consider the scrolled offset
-                    position = p;
-                }
-                // Check if the cursor is inside this widget's bounds in window space
+            Event::CursorMoved { .. } => {
+                let Some(position) = self.cursor_local_position(cursor, self.drag_in_progress())
+                else {
+                    if self.picking.last_hover_cache.is_some() {
+                        self.picking.last_hover_cache = None;
+                        needs_redraw = true;
+                    }
+                    return needs_redraw;
+                };
                 let inside = self.point_inside(position.x, position.y);
 
-                // Store cursor in local coordinates (relative to bounds)
-                self.cursor_position =
-                    Vec2::new(position.x - self.bounds.x, position.y - self.bounds.y);
+                self.cursor_position = position;
                 // Update crosshairs position when enabled
                 if widget.crosshairs_enabled {
                     self.crosshairs_position = self.cursor_position;
@@ -548,10 +583,12 @@ impl PlotState {
             Event::ButtonPressed(button) => {
                 // Only start button-driven interactions when the press starts
                 // inside our bounds. Drags continue even if the cursor leaves.
-                let inside = self.cursor_inside();
-                if !inside {
+                let Some(cursor_position) = self.available_cursor_local_position_inside(cursor)
+                else {
                     return needs_redraw;
-                }
+                };
+
+                self.cursor_position = cursor_position;
 
                 self.press.active = true;
                 self.press.button = Some(button);
@@ -589,7 +626,26 @@ impl PlotState {
                 }
             }
             Event::ButtonReleased(button) => {
-                let click_candidate = self.press.button == Some(button)
+                let drag_release = self.drag_in_progress_for(button);
+                let release_position_available = if let Some(cursor_position) = if drag_release {
+                    self.cursor_local_position(cursor, true)
+                } else {
+                    self.available_cursor_local_position_inside(cursor)
+                } {
+                    self.cursor_position = cursor_position;
+                    true
+                } else if !drag_release {
+                    if self.press.button == Some(button) {
+                        self.press.active = false;
+                        self.press.button = None;
+                    }
+                    return needs_redraw;
+                } else {
+                    false
+                };
+
+                let click_candidate = release_position_available
+                    && self.press.button == Some(button)
                     && (self.cursor_position - self.press.start).length()
                         <= widget.controls.drag_delta_threshold();
 
@@ -655,10 +711,12 @@ impl PlotState {
             }
             Event::WheelScrolled { delta } => {
                 // Only respond to wheel when cursor is inside our bounds
-                let inside = self.cursor_inside();
-                if !inside {
+                let Some(cursor_position) = self.available_cursor_local_position_inside(cursor)
+                else {
                     return needs_redraw;
-                }
+                };
+
+                self.cursor_position = cursor_position;
 
                 let (x, y) = match delta {
                     iced::mouse::ScrollDelta::Lines { x, y } => (x, y),
@@ -696,11 +754,14 @@ impl PlotState {
         widget: &PlotWidget,
         cursor: mouse::Cursor,
     ) -> bool {
-        if let keyboard::Event::ModifiersChanged(modifiers) = event {
-            self.modifiers = *modifiers;
-        }
+        let cursor_over = self.available_cursor_is_inside(cursor);
 
-        let cursor_over = cursor.is_over(self.bounds);
+        if let keyboard::Event::ModifiersChanged(modifiers) = event {
+            if cursor_over {
+                self.modifiers = *modifiers;
+            }
+            return false;
+        }
 
         let keyboard::Event::KeyPressed { key, .. } = event else {
             return false;
@@ -1348,6 +1409,229 @@ mod tests {
 
         assert!(!state.pan.active);
         assert_eq!(state.pan.button, None);
+    }
+
+    #[test]
+    fn levitating_cursor_does_not_start_drag_pan() {
+        let widget = PlotWidget::new();
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 100.0,
+                width: 100.0,
+                height: 300.0,
+            },
+            cursor_position: Vec2::new(50.0, 50.0),
+            ..PlotState::default()
+        };
+
+        let mut hover_pick = None;
+        let mut drag_event = None;
+        state.handle_mouse_event(
+            Event::ButtonPressed(mouse::Button::Left),
+            mouse::Cursor::Levitating(Point::new(50.0, 350.0)),
+            &widget,
+            &mut hover_pick,
+            &mut drag_event,
+        );
+
+        assert!(!state.pan.active);
+        assert_eq!(state.pan.button, None);
+    }
+
+    #[test]
+    fn levitating_cursor_continues_active_drag_pan() {
+        let widget = PlotWidget::new();
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 100.0,
+                width: 100.0,
+                height: 300.0,
+            },
+            ..PlotState::default()
+        };
+        state.camera.position = DVec2::ZERO;
+        state.camera.half_extents = DVec2::new(10.0, 30.0);
+
+        let mut hover_pick = None;
+        let mut drag_event = None;
+        state.handle_mouse_event(
+            Event::ButtonPressed(mouse::Button::Left),
+            mouse::Cursor::Available(Point::new(50.0, 150.0)),
+            &widget,
+            &mut hover_pick,
+            &mut drag_event,
+        );
+
+        state.handle_mouse_event(
+            Event::CursorMoved {
+                position: Point::new(50.0, 450.0),
+            },
+            mouse::Cursor::Levitating(Point::new(50.0, 450.0)),
+            &widget,
+            &mut hover_pick,
+            &mut drag_event,
+        );
+
+        assert!(state.pan.active);
+        assert_eq!(state.cursor_position, Vec2::new(50.0, 350.0));
+        assert_ne!(state.camera.position, DVec2::ZERO);
+    }
+
+    #[test]
+    fn levitating_cursor_does_not_scroll_pan() {
+        let widget = PlotWidget::new();
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 100.0,
+                width: 100.0,
+                height: 300.0,
+            },
+            cursor_position: Vec2::new(50.0, 50.0),
+            ..PlotState::default()
+        };
+        state.camera.position = DVec2::ZERO;
+        state.camera.half_extents = DVec2::new(10.0, 30.0);
+
+        let mut hover_pick = None;
+        let mut drag_event = None;
+        state.handle_mouse_event(
+            Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+            },
+            mouse::Cursor::Levitating(Point::new(50.0, 350.0)),
+            &widget,
+            &mut hover_pick,
+            &mut drag_event,
+        );
+
+        assert_eq!(state.camera.position, DVec2::ZERO);
+    }
+
+    #[test]
+    fn levitating_cursor_does_not_release_click() {
+        let widget = PlotWidget::new();
+        let point_id = PointId {
+            series_id: ShapeId::new(),
+            point_index: 0,
+        };
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 100.0,
+                width: 100.0,
+                height: 300.0,
+            },
+            cursor_position: Vec2::new(50.0, 50.0),
+            press: ButtonPressState {
+                active: true,
+                button: Some(mouse::Button::Left),
+                start: Vec2::new(50.0, 50.0),
+            },
+            ..PlotState::default()
+        };
+
+        let mut hover_pick = Some(HoverPickEvent::Hover(point_id));
+        let mut drag_event = None;
+        state.handle_mouse_event(
+            Event::ButtonReleased(mouse::Button::Left),
+            mouse::Cursor::Levitating(Point::new(50.0, 350.0)),
+            &widget,
+            &mut hover_pick,
+            &mut drag_event,
+        );
+
+        assert!(matches!(hover_pick, Some(HoverPickEvent::Hover(id)) if id == point_id));
+        assert!(!state.press.active);
+    }
+
+    #[test]
+    fn available_cursor_uses_absolute_bounds_for_drag_start() {
+        let widget = PlotWidget::new();
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 100.0,
+                width: 100.0,
+                height: 300.0,
+            },
+            ..PlotState::default()
+        };
+
+        let mut hover_pick = None;
+        let mut drag_event = None;
+        state.handle_mouse_event(
+            Event::ButtonPressed(mouse::Button::Left),
+            mouse::Cursor::Available(Point::new(50.0, 350.0)),
+            &widget,
+            &mut hover_pick,
+            &mut drag_event,
+        );
+
+        assert!(state.pan.active);
+        assert_eq!(state.pan.button, Some(mouse::Button::Left));
+        assert_eq!(state.cursor_position, Vec2::new(50.0, 250.0));
+    }
+
+    #[test]
+    fn levitating_cursor_does_not_enable_keyboard_pan() {
+        let mut widget = PlotWidget::new();
+        widget.controls.bind_key(
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight),
+            KeyAction::PanBy {
+                direction: PanDirection::Right,
+                fraction: 0.25,
+            },
+        );
+
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 100.0,
+                width: 100.0,
+                height: 300.0,
+            },
+            ..PlotState::default()
+        };
+        state.camera.position = DVec2::ZERO;
+        state.camera.half_extents = DVec2::new(10.0, 20.0);
+
+        let changed = state.handle_keyboard_event(
+            &arrow_key_event(
+                keyboard::key::Named::ArrowRight,
+                keyboard::key::Code::ArrowRight,
+            ),
+            &widget,
+            mouse::Cursor::Levitating(Point::new(50.0, 350.0)),
+        );
+
+        assert!(!changed);
+        assert_eq!(state.camera.position, DVec2::ZERO);
+    }
+
+    #[test]
+    fn levitating_cursor_does_not_update_keyboard_modifiers() {
+        let widget = PlotWidget::new();
+        let mut state = PlotState {
+            bounds: Rectangle {
+                x: 0.0,
+                y: 100.0,
+                width: 100.0,
+                height: 300.0,
+            },
+            modifiers: keyboard::Modifiers::NONE,
+            ..PlotState::default()
+        };
+
+        state.handle_keyboard_event(
+            &keyboard::Event::ModifiersChanged(keyboard::Modifiers::CTRL),
+            &widget,
+            mouse::Cursor::Levitating(Point::new(50.0, 350.0)),
+        );
+
+        assert_eq!(state.modifiers, keyboard::Modifiers::NONE);
     }
 
     #[test]
