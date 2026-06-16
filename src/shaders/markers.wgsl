@@ -7,8 +7,18 @@ const QUAD_POS: array<vec2<f32>, 4> = array<vec2<f32>, 4>(
 );
 const CIRCLE_RADIUS: f32 = 1.0;
 const EMPTY_CIRCLE_INNER: f32 = 0.7;
-const STAR_ANGLE_MULT: f32 = 5.0;
-const STAR_INNER_SCALE: f32 = 0.3;
+const STAR_POINTS: array<vec2<f32>, 10> = array<vec2<f32>, 10>(
+    vec2<f32>(0.0, 1.0),
+    vec2<f32>(0.264503, 0.364057),
+    vec2<f32>(0.951057, 0.309017),
+    vec2<f32>(0.427975, -0.139058),
+    vec2<f32>(0.587785, -0.809017),
+    vec2<f32>(0.0, -0.45),
+    vec2<f32>(-0.587785, -0.809017),
+    vec2<f32>(-0.427975, -0.139058),
+    vec2<f32>(-0.951057, 0.309017),
+    vec2<f32>(-0.264503, 0.364057),
+);
 const MARKER_SIZE_MODE_MASK: u32 = 1u;
 const MARKER_SIZE_WORLD: u32 = 1u;
 
@@ -76,57 +86,85 @@ fn vs_main(
     return out;
 }
 
+fn segment_distance(point: vec2<f32>, start: vec2<f32>, end: vec2<f32>) -> f32 {
+    let segment = end - start;
+    let t = clamp(dot(point - start, segment) / dot(segment, segment), 0.0, 1.0);
+    return length(point - (start + segment * t));
+}
+
+fn star_signed_distance(point: vec2<f32>) -> f32 {
+    var inside = false;
+    var edge_distance = 1e6;
+    var previous = STAR_POINTS[9];
+
+    for (var i = 0u; i < 10u; i = i + 1u) {
+        let current = STAR_POINTS[i];
+        if ((current.y > point.y) != (previous.y > point.y)) {
+            let intersection_x =
+                (previous.x - current.x) * (point.y - current.y) / (previous.y - current.y)
+                + current.x;
+            if (point.x < intersection_x) {
+                inside = !inside;
+            }
+        }
+        edge_distance = min(edge_distance, segment_distance(point, previous, current));
+        previous = current;
+    }
+
+    if inside {
+        return -edge_distance;
+    }
+    return edge_distance;
+}
+
+fn marker_alpha(sdf: f32) -> f32 {
+    let width = max(fwidth(sdf), 1e-4);
+    return 1.0 - smoothstep(-width, width, sdf);
+}
+
 // Fragment shader
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let dist = length(in.local_pos);
+    var alpha = 0.0;
 
     // Different marker shapes
     switch in.marker_type {
         case 0u { // Filled Circle
-            if dist <= CIRCLE_RADIUS {
-                return vec4<f32>(in.color.rgb, 1.0);
-            }
+            alpha = marker_alpha(dist - CIRCLE_RADIUS);
         }
         case 1u { // Empty Circle (ring)
-            if dist >= EMPTY_CIRCLE_INNER && dist <= CIRCLE_RADIUS {
-                return vec4<f32>(in.color.rgb, 1.0);
-            }
+            let sdf = max(EMPTY_CIRCLE_INNER - dist, dist - CIRCLE_RADIUS);
+            alpha = marker_alpha(sdf);
         }
         case 2u { // Square
-            if abs(in.local_pos.x) <= CIRCLE_RADIUS && abs(in.local_pos.y) <= CIRCLE_RADIUS {
-                return vec4<f32>(in.color.rgb, 1.0);
-            }
+            let sdf = max(abs(in.local_pos.x), abs(in.local_pos.y)) - CIRCLE_RADIUS;
+            alpha = marker_alpha(sdf);
         }
         case 3u { // Star
-            let angle = atan2(in.local_pos.y, in.local_pos.x);
-            let star_dist = CIRCLE_RADIUS - STAR_INNER_SCALE * abs(sin(angle * STAR_ANGLE_MULT));
-            if dist <= star_dist {
-                return vec4<f32>(in.color.rgb, 1.0);
-            }
+            alpha = marker_alpha(star_signed_distance(in.local_pos));
         }
         case 4u { // Triangle
             let x = in.local_pos.x;
             let y = in.local_pos.y;
             // Equilateral triangle pointing up: base from (-1, -0.866) to (1, -0.866), apex at (0, 0.866)
             // Height/base ratio of √3/2 ≈ 0.866 (truly equilateral), centered at y=0
-            if y >= -0.866 && y <= 0.866 {
-                // Calculate the fraction from base to apex (0 at base, 1 at apex)
-                let fraction = (y + 0.866) / 1.732;
-                // Width decreases linearly from 2 at base to 0 at apex
-                let half_width = 1.0 * (1.0 - fraction);
-                let left_bound = -half_width;
-                let right_bound = half_width;
-                if x >= left_bound && x <= right_bound {
-                    return vec4<f32>(in.color.rgb, 1.0);
-                }
-            }
+            // Calculate the fraction from base to apex (0 at base, 1 at apex)
+            let fraction = (y + 0.866) / 1.732;
+            // Width decreases linearly from 2 at base to 0 at apex
+            let half_width = 1.0 * (1.0 - fraction);
+            let left_sdf = -half_width - x;
+            let right_sdf = x - half_width;
+            let bottom_sdf = -0.866 - y;
+            alpha = marker_alpha(max(max(left_sdf, right_sdf), bottom_sdf));
         }
         default {
             return vec4<f32>(in.color.rgb, 1.0);
         }
     }
 
-    // Transparent for areas outside the marker
-    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    if alpha <= 0.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return vec4<f32>(in.color.rgb, alpha);
 }

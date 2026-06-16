@@ -1622,6 +1622,8 @@ fn update_plot_program<const IS_CANVAS: bool>(
     }
 
     if state.camera != prev_camera || state.bounds != prev_bounds {
+        effects.needs_redraw = true;
+        effects.publish_camera_bounds = true;
         invalidation.all();
     }
 

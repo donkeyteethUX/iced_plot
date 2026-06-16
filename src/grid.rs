@@ -26,6 +26,7 @@ impl Grid {
         device: &Device,
         format: TextureFormat,
         camera_bgl: &BindGroupLayout,
+        sample_count: u32,
     ) {
         if self.pipeline.is_some() {
             return;
@@ -82,7 +83,7 @@ impl Grid {
             },
             depth_stencil: None,
             multisample: MultisampleState {
-                count: 1,
+                count: sample_count,
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },

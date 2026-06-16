@@ -16,6 +16,8 @@ use iced::{
     widget::canvas::{self, Frame, Geometry},
 };
 
+const GRID_STROKE_WIDTH: f32 = 0.5;
+
 fn rgba_to_color(rgba: [f32; 4]) -> Color {
     Color::from_rgba(rgba[0], rgba[1], rgba[2], rgba[3])
 }
@@ -85,7 +87,12 @@ fn draw_grid(frame: &mut Frame, state: &PlotState, bounds: Rectangle) {
             iced::Point::new(tick.screen_pos, 0.0),
             iced::Point::new(tick.screen_pos, bounds.height),
         );
-        frame.stroke(&line, canvas::Stroke::default().with_color(color));
+        frame.stroke(
+            &line,
+            canvas::Stroke::default()
+                .with_width(GRID_STROKE_WIDTH)
+                .with_color(color),
+        );
     }
 
     for tick in &state.y_ticks {
@@ -98,7 +105,12 @@ fn draw_grid(frame: &mut Frame, state: &PlotState, bounds: Rectangle) {
             iced::Point::new(0.0, tick.screen_pos),
             iced::Point::new(bounds.width, tick.screen_pos),
         );
-        frame.stroke(&line, canvas::Stroke::default().with_color(color));
+        frame.stroke(
+            &line,
+            canvas::Stroke::default()
+                .with_width(GRID_STROKE_WIDTH)
+                .with_color(color),
+        );
     }
 }
 
@@ -324,7 +336,7 @@ fn draw_highlights(frame: &mut Frame, state: &PlotState, bounds: Rectangle) {
         }
 
         let center = world_to_canvas_point(plot_pos, &state.camera, &bounds);
-        let size = marker_style.size.to_px(&state.camera, &bounds) + mask_padding;
+        let size = marker_style.size.to_px(&state.camera, &bounds) * 0.5 + mask_padding;
         let rect = canvas::Path::rectangle(
             iced::Point::new(center.x - size, center.y - size),
             iced::Size::new(size * 2.0, size * 2.0),
@@ -426,8 +438,9 @@ fn draw_marker(
     let path = marker_path(center, radius, marker_type);
     match marker_type {
         MarkerType::EmptyCircle => {
+            let ring_path = canvas::Path::circle(center, radius * 0.85);
             frame.stroke(
-                &path,
+                &ring_path,
                 canvas::Stroke::default()
                     .with_width((radius * 0.3).max(1.0))
                     .with_color(color),
@@ -526,9 +539,15 @@ fn marker_path(center: iced::Point, radius: f32, marker_type: MarkerType) -> can
             iced::Size::new(radius * 2.0, radius * 2.0),
         ),
         MarkerType::Triangle => canvas::Path::new(|builder| {
-            builder.move_to(iced::Point::new(center.x, center.y - radius));
-            builder.line_to(iced::Point::new(center.x + radius, center.y + radius));
-            builder.line_to(iced::Point::new(center.x - radius, center.y + radius));
+            builder.move_to(iced::Point::new(center.x, center.y - radius * 0.866));
+            builder.line_to(iced::Point::new(
+                center.x + radius,
+                center.y + radius * 0.866,
+            ));
+            builder.line_to(iced::Point::new(
+                center.x - radius,
+                center.y + radius * 0.866,
+            ));
             builder.close();
         }),
         MarkerType::Star => canvas::Path::new(|builder| {
