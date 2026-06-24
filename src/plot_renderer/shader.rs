@@ -10,11 +10,73 @@ use crate::{LineType, Size, camera::CameraUniform, grid::Grid, plot_state::PlotS
 use iced::widget::shader::Viewport;
 use iced::{Rectangle, wgpu::*};
 
+const MSAA_SAMPLE_COUNT: u32 = 4;
+
 pub struct RenderParams<'a> {
     pub encoder: &'a mut CommandEncoder,
     pub target: &'a TextureView,
     /// clip_bounds considers crop in scrollable viewport
     pub clip_bounds: &'a Rectangle<u32>,
+}
+
+fn msaa_state() -> MultisampleState {
+    MultisampleState {
+        count: MSAA_SAMPLE_COUNT,
+        mask: !0,
+        alpha_to_coverage_enabled: false,
+    }
+}
+
+fn create_color_texture(
+    device: &Device,
+    label: &'static str,
+    width: u32,
+    height: u32,
+    sample_count: u32,
+    format: TextureFormat,
+    usage: TextureUsages,
+) -> Texture {
+    device.create_texture(&TextureDescriptor {
+        label: Some(label),
+        size: Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count,
+        dimension: TextureDimension::D2,
+        format,
+        usage,
+        view_formats: &[],
+    })
+}
+
+fn msaa_attachment<'a>(
+    targets: &'a MsaaTargets,
+    load: LoadOp<Color>,
+) -> RenderPassColorAttachment<'a> {
+    RenderPassColorAttachment {
+        view: &targets.msaa_view,
+        resolve_target: Some(&targets.resolved_view),
+        ops: Operations {
+            load,
+            store: StoreOp::Store,
+        },
+        depth_slice: None,
+    }
+}
+
+fn target_attachment(target: &TextureView) -> RenderPassColorAttachment<'_> {
+    RenderPassColorAttachment {
+        view: target,
+        resolve_target: None,
+        ops: Operations {
+            load: LoadOp::Load,
+            store: StoreOp::Store,
+        },
+        depth_slice: None,
+    }
 }
 
 #[derive(Default, Clone)]
@@ -69,6 +131,7 @@ struct PipelineCache {
     fill: Option<RenderPipeline>,
     overlay: Option<RenderPipeline>,
     line_overlay: Option<RenderPipeline>,
+    composite: Option<RenderPipeline>,
 }
 
 impl PipelineCache {
@@ -79,8 +142,19 @@ impl PipelineCache {
             fill: None,
             overlay: None,
             line_overlay: None,
+            composite: None,
         }
     }
+}
+
+struct MsaaTargets {
+    width: u32,
+    height: u32,
+    _msaa_texture: Texture,
+    msaa_view: TextureView,
+    _resolved_texture: Texture,
+    resolved_view: TextureView,
+    composite_bind_group: BindGroup,
 }
 
 /// Cache for vertex buffers
@@ -199,6 +273,9 @@ pub struct PlotRenderer {
     camera_buffer: Buffer,
     camera_bind_group: BindGroup,
     camera_bgl: BindGroupLayout,
+    composite_bgl: BindGroupLayout,
+    composite_sampler: Sampler,
+    msaa_targets: Option<MsaaTargets>,
     // Caches
     pipelines: PipelineCache,
     buffers: BufferCache,
@@ -241,11 +318,45 @@ impl PlotRenderer {
                 resource: camera_buffer.as_entire_binding(),
             }],
         });
+        let composite_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("plot composite bgl"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+            ],
+        });
+        let composite_sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("plot composite sampler"),
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            address_mode_w: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Nearest,
+            min_filter: FilterMode::Nearest,
+            mipmap_filter: FilterMode::Nearest,
+            ..SamplerDescriptor::default()
+        });
         Self {
             format,
             camera_buffer,
             camera_bind_group,
             camera_bgl,
+            composite_bgl,
+            composite_sampler,
+            msaa_targets: None,
             pipelines: PipelineCache::new(),
             buffers: BufferCache::new(),
             versions: VersionTracker::new(),
@@ -306,7 +417,7 @@ impl PlotRenderer {
     ) {
         self.ensure_marker_pipeline(device);
         self.grid
-            .ensure_pipeline(device, self.format, &self.camera_bgl);
+            .ensure_pipeline(device, self.format, &self.camera_bgl, MSAA_SAMPLE_COUNT);
         self.grid.update(device, state);
         if !state.fills.is_empty() {
             self.ensure_fill_pipeline(device);
@@ -319,6 +430,7 @@ impl PlotRenderer {
         }
         self.ensure_overlay_pipeline(device);
         self.ensure_line_overlay_pipeline(device);
+        self.ensure_composite_pipeline(device);
     }
     fn set_bounds(&mut self, w: u32, h: u32) {
         self.bounds_w = w;
@@ -326,6 +438,66 @@ impl PlotRenderer {
     }
     fn set_scale_factor(&mut self, scale: f32) {
         self.scale_factor = scale;
+    }
+
+    fn ensure_msaa_targets(&mut self, device: &Device, width: u32, height: u32) {
+        let width = width.max(1);
+        let height = height.max(1);
+
+        if self
+            .msaa_targets
+            .as_ref()
+            .is_some_and(|targets| targets.width == width && targets.height == height)
+        {
+            return;
+        }
+
+        let msaa_texture = create_color_texture(
+            device,
+            "iced_plot msaa color",
+            width,
+            height,
+            MSAA_SAMPLE_COUNT,
+            self.format,
+            TextureUsages::RENDER_ATTACHMENT,
+        );
+        let msaa_view = msaa_texture.create_view(&TextureViewDescriptor::default());
+
+        let resolved_texture = create_color_texture(
+            device,
+            "iced_plot resolved color",
+            width,
+            height,
+            1,
+            self.format,
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        );
+        let resolved_view = resolved_texture.create_view(&TextureViewDescriptor::default());
+
+        let composite_bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("plot composite bind group"),
+            layout: &self.composite_bgl,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&resolved_view),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Sampler(&self.composite_sampler),
+                },
+            ],
+        });
+
+        self.msaa_targets = Some(MsaaTargets {
+            width,
+            height,
+            _msaa_texture: msaa_texture,
+            msaa_view,
+            _resolved_texture: resolved_texture,
+            resolved_view,
+            composite_bind_group,
+        });
     }
 
     fn sync(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
@@ -381,9 +553,11 @@ impl PlotRenderer {
         let scale_factor = viewport.scale_factor();
         let bounds_width = (bounds.width * scale_factor) as u32;
         let bounds_height = (bounds.height * scale_factor) as u32;
+        let viewport_size = viewport.physical_size();
 
         self.set_bounds(bounds_width, bounds_height);
         self.set_scale_factor(scale_factor);
+        self.ensure_msaa_targets(device, viewport_size.width, viewport_size.height);
 
         // Sync picking viewport
         self.picking
@@ -500,7 +674,7 @@ impl PlotRenderer {
                 conservative: false,
             },
             depth_stencil: None,
-            multisample: MultisampleState::default(),
+            multisample: msaa_state(),
             multiview: None,
             cache: None,
         });
@@ -610,7 +784,7 @@ impl PlotRenderer {
                 conservative: false,
             },
             depth_stencil: None,
-            multisample: MultisampleState::default(),
+            multisample: msaa_state(),
             multiview: None,
             cache: None,
         });
@@ -671,7 +845,7 @@ impl PlotRenderer {
                 conservative: false,
             },
             depth_stencil: None,
-            multisample: MultisampleState::default(),
+            multisample: msaa_state(),
             multiview: None,
             cache: None,
         });
@@ -733,7 +907,7 @@ impl PlotRenderer {
                 conservative: false,
             },
             depth_stencil: None,
-            multisample: MultisampleState::default(),
+            multisample: msaa_state(),
             multiview: None,
             cache: None,
         });
@@ -794,11 +968,68 @@ impl PlotRenderer {
                 conservative: false,
             },
             depth_stencil: None,
-            multisample: MultisampleState::default(),
+            multisample: msaa_state(),
             multiview: None,
             cache: None,
         });
         self.pipelines.line_overlay = Some(pipeline);
+    }
+
+    fn ensure_composite_pipeline(&mut self, device: &Device) {
+        if self.pipelines.composite.is_some() {
+            return;
+        }
+        let shader = device.create_shader_module(include_wgsl!("../shaders/composite.wgsl"));
+        let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("plot composite layout"),
+            bind_group_layouts: &[&self.composite_bgl],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("plot composite pipeline"),
+            layout: Some(&layout),
+            vertex: VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            fragment: Some(FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: PipelineCompilationOptions::default(),
+                targets: &[Some(ColorTargetState {
+                    format: self.format,
+                    blend: Some(BlendState {
+                        color: BlendComponent {
+                            src_factor: BlendFactor::One,
+                            dst_factor: BlendFactor::OneMinusSrcAlpha,
+                            operation: BlendOperation::Add,
+                        },
+                        alpha: BlendComponent {
+                            src_factor: BlendFactor::One,
+                            dst_factor: BlendFactor::OneMinusSrcAlpha,
+                            operation: BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        self.pipelines.composite = Some(pipeline);
     }
 
     fn rebuild_markers(&mut self, device: &Device, queue: &Queue, state: &PlotState) {
@@ -1334,6 +1565,10 @@ impl PlotRenderer {
     }
 
     pub fn encode(&self, params: RenderParams) {
+        let Some(msaa_targets) = &self.msaa_targets else {
+            return;
+        };
+
         // Convert bounds to viewport coordinates
         let x = self.bounds.x * self.scale_factor;
         let y = self.bounds.y * self.scale_factor;
@@ -1344,15 +1579,10 @@ impl PlotRenderer {
         {
             let mut pass = params.encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("iced_plot main"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: params.target,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Load,
-                        store: StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
+                color_attachments: &[Some(msaa_attachment(
+                    msaa_targets,
+                    LoadOp::Clear(Color::TRANSPARENT),
+                ))],
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,
                 timestamp_writes: None,
@@ -1423,15 +1653,7 @@ impl PlotRenderer {
         if let Some(pipeline) = self.pipelines.overlay.as_ref() {
             let mut pass = params.encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("selection overlay"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: params.target,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Load,
-                        store: StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
+                color_attachments: &[Some(msaa_attachment(msaa_targets, LoadOp::Load))],
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,
                 timestamp_writes: None,
@@ -1471,15 +1693,7 @@ impl PlotRenderer {
         ) {
             let mut pass = params.encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("crosshairs overlay"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: params.target,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Load,
-                        store: StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
+                color_attachments: &[Some(msaa_attachment(msaa_targets, LoadOp::Load))],
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,
                 timestamp_writes: None,
@@ -1497,6 +1711,34 @@ impl PlotRenderer {
             pass.set_pipeline(pipeline);
             pass.set_vertex_buffer(0, vb.buffer.slice(..));
             pass.draw(0..vb.vertex_count, 0..1);
+        }
+
+        if let Some(pipeline) = self.pipelines.composite.as_ref() {
+            let mut pass = params.encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("iced_plot composite"),
+                color_attachments: &[Some(target_attachment(params.target))],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+
+            pass.set_viewport(
+                0.0,
+                0.0,
+                msaa_targets.width as f32,
+                msaa_targets.height as f32,
+                0.0,
+                1.0,
+            );
+            pass.set_scissor_rect(
+                params.clip_bounds.x,
+                params.clip_bounds.y,
+                params.clip_bounds.width,
+                params.clip_bounds.height,
+            );
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &msaa_targets.composite_bind_group, &[]);
+            pass.draw(0..3, 0..1);
         }
     }
 }
