@@ -117,8 +117,7 @@ fn star_signed_distance(point: vec2<f32>) -> f32 {
     return edge_distance;
 }
 
-fn marker_alpha(sdf: f32) -> f32 {
-    let width = max(fwidth(sdf), 1e-4);
+fn marker_alpha(sdf: f32, width: f32) -> f32 {
     return 1.0 - smoothstep(-width, width, sdf);
 }
 
@@ -126,23 +125,24 @@ fn marker_alpha(sdf: f32) -> f32 {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let dist = length(in.local_pos);
+    let edge_width = max(length(fwidth(in.local_pos)), 1e-4);
     var alpha = 0.0;
 
     // Different marker shapes
     switch in.marker_type {
         case 0u { // Filled Circle
-            alpha = marker_alpha(dist - CIRCLE_RADIUS);
+            alpha = marker_alpha(dist - CIRCLE_RADIUS, edge_width);
         }
         case 1u { // Empty Circle (ring)
             let sdf = max(EMPTY_CIRCLE_INNER - dist, dist - CIRCLE_RADIUS);
-            alpha = marker_alpha(sdf);
+            alpha = marker_alpha(sdf, edge_width);
         }
         case 2u { // Square
             let sdf = max(abs(in.local_pos.x), abs(in.local_pos.y)) - CIRCLE_RADIUS;
-            alpha = marker_alpha(sdf);
+            alpha = marker_alpha(sdf, edge_width);
         }
         case 3u { // Star
-            alpha = marker_alpha(star_signed_distance(in.local_pos));
+            alpha = marker_alpha(star_signed_distance(in.local_pos), edge_width);
         }
         case 4u { // Triangle
             let x = in.local_pos.x;
@@ -156,7 +156,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let left_sdf = -half_width - x;
             let right_sdf = x - half_width;
             let bottom_sdf = -0.866 - y;
-            alpha = marker_alpha(max(max(left_sdf, right_sdf), bottom_sdf));
+            alpha = marker_alpha(max(max(left_sdf, right_sdf), bottom_sdf), edge_width);
         }
         default {
             return vec4<f32>(in.color.rgb, 1.0);

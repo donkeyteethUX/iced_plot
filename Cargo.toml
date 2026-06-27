@@ -14,7 +14,7 @@ keywords    = ["iced", "plot", "widget", "wgpu", "plotting"]
 bytemuck = { version = "1.25", features = ["derive"] }
 glam     = "0.25"
 iced     = { version = "0.14", features = ["advanced"] }
-indexmap = "2.13"
+indexmap = "2.14"
 
 [features]
 default = []
