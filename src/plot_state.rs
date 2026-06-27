@@ -1068,6 +1068,119 @@ fn push_quad_as_triangles(
     vertices.extend_from_slice(&[a0, b0, a1, a1, b0, b1]);
 }
 
+fn series_points_are_paired(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
+    fn coordinates_match(a: f64, b: f64) -> bool {
+        const PAIRED_COORD_EPS: f64 = 1e-9;
+        (a - b).abs() <= PAIRED_COORD_EPS * (1.0 + a.abs().max(b.abs()))
+    }
+    fn point_is_finite([x, y]: [f64; 2]) -> bool {
+        x.is_finite() && y.is_finite()
+    }
+
+    if a.len() != b.len() || a.len() < 2 {
+        return false;
+    }
+
+    let mut paired_axes = [true, true];
+    for (&pa, &pb) in a.iter().zip(b) {
+        if !point_is_finite(pa) || !point_is_finite(pb) {
+            return false;
+        }
+
+        paired_axes[0] &= coordinates_match(pa[0], pb[0]);
+        paired_axes[1] &= coordinates_match(pa[1], pb[1]);
+    }
+
+    paired_axes[0] || paired_axes[1]
+}
+
+fn push_paired_series_fill_vertices(
+    vertices: &mut Vec<[f64; 2]>,
+    a: &[[f64; 2]],
+    b: &[[f64; 2]],
+) -> bool {
+    if !series_points_are_paired(a, b) {
+        return false;
+    }
+
+    vertices.reserve_exact((a.len() - 1) * 6);
+    for (a_segment, b_segment) in a.windows(2).zip(b.windows(2)) {
+        push_quad_as_triangles(
+            vertices,
+            a_segment[0],
+            b_segment[0],
+            a_segment[1],
+            b_segment[1],
+        );
+    }
+
+    true
+}
+
+fn push_interpolated_series_fill_vertices(
+    vertices: &mut Vec<[f64; 2]>,
+    a_points: Vec<[f64; 2]>,
+    b_points: Vec<[f64; 2]>,
+) -> Option<()> {
+    let a = monotonic_increasing_x(a_points);
+    let b = monotonic_increasing_x(b_points);
+    if a.len() < 2 || b.len() < 2 {
+        return None;
+    }
+
+    let overlap_min = a.first()?[0].max(b.first()?[0]);
+    let overlap_max = a.last()?[0].min(b.last()?[0]);
+    if overlap_min >= overlap_max {
+        return None;
+    }
+
+    let mut seg_a = find_segment_covering_x(&a, overlap_min)?;
+    let mut seg_b = find_segment_covering_x(&b, overlap_min)?;
+
+    let mut x_curr = overlap_min;
+    let mut y_a_curr = y_at_x_in_segment(&a, seg_a, x_curr)?;
+    let mut y_b_curr = y_at_x_in_segment(&b, seg_b, x_curr)?;
+
+    let eps = 1e-12;
+    loop {
+        let next_a = a.get(seg_a + 1).map(|p| p[0]).unwrap_or(f64::INFINITY);
+        let next_b = b.get(seg_b + 1).map(|p| p[0]).unwrap_or(f64::INFINITY);
+        let x_next = next_a.min(next_b).min(overlap_max);
+
+        if x_next <= x_curr + eps {
+            break;
+        }
+
+        let y_a_next = y_at_x_in_segment(&a, seg_a, x_next)?;
+        let y_b_next = y_at_x_in_segment(&b, seg_b, x_next)?;
+
+        push_quad_as_triangles(
+            vertices,
+            [x_curr, y_a_curr],
+            [x_curr, y_b_curr],
+            [x_next, y_a_next],
+            [x_next, y_b_next],
+        );
+
+        x_curr = x_next;
+        y_a_curr = y_a_next;
+        y_b_curr = y_b_next;
+
+        if x_curr >= overlap_max - eps {
+            break;
+        }
+
+        advance_segment_to_x(&a, &mut seg_a, x_curr);
+        advance_segment_to_x(&b, &mut seg_b, x_curr);
+
+        if seg_a + 1 >= a.len() || seg_b + 1 >= b.len() {
+            break;
+        }
+    }
+
+    Some(())
+}
+
 fn build_fill_span(
     widget: &PlotWidget,
     begin: ShapeId,
@@ -1084,70 +1197,21 @@ fn build_fill_span(
 
     match (begin_endpoint, end_endpoint) {
         (FillEndpoint::Series(sa), FillEndpoint::Series(sb)) => {
-            let a = monotonic_increasing_x(transformed_series_points(
+            let a_points = transformed_series_points(
                 sa,
                 widget.x_axis_scale,
                 widget.y_axis_scale,
                 axis_ranges,
-            ));
-            let b = monotonic_increasing_x(transformed_series_points(
+            );
+            let b_points = transformed_series_points(
                 sb,
                 widget.x_axis_scale,
                 widget.y_axis_scale,
                 axis_ranges,
-            ));
-            if a.len() < 2 || b.len() < 2 {
-                return None;
-            }
+            );
 
-            let overlap_min = a.first()?[0].max(b.first()?[0]);
-            let overlap_max = a.last()?[0].min(b.last()?[0]);
-            if overlap_min >= overlap_max {
-                return None;
-            }
-
-            let mut seg_a = find_segment_covering_x(&a, overlap_min)?;
-            let mut seg_b = find_segment_covering_x(&b, overlap_min)?;
-
-            let mut x_curr = overlap_min;
-            let mut y_a_curr = y_at_x_in_segment(&a, seg_a, x_curr)?;
-            let mut y_b_curr = y_at_x_in_segment(&b, seg_b, x_curr)?;
-
-            let eps = 1e-12;
-            loop {
-                let next_a = a.get(seg_a + 1).map(|p| p[0]).unwrap_or(f64::INFINITY);
-                let next_b = b.get(seg_b + 1).map(|p| p[0]).unwrap_or(f64::INFINITY);
-                let x_next = next_a.min(next_b).min(overlap_max);
-
-                if x_next <= x_curr + eps {
-                    break;
-                }
-
-                let y_a_next = y_at_x_in_segment(&a, seg_a, x_next)?;
-                let y_b_next = y_at_x_in_segment(&b, seg_b, x_next)?;
-
-                push_quad_as_triangles(
-                    &mut vertices,
-                    [x_curr, y_a_curr],
-                    [x_curr, y_b_curr],
-                    [x_next, y_a_next],
-                    [x_next, y_b_next],
-                );
-
-                x_curr = x_next;
-                y_a_curr = y_a_next;
-                y_b_curr = y_b_next;
-
-                if x_curr >= overlap_max - eps {
-                    break;
-                }
-
-                advance_segment_to_x(&a, &mut seg_a, x_curr);
-                advance_segment_to_x(&b, &mut seg_b, x_curr);
-
-                if seg_a + 1 >= a.len() || seg_b + 1 >= b.len() {
-                    break;
-                }
+            if !push_paired_series_fill_vertices(&mut vertices, &a_points, &b_points) {
+                push_interpolated_series_fill_vertices(&mut vertices, a_points, b_points)?;
             }
         }
         (FillEndpoint::Series(series), FillEndpoint::HLine(hline))
@@ -1286,6 +1350,41 @@ mod tests {
 
     use super::*;
     use crate::{PointId, Series};
+
+    #[test]
+    fn paired_series_fill_keeps_step_edges_with_duplicate_x() {
+        let lower = vec![[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 2.0]];
+        let upper = vec![[0.0, 0.0], [0.0, 3.0], [1.0, 3.0], [1.0, 4.0]];
+
+        let mut vertices = Vec::new();
+        assert!(push_paired_series_fill_vertices(
+            &mut vertices,
+            &lower,
+            &upper
+        ));
+
+        assert_eq!(vertices.len(), (lower.len() - 1) * 6);
+        assert_eq!(vertices[0], lower[0]);
+        assert_eq!(vertices[1], upper[0]);
+        assert_eq!(vertices[2], lower[1]);
+    }
+
+    #[test]
+    fn paired_series_fill_supports_y_paired_boundaries() {
+        let lower = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [2.0, 1.0]];
+        let upper = vec![[3.0, 0.0], [4.0, 0.0], [4.0, 1.0], [5.0, 1.0]];
+
+        let mut vertices = Vec::new();
+        assert!(push_paired_series_fill_vertices(
+            &mut vertices,
+            &lower,
+            &upper
+        ));
+
+        assert_eq!(vertices.len(), (lower.len() - 1) * 6);
+        assert!(vertices.contains(&[3.0, 0.0]));
+        assert!(vertices.contains(&[5.0, 1.0]));
+    }
 
     #[test]
     fn axes_transform_series_maps_to_camera_range_and_skips_autoscale_bounds() {
