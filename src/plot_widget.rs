@@ -918,6 +918,37 @@ impl PlotWidget {
         }
     }
 
+    /// Append new points to an existing series, dropping the oldest points so
+    /// the series never exceeds `cap` points (`cap == 0` means unbounded).
+    ///
+    /// Intended for streaming telemetry: callers push only the freshly
+    /// arrived samples instead of rebuilding and re-setting the full window
+    /// on every update. Non-finite points (e.g. `[x, f64::NAN]`) are allowed
+    /// and render as gaps in line series.
+    pub fn append_series_points(&mut self, id: &ShapeId, points: &[[f64; 2]], cap: usize) {
+        if points.is_empty() {
+            return;
+        }
+        if let Some(series) = self.series.get_mut(id) {
+            series.positions.extend_from_slice(points);
+            // Per-point colors must stay aligned with positions: extend with the
+            // series color for the new points, then drop from the FRONT together
+            // with the positions (a plain resize would truncate from the back).
+            if let Some(colors) = &mut series.point_colors {
+                colors.resize(series.positions.len(), series.color);
+            }
+            let len = series.positions.len();
+            if cap > 0 && len > cap {
+                let excess = len - cap;
+                series.positions.drain(..excess);
+                if let Some(colors) = &mut series.point_colors {
+                    colors.drain(..excess);
+                }
+            }
+            self.data_version += 1;
+        }
+    }
+
     /// Set per-point colors for an existing series.
     pub fn set_series_point_colors(&mut self, id: &ShapeId, mut colors: Vec<Color>) {
         if let Some(series) = self.series.get_mut(id) {
