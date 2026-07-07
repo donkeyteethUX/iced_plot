@@ -10,7 +10,18 @@ use crate::{LineType, Size, camera::CameraUniform, grid::Grid, plot_state::PlotS
 use iced::widget::shader::Viewport;
 use iced::{Rectangle, wgpu::*};
 
-const MSAA_SAMPLE_COUNT: u32 = 4;
+/// MSAA sample count for all plot pipelines.
+///
+/// Android: 1 — plots draw inside iced's surface render pass via
+/// `Primitive::draw` (see `draw_in_pass`), and that pass is single-sampled;
+/// MSAA pipelines would be incompatible ("Incompatible sample count"
+/// validation panic). In-pass rendering is required there because per-plot
+/// pass fragmentation corrupts frames on tile-based GPUs (Mali/Adreno).
+///
+/// Desktop: 4 — plots render through `render()`/`encode` into a dedicated
+/// MSAA offscreen target and composite the resolved texture, so
+/// `Primitive::draw` must return `false` (see `PlotWidget` shader impl).
+pub(crate) const MSAA_SAMPLE_COUNT: u32 = if cfg!(target_os = "android") { 1 } else { 4 };
 
 pub struct RenderParams<'a> {
     pub encoder: &'a mut CommandEncoder,
@@ -430,7 +441,11 @@ impl PlotRenderer {
         }
         self.ensure_overlay_pipeline(device);
         self.ensure_line_overlay_pipeline(device);
-        self.ensure_composite_pipeline(device);
+        // Composite yalnız `encode`'un resolve→hedef blit'inde kullanılır;
+        // pas-içi (MSAA=1) yolda gereksiz.
+        if MSAA_SAMPLE_COUNT > 1 {
+            self.ensure_composite_pipeline(device);
+        }
     }
     fn set_bounds(&mut self, w: u32, h: u32) {
         self.bounds_w = w;
@@ -557,7 +572,12 @@ impl PlotRenderer {
 
         self.set_bounds(bounds_width, bounds_height);
         self.set_scale_factor(scale_factor);
-        self.ensure_msaa_targets(device, viewport_size.width, viewport_size.height);
+        // In-pass path (MSAA=1, Android) never runs `encode`, so the offscreen
+        // MSAA/resolve textures would only waste memory; `encode` self-guards
+        // by early-returning when `msaa_targets` is `None`.
+        if MSAA_SAMPLE_COUNT > 1 {
+            self.ensure_msaa_targets(device, viewport_size.width, viewport_size.height);
+        }
 
         // Sync picking viewport
         self.picking
@@ -1561,6 +1581,85 @@ impl PlotRenderer {
         });
         if let Some(vb) = &self.buffers.crosshairs {
             queue.write_buffer(&vb.buffer, 0, raw);
+        }
+    }
+
+    /// Draws all plot content into an existing render pass (iced's main
+    /// surface pass). The caller (iced's `shader::Primitive::draw` path) has
+    /// already set the viewport to the widget bounds and the scissor to the
+    /// clip bounds — the same state `encode` sets on its own passes.
+    ///
+    /// Rendering in-pass avoids tearing the surface render pass down per plot
+    /// (`Load`/`Store` round-trips). On tile-based mobile GPUs (Mali/Adreno)
+    /// that pass fragmentation triggered driver-level frame corruption: text
+    /// drawn by other passes intermittently disappeared on screens containing
+    /// plots.
+    pub fn draw_in_pass(&self, pass: &mut iced::wgpu::RenderPass<'_>) {
+        // Main content (grid, fills, lines, reference lines, markers)
+        self.grid.draw(pass, &self.camera_bind_group);
+        if let (Some(pipeline), Some(vb)) = (self.pipelines.fill.as_ref(), &self.buffers.fills) {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, vb.buffer.slice(..));
+            pass.draw(0..vb.vertex_count, 0..1);
+        }
+        if let (Some(pipeline), Some(lb)) = (self.pipelines.line.as_ref(), &self.buffers.lines) {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, lb.buffer.slice(..));
+            for seg in &lb.segments {
+                pass.draw(seg.first_vertex..seg.first_vertex + seg.vertex_count, 0..1);
+            }
+        }
+        if let (Some(pipeline), Some(lb)) = (self.pipelines.line.as_ref(), &self.buffers.reflines) {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, lb.buffer.slice(..));
+            for seg in &lb.segments {
+                pass.draw(seg.first_vertex..seg.first_vertex + seg.vertex_count, 0..1);
+            }
+        }
+        if let (Some(pipeline), Some(vb)) = (self.pipelines.marker.as_ref(), &self.buffers.markers)
+        {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, vb.buffer.slice(..));
+            pass.draw(0..4, 0..vb.vertex_count);
+        }
+        if let (Some(pipeline), Some(vb)) = (
+            self.pipelines.marker.as_ref(),
+            &self.buffers.highlight_markers,
+        ) {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, vb.buffer.slice(..));
+            pass.draw(0..4, 0..vb.vertex_count);
+        }
+
+        // Selection overlay + highlight mask boxes
+        if let Some(pipeline) = self.pipelines.overlay.as_ref() {
+            pass.set_pipeline(pipeline);
+            if let Some(vb) = &self.buffers.selection {
+                pass.set_vertex_buffer(0, vb.buffer.slice(..));
+                pass.draw(0..vb.vertex_count, 0..1);
+            }
+            if let Some(vb) = &self.buffers.highlight {
+                pass.set_vertex_buffer(0, vb.buffer.slice(..));
+                let quad_count = vb.vertex_count / 4;
+                for i in 0..quad_count {
+                    pass.draw(i * 4..(i + 1) * 4, 0..1);
+                }
+            }
+        }
+
+        // Crosshairs overlay
+        if let (Some(pipeline), Some(vb)) = (
+            self.pipelines.line_overlay.as_ref(),
+            &self.buffers.crosshairs,
+        ) {
+            pass.set_pipeline(pipeline);
+            pass.set_vertex_buffer(0, vb.buffer.slice(..));
+            pass.draw(0..vb.vertex_count, 0..1);
         }
     }
 

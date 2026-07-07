@@ -1881,6 +1881,36 @@ impl shader::Primitive for Primitive {
         renderer.service_picking(self.instance_id, device, queue, &self.plot_widget);
     }
 
+    /// Draws the plot inside iced's main surface render pass.
+    ///
+    /// iced sets the pass viewport/scissor to this primitive's bounds/clip
+    /// before calling — the same state `PlotRenderer::encode` established on
+    /// its own passes. Drawing in-pass avoids per-plot render-pass
+    /// fragmentation of the surface, which corrupted frames (vanishing text)
+    /// on tile-based mobile GPUs. GPU picking is unaffected: it runs from
+    /// `prepare` with its own encoder/submission.
+    ///
+    /// Only valid when the pipelines are single-sampled: iced's surface pass
+    /// has sample count 1, so with MSAA pipelines (desktop, 4x) this returns
+    /// `false` and iced falls back to `render`, which draws into a dedicated
+    /// MSAA offscreen target and composites the resolved texture.
+    fn draw(
+        &self,
+        renderer_state: &Self::Pipeline,
+        render_pass: &mut iced::wgpu::RenderPass<'_>,
+    ) -> bool {
+        if crate::plot_renderer::MSAA_SAMPLE_COUNT > 1 {
+            return false;
+        }
+        if let Some(renderer) = renderer_state.renderers.get(&self.instance_id) {
+            renderer.draw_in_pass(render_pass);
+        }
+        true
+    }
+
+    /// MSAA path (desktop): dedicated offscreen MSAA pass + resolve +
+    /// composite. Android (MSAA=1) never reaches this — `draw` handles it
+    /// in-pass.
     fn render(
         &self,
         renderer_state: &Self::Pipeline,
