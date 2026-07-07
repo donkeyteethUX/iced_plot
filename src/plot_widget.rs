@@ -1559,6 +1559,27 @@ impl shader::Primitive for Primitive {
         renderer.service_picking(self.instance_id, device, queue, &self.plot_widget);
     }
 
+    /// Draws the plot inside iced's main surface render pass.
+    ///
+    /// iced sets the pass viewport/scissor to this primitive's bounds/clip
+    /// before calling — the same state `PlotRenderer::encode` established on
+    /// its own passes. Drawing in-pass avoids per-plot render-pass
+    /// fragmentation of the surface, which corrupted frames (vanishing text)
+    /// on tile-based mobile GPUs. GPU picking is unaffected: it runs from
+    /// `prepare` with its own encoder/submission.
+    fn draw(
+        &self,
+        renderer_state: &Self::Pipeline,
+        render_pass: &mut iced::wgpu::RenderPass<'_>,
+    ) -> bool {
+        if let Some(renderer) = renderer_state.renderers.get(&self.instance_id) {
+            renderer.draw_in_pass(render_pass);
+        }
+        true
+    }
+
+    /// Fallback path (unused: `draw` always returns `true`). Kept for
+    /// API completeness and easy A/B testing against the in-pass path.
     fn render(
         &self,
         renderer_state: &Self::Pipeline,

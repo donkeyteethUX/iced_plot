@@ -182,7 +182,7 @@ impl Grid {
         }));
     }
 
-    pub(crate) fn draw<'a>(&'a self, pass: &mut RenderPass<'a>, camera_bind_group: &'a BindGroup) {
+    pub(crate) fn draw(&self, pass: &mut RenderPass<'_>, camera_bind_group: &BindGroup) {
         if self.vertex_count == 0 {
             return;
         }

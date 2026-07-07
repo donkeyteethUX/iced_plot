@@ -1344,6 +1344,85 @@ impl PlotRenderer {
         }
     }
 
+    /// Draws all plot content into an existing render pass (iced's main
+    /// surface pass). The caller (iced's `shader::Primitive::draw` path) has
+    /// already set the viewport to the widget bounds and the scissor to the
+    /// clip bounds — the same state `encode` sets on its own passes.
+    ///
+    /// Rendering in-pass avoids tearing the surface render pass down per plot
+    /// (`Load`/`Store` round-trips). On tile-based mobile GPUs (Mali/Adreno)
+    /// that pass fragmentation triggered driver-level frame corruption: text
+    /// drawn by other passes intermittently disappeared on screens containing
+    /// plots.
+    pub fn draw_in_pass(&self, pass: &mut iced::wgpu::RenderPass<'_>) {
+        // Main content (grid, fills, lines, reference lines, markers)
+        self.grid.draw(pass, &self.camera_bind_group);
+        if let (Some(pipeline), Some(vb)) = (self.pipelines.fill.as_ref(), &self.buffers.fills) {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, vb.buffer.slice(..));
+            pass.draw(0..vb.vertex_count, 0..1);
+        }
+        if let (Some(pipeline), Some(lb)) = (self.pipelines.line.as_ref(), &self.buffers.lines) {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, lb.buffer.slice(..));
+            for seg in &lb.segments {
+                pass.draw(seg.first_vertex..seg.first_vertex + seg.vertex_count, 0..1);
+            }
+        }
+        if let (Some(pipeline), Some(lb)) = (self.pipelines.line.as_ref(), &self.buffers.reflines) {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, lb.buffer.slice(..));
+            for seg in &lb.segments {
+                pass.draw(seg.first_vertex..seg.first_vertex + seg.vertex_count, 0..1);
+            }
+        }
+        if let (Some(pipeline), Some(vb)) = (self.pipelines.marker.as_ref(), &self.buffers.markers)
+        {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, vb.buffer.slice(..));
+            pass.draw(0..4, 0..vb.vertex_count);
+        }
+        if let (Some(pipeline), Some(vb)) = (
+            self.pipelines.marker.as_ref(),
+            &self.buffers.highlight_markers,
+        ) {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, vb.buffer.slice(..));
+            pass.draw(0..4, 0..vb.vertex_count);
+        }
+
+        // Selection overlay + highlight mask boxes
+        if let Some(pipeline) = self.pipelines.overlay.as_ref() {
+            pass.set_pipeline(pipeline);
+            if let Some(vb) = &self.buffers.selection {
+                pass.set_vertex_buffer(0, vb.buffer.slice(..));
+                pass.draw(0..vb.vertex_count, 0..1);
+            }
+            if let Some(vb) = &self.buffers.highlight {
+                pass.set_vertex_buffer(0, vb.buffer.slice(..));
+                let quad_count = vb.vertex_count / 4;
+                for i in 0..quad_count {
+                    pass.draw(i * 4..(i + 1) * 4, 0..1);
+                }
+            }
+        }
+
+        // Crosshairs overlay
+        if let (Some(pipeline), Some(vb)) = (
+            self.pipelines.line_overlay.as_ref(),
+            &self.buffers.crosshairs,
+        ) {
+            pass.set_pipeline(pipeline);
+            pass.set_vertex_buffer(0, vb.buffer.slice(..));
+            pass.draw(0..vb.vertex_count, 0..1);
+        }
+    }
+
     pub fn encode(&self, params: RenderParams) {
         // Convert bounds to viewport coordinates
         let x = self.bounds.x * self.scale_factor;
