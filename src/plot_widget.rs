@@ -1,8 +1,9 @@
+use core::fmt;
 use std::{
     collections::{HashMap, HashSet},
     sync::{
         Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -23,23 +24,25 @@ use iced::{
 use indexmap::IndexMap;
 
 use crate::{
-    AxisScale, DragEvent, Fill, HLine, HoverPickEvent, MarkerStyle, PlotUiMessage, PointId, Series,
-    Size, TooltipContext, VLine, axes_labels,
+    AxisScale, DragEvent, Fill, HLine, HoverPickEvent, KeyAction, MarkerStyle, PlotUiMessage,
+    PointId, Series, Size, TooltipContext, Transform, VLine, axes_labels,
     axis_link::AxisLink,
-    axis_scale::{data_point_to_plot, plot_point_to_data},
+    axis_scale::plot_point_to_data,
     camera::Camera,
     controls::PlotControls,
     default_style,
     legend::{self, LegendEntry},
     message::{CursorPositionUiPayload, PlotRenderUpdate, TooltipUiPayload},
-    picking,
-    plot_renderer::{PlotRenderer, RenderParams},
+    picking, plot_overlay,
+    plot_renderer::{PlotRenderStrategy, PlotRenderer, RenderParams},
     plot_state::PlotState,
     series::{SeriesError, ShapeId},
     style::{PlotStyle, StyleFn},
     ticks::{self, PositionedTick, TickFormatter, TickProducer},
+    transform::{PositionTransform, data_point_to_plot_with_transform},
 };
 
+const PLOT_CONTENT_PADDING: f32 = 2.0;
 pub(crate) type CursorProvider = Arc<dyn Fn(f64, f64) -> String + Send + Sync>;
 
 /// Provider for highlighting a point.
@@ -63,6 +66,8 @@ pub struct PlotWidget {
     // Configuration
     pub(crate) autoscale_on_updates: bool,
     pub(crate) controls: PlotControls,
+    pub(crate) highlight_on_hover: bool,
+    pub(crate) show_controls_help: bool,
     pub(crate) legend_enabled: bool,
     pub(crate) legend_collapsed: bool,
     pub(crate) x_axis_label: String,
@@ -86,7 +91,10 @@ pub struct PlotWidget {
     pub(crate) cursor_overlay: bool,
     pub(crate) cursor_provider: Option<CursorProvider>,
     pub(crate) crosshairs_enabled: bool,
+    pub(crate) render_strategy: PlotRenderStrategy,
     pub(crate) controls_overlay_open: bool,
+    #[cfg(feature = "canvas")]
+    pub(crate) canvas_caches: crate::plot_renderer::canvas::CanvasCaches,
     pub(crate) x_axis_formatter: Option<TickFormatter>,
     pub(crate) y_axis_formatter: Option<TickFormatter>,
     pub(crate) x_tick_producer: Option<TickProducer>,
@@ -104,6 +112,7 @@ pub struct PlotWidget {
     pub(crate) cursor_ui: Option<CursorPositionUiPayload>,
     pub(crate) x_ticks: Vec<PositionedTick>,
     pub(crate) y_ticks: Vec<PositionedTick>,
+    pub(crate) shape_overlays_enabled: AtomicBool,
     // Camera and bounds for coordinate conversion (updated when ticks are updated)
     pub(crate) camera_bounds: Option<(Camera, Rectangle)>,
 }
@@ -127,6 +136,8 @@ impl PlotWidget {
             data_version: 1,
             autoscale_on_updates: false,
             controls: PlotControls::default(),
+            highlight_on_hover: true,
+            show_controls_help: true,
             legend_enabled: true,
             legend_collapsed: false,
             x_axis_label: String::new(),
@@ -146,7 +157,10 @@ impl PlotWidget {
             cursor_overlay: true,
             cursor_provider: None,
             crosshairs_enabled: false,
+            render_strategy: PlotRenderStrategy::default(),
             controls_overlay_open: false,
+            #[cfg(feature = "canvas")]
+            canvas_caches: crate::plot_renderer::canvas::CanvasCaches::default(),
             x_axis_formatter: Some(Arc::new(ticks::default_formatter)),
             y_axis_formatter: Some(Arc::new(ticks::default_formatter)),
             x_tick_producer: Some(Arc::new(ticks::default_tick_producer)),
@@ -161,6 +175,7 @@ impl PlotWidget {
             picked_points: IndexMap::new(),
             hovered_points: IndexMap::new(),
             cursor_ui: None,
+            shape_overlays_enabled: AtomicBool::new(false),
             camera_bounds: None,
         }
     }
@@ -348,9 +363,16 @@ impl PlotWidget {
         camera_bounds: &(Camera, Rectangle),
         x_axis_scale: AxisScale,
         y_axis_scale: AxisScale,
+        transform: &PositionTransform,
     ) -> Option<[f32; 2]> {
-        let world = data_point_to_plot(world, x_axis_scale, y_axis_scale)?;
         let (camera, bounds) = camera_bounds;
+        let world = data_point_to_plot_with_transform(
+            world,
+            x_axis_scale,
+            y_axis_scale,
+            transform,
+            Some(camera.axis_ranges()),
+        )?;
         if let (Some(screen_x), Some(screen_y)) = (
             world_to_screen_position_x(world[0], camera, bounds),
             world_to_screen_position_y(world[1], camera, bounds),
@@ -359,6 +381,29 @@ impl PlotWidget {
         } else {
             None
         }
+    }
+
+    fn world_to_screen_position_unclipped(
+        world: [f64; 2],
+        camera_bounds: &(Camera, Rectangle),
+        x_axis_scale: AxisScale,
+        y_axis_scale: AxisScale,
+        transform: &PositionTransform,
+    ) -> Option<[f32; 2]> {
+        let (camera, bounds) = camera_bounds;
+        let world = data_point_to_plot_with_transform(
+            world,
+            x_axis_scale,
+            y_axis_scale,
+            transform,
+            Some(camera.axis_ranges()),
+        )?;
+        let ndc_x = (world[0] - camera.position.x) / camera.half_extents.x;
+        let ndc_y = (world[1] - camera.position.y) / camera.half_extents.y;
+        let screen_x = (ndc_x as f32 + 1.0) * 0.5 * bounds.width;
+        let screen_y = (1.0 - ndc_y as f32) * 0.5 * bounds.height;
+
+        (screen_x.is_finite() && screen_y.is_finite()).then_some([screen_x, screen_y])
     }
 
     /// Compute the world-space anchor point for a tooltip.
@@ -392,6 +437,7 @@ impl PlotWidget {
                         camera_bounds,
                         self.x_axis_scale,
                         self.y_axis_scale,
+                        &highlight_point.transform,
                     );
                 }
             }
@@ -519,6 +565,7 @@ impl PlotWidget {
             let mut highlight_point = HighlightPoint {
                 x: position[0],
                 y: position[1],
+                transform: series.transform.clone(),
                 color: series
                     .point_colors
                     .as_ref()
@@ -541,6 +588,7 @@ impl PlotWidget {
                     camera_bounds,
                     self.x_axis_scale,
                     self.y_axis_scale,
+                    &highlight_point.transform,
                 ),
                 text,
             });
@@ -585,22 +633,18 @@ impl PlotWidget {
                 match payload.hover_pick {
                     Some(HoverPickEvent::Hover(point_id)) => {
                         self.hovered_points.clear();
-                        self.handle_hover_pick::<false>(point_id)
+                        self.handle_hover_pick::<false>(point_id);
                     }
                     Some(HoverPickEvent::Pick(point_id)) => {
-                        self.handle_hover_pick::<true>(point_id)
+                        self.handle_hover_pick::<true>(point_id);
                     }
                     Some(HoverPickEvent::ClearHover) => {
-                        let highlight_changed = !self.hovered_points.is_empty();
                         self.hovered_points.clear();
-                        highlight_changed
                     }
                     Some(HoverPickEvent::ClearPick) => {
-                        let highlight_changed = !self.picked_points.is_empty();
                         self.picked_points.clear();
-                        highlight_changed
                     }
-                    _ => false,
+                    _ => {}
                 };
                 if payload.clear_cursor_position {
                     self.cursor_ui = None;
@@ -620,34 +664,70 @@ impl PlotWidget {
 
     /// View the plot widget.
     pub fn view<'a>(&'a self) -> iced::Element<'a, PlotUiMessage> {
-        let style = self.cached_style();
-        let plot = widget::shader(self)
-            .width(Length::Fill)
-            .height(Length::Fill);
+        self.shape_overlays_enabled.store(false, Ordering::Relaxed);
+        self.view_with_shape_elements(std::iter::empty(), std::iter::empty(), |message| message)
+    }
 
-        let inner_container = container(plot)
-            .padding(2.0)
-            .style(|theme: &Theme| self.update_style(theme).plot_area);
+    /// View the plot widget with external Iced elements anchored to plot coordinates.
+    pub fn view_with_shapes<'a, Message>(
+        &'a self,
+        shapes_bottom: impl Iterator<Item = plot_overlay::PlotOverlay<'a, Message>> + 'a,
+        shapes_top: impl Iterator<Item = plot_overlay::PlotOverlay<'a, Message>> + 'a,
+        map_plot: impl Fn(PlotUiMessage) -> Message + Copy + 'a,
+    ) -> iced::Element<'a, Message>
+    where
+        Message: 'a,
+    {
+        self.shape_overlays_enabled.store(true, Ordering::Relaxed);
+
+        let shapes_bottom = shapes_bottom.filter_map(|shape| self.view_shape_overlay(shape));
+        let shapes_top = shapes_top.filter_map(|shape| self.view_shape_overlay(shape));
+        self.view_with_shape_elements(shapes_bottom, shapes_top, map_plot)
+    }
+
+    fn view_with_shape_elements<'a, Message, MapPlot>(
+        &'a self,
+        shapes_bottom: impl Iterator<Item = Element<'a, Message>>,
+        shapes_top: impl Iterator<Item = Element<'a, Message>>,
+        map_plot: MapPlot,
+    ) -> iced::Element<'a, Message>
+    where
+        Message: 'a,
+        MapPlot: Fn(PlotUiMessage) -> Message + Copy + 'a,
+    {
+        let style = self.cached_style();
+
+        let tooltip_overlays = self
+            .visible_highlighted_points()
+            .filter_map(|(_, tooltip)| self.view_tooltip_overlay(tooltip, &self.camera_bounds))
+            .map(|element| element.map(map_plot));
+        let shapes_top = shapes_top.chain(tooltip_overlays);
+
+        let inner_container = self.view_plot_area(shapes_bottom, shapes_top, map_plot);
 
         let legend = if self.legend_enabled {
             legend::legend(self, self.legend_collapsed)
         } else {
             None
         };
-        let elements = stack![
-            inner_container,
-            stack(
-                self.visible_highlighted_points()
-                    .filter_map(|(_, tooltip)| {
-                        tooltip.as_ref().and_then(|tooltip| {
-                            self.view_tooltip_overlay(tooltip, &self.camera_bounds)
-                        })
-                    })
-            ),
-            self.view_top_right_overlay(legend.is_some()),
-            self.view_tick_labels(),
-            legend,
-        ];
+        let has_legend = legend.is_some();
+
+        let mut layers = Vec::new();
+        layers.push(inner_container);
+        layers.push(self.view_top_right_overlay(has_legend).map(map_plot));
+
+        if let Some(tick_labels) = self.view_tick_labels() {
+            layers.push(tick_labels.map(map_plot));
+        }
+
+        if let Some(legend) = legend {
+            layers.push(legend.map(map_plot));
+        }
+
+        let elements: Element<'a, Message> = stack(layers)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
 
         container(axes_labels::stack_with_labels(
             elements,
@@ -659,6 +739,64 @@ impl PlotWidget {
         .padding(3.0)
         .style(|theme: &Theme| self.update_style(theme).frame)
         .into()
+    }
+
+    fn view_plot_area<'a, Message, MapPlot>(
+        &'a self,
+        shapes_bottom: impl Iterator<Item = Element<'a, Message>>,
+        shapes_top: impl Iterator<Item = Element<'a, Message>>,
+        map_plot: MapPlot,
+    ) -> Element<'a, Message>
+    where
+        Message: 'a,
+        MapPlot: Fn(PlotUiMessage) -> Message + Copy + 'a,
+    {
+        let plot: Element<'a, PlotUiMessage> = match self.render_strategy {
+            PlotRenderStrategy::Shader => widget::shader(self)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            #[cfg(feature = "canvas")]
+            PlotRenderStrategy::Canvas => widget::canvas(self)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+        };
+        let plot = plot.map(map_plot);
+
+        let plot_layers = shapes_bottom.chain(std::iter::once(plot)).chain(shapes_top);
+
+        container(stack(plot_layers).width(Length::Fill).height(Length::Fill))
+            .clip(true)
+            .padding(PLOT_CONTENT_PADDING)
+            .style(|theme: &Theme| self.update_style(theme).plot_area)
+            .into()
+    }
+
+    fn view_shape_overlay<'a, Message>(
+        &'a self,
+        shape: plot_overlay::PlotOverlay<'a, Message>,
+    ) -> Option<Element<'a, Message>>
+    where
+        Message: 'a,
+    {
+        let camera_bounds = self.camera_bounds.as_ref()?;
+        let mut screen_xy = Self::world_to_screen_position_unclipped(
+            shape.anchor_position,
+            camera_bounds,
+            self.x_axis_scale,
+            self.y_axis_scale,
+            &shape.anchor_position_transform,
+        )?;
+        screen_xy[0] += shape.anchor_offset[0];
+        screen_xy[1] -= shape.anchor_offset[1];
+
+        Some(plot_overlay::positioned_overlay(
+            shape.element,
+            screen_xy,
+            shape.align_to_anchor_horizontal,
+            shape.align_to_anchor_vertical,
+        ))
     }
 
     /// Enable or disable autoscaling on updates (default: enabled)
@@ -698,9 +836,49 @@ impl PlotWidget {
         self.crosshairs_enabled = enabled;
     }
 
+    /// Set the rendering strategy used by the plot.
+    pub fn set_render_strategy(&mut self, strategy: PlotRenderStrategy) {
+        self.render_strategy = strategy;
+        #[cfg(feature = "canvas")]
+        {
+            self.canvas_caches.static_layer.clear();
+            self.canvas_caches.overlay_layer.clear();
+        }
+    }
+
     /// Set full interaction controls behavior for the plot.
     pub fn set_controls(&mut self, controls: PlotControls) {
         self.controls = controls;
+    }
+
+    /// Get the full interaction controls behavior for the plot.
+    pub fn get_controls(&self) -> &PlotControls {
+        &self.controls
+    }
+
+    /// Get the mutable full interaction controls behavior for the plot.
+    pub fn get_controls_mut(&mut self) -> &mut PlotControls {
+        &mut self.controls
+    }
+
+    /// Enable or disable point highlighting while hovering.
+    pub fn set_highlight_on_hover(&mut self, enabled: bool) {
+        self.highlight_on_hover = enabled;
+    }
+
+    /// Return whether point highlighting while hovering is enabled.
+    pub fn highlight_on_hover(&self) -> bool {
+        self.highlight_on_hover
+    }
+
+    /// Enable or disable the in-canvas controls/help UI (`?` button + panel).
+    pub fn set_controls_help(&mut self, enabled: bool) {
+        self.show_controls_help = enabled;
+    }
+
+    /// Return whether the in-canvas controls/help UI is enabled.
+    pub fn controls_help_enabled(&self) -> bool {
+        self.show_controls_help
     }
 
     /// Set a custom formatter for the x-axis tick labels.
@@ -829,35 +1007,30 @@ impl PlotWidget {
 
     fn view_tooltip_overlay<'a>(
         &'a self,
-        payload: &'a TooltipUiPayload,
+        payload: &'a Option<TooltipUiPayload>,
         camera_bounds: &Option<(Camera, Rectangle)>,
     ) -> Option<Element<'a, PlotUiMessage>> {
         // Offset a bit from point position
         const OFFSET: f32 = 8.0;
+        let payload = payload.as_ref()?;
         let [screen_x, screen_y] = payload.screen_xy?;
 
-        // default: top-left aligned
-        let mut top = screen_y + OFFSET;
-        let mut right = 0.0;
-        let mut bottom = 0.0;
-        let mut left = screen_x + OFFSET;
-        let mut align_x = alignment::Horizontal::Left;
-        let mut align_y = Vertical::Top;
+        let mut anchor = [screen_x + OFFSET, screen_y + OFFSET];
+        let mut horizontal_position = Horizontal::Right;
+        let mut vertical_position = Vertical::Bottom;
 
         // flip the tooltip if the point is outside this percentage of the bounds
         const FLIP_PCT: f32 = 0.8;
         if let Some((_, bounds)) = &camera_bounds {
             if screen_y > bounds.height * FLIP_PCT {
-                // flip the tooltip to the bottom aligned
-                top = 0.0;
-                bottom = bounds.height - screen_y + OFFSET;
-                align_y = Vertical::Bottom;
+                // Place the tooltip above the point.
+                anchor[1] = screen_y - OFFSET;
+                vertical_position = Vertical::Top;
             }
             if screen_x > bounds.width * FLIP_PCT {
-                // flip the tooltip to the right aligned
-                left = 0.0;
-                right = bounds.width - screen_x + OFFSET;
-                align_x = alignment::Horizontal::Right;
+                // Place the tooltip to the left of the point.
+                anchor[0] = screen_x - OFFSET;
+                horizontal_position = Horizontal::Left;
             }
         }
 
@@ -870,21 +1043,12 @@ impl PlotWidget {
         .style(|theme| self.update_style(theme).tooltip);
 
         // Position tooltip at fixed location relative to point, not following cursor
-        Some(
-            container(tooltip_bubble)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .padding(Padding {
-                    top,
-                    right,
-                    bottom,
-                    left,
-                })
-                .align_x(align_x)
-                .align_y(align_y)
-                .style(container::transparent)
-                .into(),
-        )
+        Some(plot_overlay::positioned_overlay(
+            tooltip_bubble.into(),
+            anchor,
+            horizontal_position,
+            vertical_position,
+        ))
     }
 
     fn view_cursor_overlay(&self) -> Option<Element<'_, PlotUiMessage>> {
@@ -904,7 +1068,7 @@ impl PlotWidget {
     }
 
     fn view_top_right_overlay(&self, has_legend: bool) -> Element<'_, PlotUiMessage> {
-        let help_btn = self.controls.show_controls_help.then(|| {
+        let help_btn = self.show_controls_help.then(|| {
             let help_label = if self.controls_overlay_open {
                 "×"
             } else {
@@ -942,37 +1106,8 @@ impl PlotWidget {
             return None;
         }
 
-        let txt = |t| widget::text(t).size(12.0).style(widget::text::base);
-        let mut content =
-            widget::column![txt("Controls").style(widget::text::primary)].spacing(2.0);
-
-        if self.controls.pan.drag_to_pan {
-            content = content.push(txt("Left-drag: pan"));
-        }
-        if self.controls.zoom.box_zoom {
-            content = content.push(txt("Right-drag: box zoom"));
-        }
-        if self.controls.zoom.scroll_with_ctrl {
-            content = content.push(txt("Ctrl + scroll: zoom at cursor"));
-        }
-        if self.controls.pan.scroll_to_pan {
-            content = content.push(txt("Scroll: pan"));
-        }
-        if self.controls.zoom.double_click_autoscale {
-            content = content.push(txt("Double-click: reset / autoscale"));
-        }
-        if self.controls.pick.click_to_pick {
-            content = content.push(txt("Left-click point: pick"));
-        }
-        if self.controls.pick.clear_on_escape {
-            content = content.push(txt("Esc: clear picked points"));
-        }
-        if has_legend {
-            content = content.push(txt("Click icon in legend to toggle visibility."));
-        }
-
         Some(
-            container(content)
+            container(self.controls.view_controls_overlay_panel(has_legend))
                 .padding(8.0)
                 .style(|theme| self.update_style(theme).controls_panel)
                 .into(),
@@ -1063,6 +1198,35 @@ impl PlotWidget {
             || self.vlines.contains_key(&id)
             || self.hlines.contains_key(&id)
     }
+
+    fn shape_uses_axes_transform(&self, id: ShapeId) -> bool {
+        self.series
+            .get(&id)
+            .map(|series| &series.transform)
+            .is_some_and(PositionTransform::uses_axes_coordinates)
+            || self
+                .vlines
+                .get(&id)
+                .and_then(|vline| vline.transform.as_ref())
+                .is_some_and(|transform| transform.uses_axes_coordinates())
+            || self
+                .hlines
+                .get(&id)
+                .and_then(|hline| hline.transform.as_ref())
+                .is_some_and(|transform| transform.uses_axes_coordinates())
+    }
+
+    fn has_visible_dynamic_geometry_transforms(&self) -> bool {
+        self.series.iter().any(|(id, series)| {
+            !self.hidden_shapes.contains(id) && series.transform.uses_axes_coordinates()
+        }) || self.fills.iter().any(|(id, fill)| {
+            !self.hidden_shapes.contains(id)
+                && !self.hidden_shapes.contains(&fill.begin)
+                && !self.hidden_shapes.contains(&fill.end)
+                && (self.shape_uses_axes_transform(fill.begin)
+                    || self.shape_uses_axes_transform(fill.end))
+        })
+    }
 }
 
 #[doc(hidden)]
@@ -1087,8 +1251,38 @@ struct UpdateEffects {
     cursor_ui: Option<CursorPositionUiPayload>,
     clear_cursor_position: bool,
     /// Request publishing `camera_bounds` even when ticks didn't change.
-    /// This is used to keep tooltip overlays in sync when tick producers are disabled.
+    /// This keeps overlays in sync when tick producers are disabled.
     publish_camera_bounds: bool,
+}
+
+#[derive(Default, Debug)]
+struct CanvasInvalidation {
+    static_layer: bool,
+    overlay_layer: bool,
+}
+
+impl CanvasInvalidation {
+    fn static_layer(&mut self) {
+        self.static_layer = true;
+    }
+
+    fn overlay_layer(&mut self) {
+        self.overlay_layer = true;
+    }
+
+    fn all(&mut self) {
+        self.static_layer = true;
+        self.overlay_layer = true;
+    }
+
+    fn apply(self, widget: &PlotWidget) {
+        if self.static_layer {
+            invalidate_static_canvas(widget);
+        }
+        if self.overlay_layer {
+            invalidate_overlay_canvas(widget);
+        }
+    }
 }
 
 fn widget_has_any_tooltips(widget: &PlotWidget) -> bool {
@@ -1097,6 +1291,10 @@ fn widget_has_any_tooltips(widget: &PlotWidget) -> bool {
         .values()
         .chain(widget.picked_points.values())
         .any(|(_, tooltip)| tooltip.is_some())
+}
+
+fn widget_needs_camera_bounds(widget: &PlotWidget) -> bool {
+    widget_has_any_tooltips(widget) || widget.shape_overlays_enabled.load(Ordering::Relaxed)
 }
 
 fn clear_hover_effect(widget: &PlotWidget, state: &mut PlotState, effects: &mut UpdateEffects) {
@@ -1136,11 +1334,13 @@ fn maybe_submit_hover_request(
         bounds,
         ..
     } = state;
+    let force_cpu_picking = widget.render_strategy.force_cpu_picking();
 
     match pick_state.request_hover(
         widget.instance_id,
         *cursor_position,
         *hover_radius_px,
+        force_cpu_picking,
         points.as_ref(),
         series.as_ref(),
         camera,
@@ -1199,6 +1399,22 @@ fn update_cursor_overlay_on_move(
     }
 }
 
+fn invalidate_static_canvas(widget: &PlotWidget) {
+    _ = widget;
+    #[cfg(feature = "canvas")]
+    {
+        widget.canvas_caches.static_layer.clear();
+    }
+}
+
+fn invalidate_overlay_canvas(widget: &PlotWidget) {
+    _ = widget;
+    #[cfg(feature = "canvas")]
+    {
+        widget.canvas_caches.overlay_layer.clear();
+    }
+}
+
 fn consume_gpu_pick_results(
     widget: &PlotWidget,
     state: &mut PlotState,
@@ -1254,16 +1470,285 @@ fn update_ticks_and_build_payload(
         (first_time_widget_view || (state.y_ticks != old_y)).then(|| state.y_ticks.clone());
 
     // If tick producers are disabled, ticks might never change. Still publish camera/bounds
-    // when tooltips exist so the widget can keep tooltip screen positions in sync.
+    // when overlays need them so screen-space positions stay in sync.
     if publish_x.is_none()
         && publish_y.is_none()
-        && widget_has_any_tooltips(widget)
+        && widget_needs_camera_bounds(widget)
         && widget.camera_bounds != Some((state.camera, state.bounds))
     {
         effects.publish_camera_bounds = true;
     }
 
     (publish_x, publish_y)
+}
+
+fn update_plot_program<const IS_CANVAS: bool>(
+    widget: &PlotWidget,
+    state: &mut PlotState,
+    event: &iced::Event,
+    bounds: Rectangle,
+    cursor: mouse::Cursor,
+) -> Option<shader::Action<PlotUiMessage>> {
+    let mut effects = UpdateEffects::default();
+    let mut invalidation = CanvasInvalidation::default();
+    let prev_camera = state.camera;
+    let prev_bounds = state.bounds;
+
+    // Keep these in sync early, since other phases depend on them.
+    state.bounds = bounds;
+    state.hover_enabled = widget.highlight_on_hover
+        && (widget.hover_highlight_provider.is_some() || widget.pick_highlight_provider.is_some());
+    state.pick_enabled = widget.controls.has_pick_action();
+    state.hover_radius_px = widget.hover_radius_px;
+    state.crosshairs_enabled = widget.crosshairs_enabled;
+
+    if IS_CANVAS {
+        let grid_style = widget.cached_style().grid;
+        if state.grid_style != grid_style {
+            state.grid_style = grid_style;
+            effects.needs_redraw = true;
+            invalidation.static_layer();
+        }
+    }
+
+    // Sync highlight overlay data without rebuilding plot geometry.
+    if state.sync_highlighted_points_from_widget(widget) {
+        effects.needs_redraw = true;
+        invalidation.overlay_layer();
+    }
+
+    // Check if limits have been manually set. This will always trigger an "autoscale"
+    // to apply the new limits.
+    let limits_changed = widget.x_lim != state.x_lim || widget.y_lim != state.y_lim;
+    let instance_switched = state.source_instance_id != Some(widget.instance_id);
+    let first_time_widget_view = instance_switched && widget.camera_bounds.is_none();
+
+    if widget.data_version != state.data_src_version || instance_switched {
+        // Rebuild derived state from widget data.
+        state.rebuild_from_widget(widget);
+
+        if instance_switched && let Some((camera, _)) = widget.camera_bounds {
+            state.camera = camera;
+        }
+
+        // Refresh hover after data updates when appropriate.
+        maybe_submit_hover_request(widget, state, &mut effects);
+
+        // Data has changed, so we may need to autoscale.
+        //
+        // We do so on the first update, if autoscale_on_updates is enabled, or if
+        // limits have been manually set.
+        if widget.autoscale_on_updates || limits_changed || first_time_widget_view {
+            // Initial autoscale shouldn't update axis links.
+            state.autoscale(!first_time_widget_view);
+        } else if widget.autoscale_y_on_updates {
+            // Follow mode: only Y is rescaled; the X camera stays where the user left it.
+            state.autoscale_y_only();
+        }
+
+        // Follow mode: shift the camera in X and Y by the data delta so zoom and the
+        // user's chosen position are preserved while the newest data stays in view.
+        if widget.follow_right_edge && !widget.autoscale_on_updates {
+            if state.follow_reset_seen != widget.follow_reset_counter {
+                state.prev_data_max_x = None;
+                state.prev_last_point_y = None;
+                state.follow_reset_seen = widget.follow_reset_counter;
+            }
+            if let Some(data_max) = state.data_max {
+                if let Some(prev_x) = state.prev_data_max_x {
+                    state.camera.position.x += data_max.x - prev_x;
+                }
+                state.prev_data_max_x = Some(data_max.x);
+            }
+            if let Some(last_y) = state.last_point_y {
+                if let Some(prev_y) = state.prev_last_point_y {
+                    state.camera.position.y += last_y - prev_y;
+                }
+                state.prev_last_point_y = Some(last_y);
+            }
+        }
+
+        state.data_src_version = widget.data_version;
+        state.source_instance_id = Some(widget.instance_id);
+        effects.needs_redraw = true;
+        invalidation.all();
+    } else if limits_changed {
+        state.x_lim = widget.x_lim;
+        state.y_lim = widget.y_lim;
+        state.autoscale(true);
+        effects.needs_redraw = true;
+        invalidation.all();
+    }
+
+    // Check if axis links have been updated by other plots.
+    if let Some(ref link) = state.x_axis_link {
+        let link_version = link.version();
+        if link_version != state.x_link_version {
+            let (position, half_extent, version) = link.get();
+            state.camera.position.x = position;
+            state.camera.half_extents.x = half_extent;
+            state.x_link_version = version;
+            effects.needs_redraw = true;
+            invalidation.all();
+        }
+    }
+    if let Some(ref link) = state.y_axis_link {
+        let link_version = link.version();
+        if link_version != state.y_link_version {
+            let (position, half_extent, version) = link.get();
+            state.camera.position.y = position;
+            state.camera.half_extents.y = half_extent;
+            state.y_link_version = version;
+            effects.needs_redraw = true;
+            invalidation.all();
+        }
+    }
+
+    match event {
+        iced::Event::Mouse(mouse_event) => {
+            let mouse_redraw = state.handle_mouse_event(
+                *mouse_event,
+                cursor,
+                widget,
+                &mut effects.hover_pick,
+                &mut effects.drag_event,
+            );
+            effects.needs_redraw |= mouse_redraw;
+            if mouse_redraw {
+                invalidation.overlay_layer();
+            }
+
+            match mouse_event {
+                iced::mouse::Event::CursorMoved { .. } => {
+                    if state.available_cursor_is_inside(cursor) {
+                        maybe_submit_hover_request(widget, state, &mut effects);
+                        update_cursor_overlay_on_move(widget, state, &mut effects);
+                    } else {
+                        clear_hover_effect(widget, state, &mut effects);
+                        if widget.cursor_overlay {
+                            effects.clear_cursor_position = true;
+                        }
+                    }
+                    invalidation.overlay_layer();
+                }
+                iced::mouse::Event::CursorLeft => {
+                    clear_hover_effect(widget, state, &mut effects);
+                    invalidation.overlay_layer();
+                }
+                _ => {}
+            }
+        }
+        iced::Event::Keyboard(keyboard_event) => {
+            if let keyboard::Event::KeyPressed { key, .. } = keyboard_event
+                && state.available_cursor_is_inside(cursor)
+                && widget.controls.key_action(key) == Some(KeyAction::ClearPick)
+            {
+                effects.hover_pick = Some(HoverPickEvent::ClearPick);
+                invalidation.overlay_layer();
+            }
+            effects.needs_redraw |= state.handle_keyboard_event(keyboard_event, widget, cursor);
+        }
+        _ => {}
+    }
+
+    if let Some(aspect) = widget.data_aspect
+        && apply_data_aspect(&mut state.camera, &state.bounds, aspect)
+    {
+        effects.needs_redraw = true;
+        invalidation.all();
+    }
+
+    if (state.camera != prev_camera || state.bounds != prev_bounds)
+        && widget.has_visible_dynamic_geometry_transforms()
+    {
+        state.rebuild_from_widget(widget);
+        effects.needs_redraw = true;
+        invalidation.all();
+    }
+
+    // Hover/pick highlight mask boxes are baked in clip space. Rebuild them through the
+    // existing highlight_version path whenever camera or viewport bounds change.
+    if !state.highlighted_points.is_empty()
+        && (state.camera != prev_camera || state.bounds != prev_bounds)
+    {
+        state.highlight_version = state.highlight_version.wrapping_add(1);
+        effects.needs_redraw = true;
+        invalidation.overlay_layer();
+    }
+
+    if state.camera != prev_camera || state.bounds != prev_bounds {
+        effects.needs_redraw = true;
+        effects.publish_camera_bounds = true;
+        invalidation.all();
+    }
+
+    let had_hover_pick = effects.hover_pick.is_some();
+    // Process picking results after event handling (works for both mouse events and data updates).
+    consume_gpu_pick_results(widget, state, &mut effects);
+    if !had_hover_pick && effects.hover_pick.is_some() {
+        invalidation.overlay_layer();
+    }
+
+    // If we have an outstanding GPU pick request, keep drawing until the result arrives.
+    if !IS_CANVAS {
+        effects.needs_redraw |= state.picking.has_outstanding_gpu_request();
+    }
+
+    let (publish_x_ticks, publish_y_ticks) =
+        update_ticks_and_build_payload(widget, state, &mut effects, first_time_widget_view);
+    if publish_x_ticks.is_some() || publish_y_ticks.is_some() {
+        invalidation.static_layer();
+    }
+
+    let needs_publish = effects.hover_pick.is_some()
+        || effects.drag_event.is_some()
+        || effects.cursor_ui.is_some()
+        || publish_x_ticks.is_some()
+        || publish_y_ticks.is_some()
+        || effects.clear_cursor_position
+        || effects.publish_camera_bounds;
+
+    let camera_bounds = if effects.hover_pick.is_some()
+        || publish_x_ticks.is_some()
+        || publish_y_ticks.is_some()
+        || effects.publish_camera_bounds
+    {
+        Some((state.camera, state.bounds))
+    } else {
+        None
+    };
+
+    if IS_CANVAS {
+        invalidation.apply(widget);
+    }
+
+    if needs_publish {
+        Some(shader::Action::publish(PlotUiMessage::RenderUpdate(
+            PlotRenderUpdate {
+                hover_pick: effects.hover_pick,
+                drag_event: effects.drag_event,
+                clear_cursor_position: effects.clear_cursor_position,
+                cursor_position_ui: effects.cursor_ui,
+                x_ticks: publish_x_ticks,
+                y_ticks: publish_y_ticks,
+                camera_bounds: camera_bounds.map(Box::new),
+            },
+        )))
+    } else {
+        effects.needs_redraw.then(shader::Action::request_redraw)
+    }
+}
+
+fn plot_mouse_interaction(state: &PlotState) -> Interaction {
+    if state.pan.active {
+        Interaction::Grabbing
+    } else if state.selection.active {
+        Interaction::Crosshair
+    } else if state.picking.last_hover_cache.is_some() {
+        Interaction::Pointer
+    } else {
+        Interaction::None
+    }
 }
 
 impl shader::Program<PlotUiMessage> for PlotWidget {
@@ -1291,196 +1776,7 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<shader::Action<PlotUiMessage>> {
-        let mut effects = UpdateEffects::default();
-        let prev_camera = state.camera;
-        let prev_bounds = state.bounds;
-
-        // Keep these in sync early, since other phases depend on them.
-        state.bounds = bounds;
-        state.hover_enabled = self.controls.highlight_on_hover
-            && (self.hover_highlight_provider.is_some() || self.pick_highlight_provider.is_some());
-        state.pick_enabled = self.controls.pick.click_to_pick;
-        state.hover_radius_px = self.hover_radius_px;
-        state.crosshairs_enabled = self.crosshairs_enabled;
-
-        // Sync highlight overlay data without rebuilding plot geometry.
-        let highlights_changed = state.sync_highlighted_points_from_widget(self);
-        effects.needs_redraw |= highlights_changed;
-
-        // Check if limits have been manually set. This will always trigger an "autoscale"
-        // to apply the new limits.
-        let limits_changed = self.x_lim != state.x_lim || self.y_lim != state.y_lim;
-        let instance_switched = state.source_instance_id != Some(self.instance_id);
-        let first_time_widget_view = instance_switched && self.camera_bounds.is_none();
-
-        if self.data_version != state.data_src_version || instance_switched {
-            // Rebuild derived state from widget data
-            state.rebuild_from_widget(self);
-
-            if instance_switched && let Some((camera, _)) = self.camera_bounds {
-                state.camera = camera;
-            }
-
-            // Refresh hover after data updates when appropriate.
-            maybe_submit_hover_request(self, state, &mut effects);
-
-            // Data has changed, so we may need to autoscale.
-            //
-            // We do so on the first update, if autoscale_on_updates is enabled, or if
-            // limits have been manually set.
-            if self.autoscale_on_updates || limits_changed || first_time_widget_view {
-                // Initial autoscale shouldn't update axis links.
-                state.autoscale(!first_time_widget_view);
-            } else if self.autoscale_y_on_updates {
-                // Takip modu: sadece Y güncellenir, X kamerası kullanıcıda kalır.
-                state.autoscale_y_only();
-            }
-
-            // Takip modu: kamera X ve Y'yi veri delta'sı kadar kaydır; zoom ve kullanıcı konumu korunur.
-            if self.follow_right_edge && !self.autoscale_on_updates {
-                if state.follow_reset_seen != self.follow_reset_counter {
-                    state.prev_data_max_x = None;
-                    state.prev_last_point_y = None;
-                    state.follow_reset_seen = self.follow_reset_counter;
-                }
-                if let Some(data_max) = state.data_max {
-                    if let Some(prev_x) = state.prev_data_max_x {
-                        state.camera.position.x += data_max.x - prev_x;
-                    }
-                    state.prev_data_max_x = Some(data_max.x);
-                }
-                if let Some(last_y) = state.last_point_y {
-                    if let Some(prev_y) = state.prev_last_point_y {
-                        state.camera.position.y += last_y - prev_y;
-                    }
-                    state.prev_last_point_y = Some(last_y);
-                }
-            }
-
-            state.data_src_version = self.data_version;
-            state.source_instance_id = Some(self.instance_id);
-            effects.needs_redraw = true;
-        } else if limits_changed {
-            state.x_lim = self.x_lim;
-            state.y_lim = self.y_lim;
-            state.autoscale(true);
-            effects.needs_redraw = true;
-        }
-
-        // Check if axis links have been updated by other plots
-        if let Some(ref link) = state.x_axis_link {
-            let link_version = link.version();
-            if link_version != state.x_link_version {
-                let (position, half_extent, version) = link.get();
-                state.camera.position.x = position;
-                state.camera.half_extents.x = half_extent;
-                state.x_link_version = version;
-                effects.needs_redraw = true;
-            }
-        }
-        if let Some(ref link) = state.y_axis_link {
-            let link_version = link.version();
-            if link_version != state.y_link_version {
-                let (position, half_extent, version) = link.get();
-                state.camera.position.y = position;
-                state.camera.half_extents.y = half_extent;
-                state.y_link_version = version;
-                effects.needs_redraw = true;
-            }
-        }
-
-        match event {
-            iced::Event::Mouse(mouse_event) => {
-                effects.needs_redraw |= state.handle_mouse_event(
-                    *mouse_event,
-                    cursor,
-                    self,
-                    &mut effects.hover_pick,
-                    &mut effects.drag_event,
-                );
-
-                match mouse_event {
-                    iced::mouse::Event::CursorMoved { .. } => {
-                        maybe_submit_hover_request(self, state, &mut effects);
-                        update_cursor_overlay_on_move(self, state, &mut effects);
-                    }
-                    iced::mouse::Event::CursorLeft => {
-                        clear_hover_effect(self, state, &mut effects);
-                    }
-                    _ => {}
-                }
-            }
-            iced::Event::Keyboard(keyboard_event) => {
-                if let keyboard::Event::KeyPressed {
-                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
-                    ..
-                } = keyboard_event
-                    && self.controls.pick.clear_on_escape
-                {
-                    effects.hover_pick = Some(HoverPickEvent::ClearPick);
-                }
-                effects.needs_redraw |= state.handle_keyboard_event(keyboard_event);
-            }
-            _ => {}
-        }
-
-        if let Some(aspect) = self.data_aspect
-            && apply_data_aspect(&mut state.camera, &state.bounds, aspect)
-        {
-            effects.needs_redraw = true;
-        }
-
-        // Hover/pick highlight mask boxes are baked in clip space. Rebuild them through the
-        // existing highlight_version path whenever camera or viewport bounds change.
-        if !state.highlighted_points.is_empty()
-            && (state.camera != prev_camera || state.bounds != prev_bounds)
-        {
-            state.highlight_version = state.highlight_version.wrapping_add(1);
-            effects.needs_redraw = true;
-        }
-
-        // Process picking results after event handling (works for both mouse events and data updates)
-        consume_gpu_pick_results(self, state, &mut effects);
-
-        // If we have an outstanding GPU pick request, keep drawing until the result arrives.
-        effects.needs_redraw |= state.picking.has_outstanding_gpu_request();
-
-        let (publish_x_ticks, publish_y_ticks) =
-            update_ticks_and_build_payload(self, state, &mut effects, first_time_widget_view);
-
-        let needs_publish = effects.hover_pick.is_some()
-            || effects.drag_event.is_some()
-            || effects.cursor_ui.is_some()
-            || publish_x_ticks.is_some()
-            || publish_y_ticks.is_some()
-            || effects.clear_cursor_position
-            || effects.publish_camera_bounds;
-
-        if needs_publish {
-            let camera_bounds = if effects.hover_pick.is_some()
-                || publish_x_ticks.is_some()
-                || publish_y_ticks.is_some()
-                || effects.publish_camera_bounds
-            {
-                Some((state.camera, state.bounds))
-            } else {
-                None
-            };
-
-            return Some(shader::Action::publish(PlotUiMessage::RenderUpdate(
-                PlotRenderUpdate {
-                    hover_pick: effects.hover_pick,
-                    drag_event: effects.drag_event,
-                    clear_cursor_position: effects.clear_cursor_position,
-                    cursor_position_ui: effects.cursor_ui,
-                    x_ticks: publish_x_ticks,
-                    y_ticks: publish_y_ticks,
-                    camera_bounds: camera_bounds.map(Box::new),
-                },
-            )));
-        }
-
-        effects.needs_redraw.then(shader::Action::request_redraw)
+        update_plot_program::<false>(self, state, event, bounds, cursor)
     }
 
     fn mouse_interaction(
@@ -1489,16 +1785,42 @@ impl shader::Program<PlotUiMessage> for PlotWidget {
         _bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Interaction {
-        // Return appropriate mouse cursor based on current interaction state
-        if state.pan.active {
-            Interaction::Grabbing
-        } else if state.selection.active {
-            Interaction::Crosshair
-        } else if state.picking.last_hover_cache.is_some() {
-            Interaction::Pointer
-        } else {
-            Interaction::None
-        }
+        plot_mouse_interaction(state)
+    }
+}
+
+#[cfg(feature = "canvas")]
+impl iced::widget::canvas::Program<PlotUiMessage> for PlotWidget {
+    type State = PlotState;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &iced::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<iced::widget::canvas::Action<PlotUiMessage>> {
+        update_plot_program::<true>(self, state, event, bounds, cursor)
+    }
+
+    fn draw(
+        &self,
+        state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<iced::widget::canvas::Geometry> {
+        crate::plot_renderer::canvas::draw(renderer, &self.canvas_caches, state, bounds)
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &Self::State,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Interaction {
+        plot_mouse_interaction(state)
     }
 }
 
@@ -1550,7 +1872,7 @@ impl PlotWidget {
     fn valid_point_id(&self, point_id: &PointId) -> bool {
         self.series
             .get(&point_id.series_id)
-            .map(|series| point_id.point_index < series.positions.len())
+            .map(|series| series.pickable && point_id.point_index < series.positions.len())
             .unwrap_or(false)
     }
 }
@@ -1578,11 +1900,13 @@ impl PlotWidget {
             bounds,
             ..
         } = state;
+        let force_cpu_picking = self.render_strategy.force_cpu_picking();
 
         pick_state.request_pick_hit(
             self.instance_id,
             *cursor_position,
             *hover_radius_px,
+            force_cpu_picking,
             points.as_ref(),
             series.as_ref(),
             camera,
@@ -1615,21 +1939,40 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 ///
 /// + `x` and `y` to change the position of the highlight point (not recommended);
 /// + `color` to change the color of the highlight point;
+/// + `transform` to change how the highlight x/y values are interpreted before drawing;
 /// + `marker_style` to change the marker style of the highlight point;
 /// + `mask_padding` to change the mask padding of the highlight point;
 ///
 ///  to change the highlight point.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HighlightPoint {
-    /// Data-space coordinates
+    /// Raw x value for the highlight point.
     pub x: f64,
-    /// Data-space coordinates
+    /// Raw y value for the highlight point.
     pub y: f64,
+    /// How to interpret or convert the x/y values before drawing.
+    pub transform: PositionTransform,
     pub color: Color,
     /// Optional marker style for the series. If None, no markers are drawn.
     pub marker_style: Option<MarkerStyle>,
     /// Mask padding in pixels. If None, no mask is drawn.
     pub mask_padding: Option<f32>,
+}
+
+pub struct PositionDisplay<'a> {
+    pos: f64,
+    transform: &'a Option<Transform>,
+}
+impl fmt::Display for PositionDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(transform) = self.transform
+            && transform.uses_axes_coordinates()
+        {
+            write!(f, "{:.1}%", self.pos * 100.0)
+        } else {
+            write!(f, "{:.2}", self.pos)
+        }
+    }
 }
 
 impl HighlightPoint {
@@ -1645,6 +1988,18 @@ impl HighlightPoint {
                     *size *= factor;
                 }
             }
+        }
+    }
+    pub fn display_x(&self) -> PositionDisplay<'_> {
+        PositionDisplay {
+            pos: self.x,
+            transform: &self.transform.x,
+        }
+    }
+    pub fn display_y(&self) -> PositionDisplay<'_> {
+        PositionDisplay {
+            pos: self.y,
+            transform: &self.transform.y,
         }
     }
 }

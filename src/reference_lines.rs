@@ -1,4 +1,4 @@
-use crate::{Color, LineStyle, LineType, Size, series::ShapeId};
+use crate::{Color, LineStyle, LineType, Size, series::ShapeId, transform::Transform};
 
 /// A vertical line at a fixed x-coordinate.
 #[derive(Debug, Clone)]
@@ -7,6 +7,8 @@ pub struct VLine {
     pub id: ShapeId,
     /// The x-coordinate where the vertical line is drawn.
     pub x: f64,
+    /// How to interpret or convert the x value before drawing.
+    pub transform: Option<Transform>,
     /// Optional label for the line (appears in legend if provided).
     pub label: Option<String>,
     /// Color of the line.
@@ -21,6 +23,7 @@ impl VLine {
         Self {
             id: ShapeId::new(),
             x,
+            transform: None,
             label: None,
             color: Color::from_rgb(0.5, 0.5, 0.5),
             line_style: LineStyle::default(),
@@ -39,6 +42,21 @@ impl VLine {
     /// Set the color of the line.
     pub fn with_color(mut self, color: Color) -> Self {
         self.color = color;
+        self
+    }
+
+    /// Set how this reference line interprets or converts its x value before drawing.
+    ///
+    /// For normal data values, conversion runs before the plot's x-axis scale.
+    /// `Transform::axes()` uses normalized plot positions instead.
+    pub fn with_transform(mut self, transform: Transform) -> Self {
+        self.transform = Some(transform);
+        self
+    }
+
+    /// Interpret the x position as a normalized plot coordinate.
+    pub fn with_axes_transform(mut self) -> Self {
+        self.transform = Some(Transform::axes());
         self
     }
 
@@ -79,6 +97,8 @@ pub struct HLine {
     pub id: ShapeId,
     /// The y-coordinate where the horizontal line is drawn.
     pub y: f64,
+    /// How to interpret or convert the y value before drawing.
+    pub transform: Option<Transform>,
     /// Optional label for the line (appears in legend if provided).
     pub label: Option<String>,
     /// Color of the line.
@@ -93,6 +113,7 @@ impl HLine {
         Self {
             id: ShapeId::new(),
             y,
+            transform: None,
             label: None,
             color: Color::from_rgb(0.5, 0.5, 0.5),
             line_style: LineStyle::default(),
@@ -111,6 +132,21 @@ impl HLine {
     /// Set the color of the line.
     pub fn with_color(mut self, color: Color) -> Self {
         self.color = color;
+        self
+    }
+
+    /// Set how this reference line interprets or converts its y value before drawing.
+    ///
+    /// For normal data values, conversion runs before the plot's y-axis scale.
+    /// `Transform::axes()` uses normalized plot positions instead.
+    pub fn with_transform(mut self, transform: Transform) -> Self {
+        self.transform = Some(transform);
+        self
+    }
+
+    /// Interpret the y position as a normalized plot coordinate.
+    pub fn with_axes_transform(mut self) -> Self {
+        self.transform = Some(Transform::axes());
         self
     }
 

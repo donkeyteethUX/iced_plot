@@ -88,16 +88,22 @@ pub struct PlotRenderUpdate {
 pub enum DragEvent {
     /// A drag gesture started inside the plot.
     Start {
+        /// Mouse button that initiated the drag stream.
+        button: iced::mouse::Button,
         /// Current cursor world/data coordinate.
         world: [f64; 2],
     },
     /// Cursor moved while drag is active.
     Update {
+        /// Mouse button that initiated the drag stream.
+        button: iced::mouse::Button,
         /// Current cursor world/data coordinate.
         world: [f64; 2],
     },
     /// Active drag gesture ended.
     End {
+        /// Mouse button that initiated the drag stream.
+        button: iced::mouse::Button,
         /// Current cursor world/data coordinate.
         world: [f64; 2],
     },

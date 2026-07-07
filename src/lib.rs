@@ -32,6 +32,7 @@ pub(crate) mod grid;
 pub(crate) mod legend;
 pub(crate) mod message;
 pub(crate) mod picking;
+pub(crate) mod plot_overlay;
 pub(crate) mod plot_renderer;
 pub(crate) mod plot_state;
 pub(crate) mod plot_widget;
@@ -41,6 +42,7 @@ pub(crate) mod reference_lines;
 pub(crate) mod series;
 pub(crate) mod style;
 pub(crate) mod ticks;
+pub(crate) mod transform;
 
 // Iced re-exports.
 pub use iced::Color;
@@ -48,10 +50,12 @@ pub use iced::Color;
 // Re-exports of public types.
 pub use axis_link::AxisLink;
 pub use axis_scale::AxisScale;
-pub use controls::{PanControls, PickControls, PlotControls, ZoomControls};
+pub use controls::{ClickAction, DragAction, KeyAction, PanDirection, PlotControls, ScrollAction};
 pub use fill::Fill;
 pub use grid::TickWeight;
 pub use message::{DragEvent, HoverPickEvent, PlotUiMessage, PointId, TooltipContext};
+pub use plot_overlay::PlotOverlay;
+pub use plot_renderer::PlotRenderStrategy;
 pub use plot_widget::{HighlightPoint, PlotWidget};
 pub use plot_widget_builder::PlotWidgetBuilder;
 pub use point::{MarkerType, Point};
@@ -62,3 +66,4 @@ pub use ticks::{
     Tick, TickFormatter, TickProducer, default_formatter, default_tick_producer, log_formatter,
     log_tick_producer,
 };
+pub use transform::{CoordinateSystem, PositionTransform, Transform};

@@ -18,6 +18,12 @@ pub enum MarkerType {
 
 pub(crate) const MARKER_SIZE_PIXELS: u32 = 0;
 pub(crate) const MARKER_SIZE_WORLD: u32 = 1;
+pub(crate) const MARKER_SIZE_MODE_MASK: u32 = 0b1;
+pub(crate) const MARKER_PICKABLE_BIT: u32 = 0b10;
+
+pub(crate) fn marker_flags(size_mode: u32, pickable: bool) -> u32 {
+    (size_mode & MARKER_SIZE_MODE_MASK) | if pickable { MARKER_PICKABLE_BIT } else { 0 }
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]

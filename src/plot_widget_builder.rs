@@ -7,6 +7,7 @@ use crate::axis_scale::AxisScale;
 use crate::controls::PlotControls;
 use crate::fill::Fill;
 use crate::message::TooltipContext;
+use crate::plot_renderer::PlotRenderStrategy;
 use crate::plot_widget::{CursorProvider, HighlightPoint, HighlightPointProvider, PlotWidget};
 use crate::reference_lines::{HLine, VLine};
 use crate::series::{Series, SeriesError};
@@ -33,12 +34,15 @@ pub struct PlotWidgetBuilder {
     y_label: Option<String>,
     autoscale_on_updates: Option<bool>,
     hover_radius_px: Option<f32>,
+    highlight_on_hover: Option<bool>,
     pick_highlight_provider: Option<HighlightPointProvider>,
     hover_highlight_provider: Option<HighlightPointProvider>,
     cursor_overlay: Option<bool>,
     cursor_provider: Option<CursorProvider>,
     crosshairs: Option<bool>,
+    render_strategy: Option<PlotRenderStrategy>,
     controls: Option<PlotControls>,
+    controls_help: Option<bool>,
     disable_legend: bool,
     x_lim: Option<(f64, f64)>,
     y_lim: Option<(f64, f64)>,
@@ -98,6 +102,12 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Enable or disable point highlighting while hovering.
+    pub fn with_highlight_on_hover(mut self, enabled: bool) -> Self {
+        self.highlight_on_hover = Some(enabled);
+        self
+    }
+
     /// Provide a custom highlighter for pick point.
     pub fn with_pick_highlight_provider<F>(mut self, provider: F) -> Self
     where
@@ -142,13 +152,19 @@ impl PlotWidgetBuilder {
         self
     }
 
+    /// Select which rendering path the plot should use.
+    pub fn with_render_strategy(mut self, strategy: PlotRenderStrategy) -> Self {
+        self.render_strategy = Some(strategy);
+        self
+    }
+
     /// Disable the in-canvas controls/help UI (`?` button + panel).
     ///
     /// Useful if your application provides its own help UI or you want a cleaner canvas.
     ///
     /// When controls/help UI is disabled, you still can toggle help overlay by calling `PlotWidget.update(PlotUiMessage::ToggleControlsOverlay)`
     pub fn disable_controls_help(mut self) -> Self {
-        self.controls.get_or_insert_default().show_controls_help = false;
+        self.controls_help = Some(false);
         self
     }
 
@@ -157,14 +173,6 @@ impl PlotWidgetBuilder {
     /// By default, when plot contains at least one labeled series, the legend is enabled.
     pub fn disable_legend(mut self) -> Self {
         self.disable_legend = true;
-        self
-    }
-
-    /// Disable the scroll to pan.
-    ///
-    /// Useful if your application embeds plot widget inside a scrollable container.
-    pub fn disable_scroll_to_pan(mut self) -> Self {
-        self.controls.get_or_insert_default().pan.scroll_to_pan = false;
         self
     }
 
@@ -338,11 +346,17 @@ impl PlotWidgetBuilder {
         point: &mut HighlightPoint,
     ) -> Option<String> {
         if ctx.series_label.is_empty() {
-            Some(format!("x: {:.2}, y: {:.2}", point.x, point.y))
+            Some(format!(
+                "x: {}, y: {}",
+                point.display_x(),
+                point.display_y()
+            ))
         } else {
             Some(format!(
-                "{}\nx: {:.2}, y: {:.2}",
-                ctx.series_label, point.x, point.y
+                "{}\nx: {}, y: {}",
+                ctx.series_label,
+                point.display_x(),
+                point.display_y()
             ))
         }
     }
@@ -377,6 +391,9 @@ impl PlotWidgetBuilder {
         if let Some(controls) = self.controls {
             w.set_controls(controls);
         }
+        if let Some(enabled) = self.controls_help {
+            w.set_controls_help(enabled);
+        }
         if self.disable_legend {
             w.legend_enabled = false;
         }
@@ -386,6 +403,9 @@ impl PlotWidgetBuilder {
         }
         if let Some(r) = self.hover_radius_px {
             w.hover_radius_px(r);
+        }
+        if let Some(enabled) = self.highlight_on_hover {
+            w.set_highlight_on_hover(enabled);
         }
         if let Some(x) = self.x_label {
             w.set_x_axis_label(x);
@@ -415,6 +435,9 @@ impl PlotWidgetBuilder {
         }
         if let Some(enabled) = self.crosshairs {
             w.set_crosshairs(enabled);
+        }
+        if let Some(strategy) = self.render_strategy {
+            w.set_render_strategy(strategy);
         }
         if let Some(link) = self.x_axis_link {
             w.set_x_axis_link(link);
