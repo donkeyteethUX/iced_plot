@@ -1,7 +1,7 @@
 #[cfg(feature = "canvas")]
 pub mod canvas;
 mod shader;
-pub(crate) use shader::{PlotRenderer, RenderParams};
+pub(crate) use shader::{MSAA_SAMPLE_COUNT, PlotRenderer, RenderParams};
 
 use crate::{
     plot_state::PlotState, plot_widget::HighlightPoint, series::Size,

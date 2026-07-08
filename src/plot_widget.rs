@@ -1889,19 +1889,28 @@ impl shader::Primitive for Primitive {
     /// fragmentation of the surface, which corrupted frames (vanishing text)
     /// on tile-based mobile GPUs. GPU picking is unaffected: it runs from
     /// `prepare` with its own encoder/submission.
+    ///
+    /// Only valid when the pipelines are single-sampled: iced's surface pass
+    /// has sample count 1, so with MSAA pipelines (desktop, 4x) this returns
+    /// `false` and iced falls back to `render`, which draws into a dedicated
+    /// MSAA offscreen target and composites the resolved texture.
     fn draw(
         &self,
         renderer_state: &Self::Pipeline,
         render_pass: &mut iced::wgpu::RenderPass<'_>,
     ) -> bool {
+        if crate::plot_renderer::MSAA_SAMPLE_COUNT > 1 {
+            return false;
+        }
         if let Some(renderer) = renderer_state.renderers.get(&self.instance_id) {
             renderer.draw_in_pass(render_pass);
         }
         true
     }
 
-    /// Fallback path (unused: `draw` always returns `true`). Kept for
-    /// API completeness and easy A/B testing against the in-pass path.
+    /// MSAA path (desktop): dedicated offscreen MSAA pass + resolve +
+    /// composite. Android (MSAA=1) never reaches this — `draw` handles it
+    /// in-pass.
     fn render(
         &self,
         renderer_state: &Self::Pipeline,

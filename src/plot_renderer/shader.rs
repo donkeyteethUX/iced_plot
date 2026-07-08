@@ -10,7 +10,18 @@ use crate::{LineType, Size, camera::CameraUniform, grid::Grid, plot_state::PlotS
 use iced::widget::shader::Viewport;
 use iced::{Rectangle, wgpu::*};
 
-const MSAA_SAMPLE_COUNT: u32 = 4;
+/// MSAA sample count for all plot pipelines.
+///
+/// Android: 1 — plots draw inside iced's surface render pass via
+/// `Primitive::draw` (see `draw_in_pass`), and that pass is single-sampled;
+/// MSAA pipelines would be incompatible ("Incompatible sample count"
+/// validation panic). In-pass rendering is required there because per-plot
+/// pass fragmentation corrupts frames on tile-based GPUs (Mali/Adreno).
+///
+/// Desktop: 4 — plots render through `render()`/`encode` into a dedicated
+/// MSAA offscreen target and composite the resolved texture, so
+/// `Primitive::draw` must return `false` (see `PlotWidget` shader impl).
+pub(crate) const MSAA_SAMPLE_COUNT: u32 = if cfg!(target_os = "android") { 1 } else { 4 };
 
 pub struct RenderParams<'a> {
     pub encoder: &'a mut CommandEncoder,
@@ -430,7 +441,11 @@ impl PlotRenderer {
         }
         self.ensure_overlay_pipeline(device);
         self.ensure_line_overlay_pipeline(device);
-        self.ensure_composite_pipeline(device);
+        // Composite yalnız `encode`'un resolve→hedef blit'inde kullanılır;
+        // pas-içi (MSAA=1) yolda gereksiz.
+        if MSAA_SAMPLE_COUNT > 1 {
+            self.ensure_composite_pipeline(device);
+        }
     }
     fn set_bounds(&mut self, w: u32, h: u32) {
         self.bounds_w = w;
@@ -557,7 +572,12 @@ impl PlotRenderer {
 
         self.set_bounds(bounds_width, bounds_height);
         self.set_scale_factor(scale_factor);
-        self.ensure_msaa_targets(device, viewport_size.width, viewport_size.height);
+        // In-pass path (MSAA=1, Android) never runs `encode`, so the offscreen
+        // MSAA/resolve textures would only waste memory; `encode` self-guards
+        // by early-returning when `msaa_targets` is `None`.
+        if MSAA_SAMPLE_COUNT > 1 {
+            self.ensure_msaa_targets(device, viewport_size.width, viewport_size.height);
+        }
 
         // Sync picking viewport
         self.picking
