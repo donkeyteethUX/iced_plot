@@ -63,7 +63,7 @@ fn new() -> PlotWidget {
         .with_x_label("Time of Day\n\n\n")
         .with_y_label("Temperature")
         // Custom tick producer for X axis: place ticks every 4 hours
-        .with_x_tick_producer(|min, max| {
+        .with_x_tick_producer(|min, max, _width_px| {
             let hour_in_seconds = 3600.0;
             let tick_interval = 4.0 * hour_in_seconds; // 4 hours
 
@@ -92,8 +92,12 @@ fn new() -> PlotWidget {
             format!("{:02}:{:02}", hours, minutes)
         })
         // Custom tick producer for Y axis: place ticks every 5 degrees
-        .with_y_tick_producer(|min, max| {
-            let tick_interval = 5.0;
+        .with_y_tick_producer(|min, max, height_px| {
+            const DESIRED_SPACING_PX: f64 = 20.0;
+
+            let num_ticks = (height_px / DESIRED_SPACING_PX).ceil();
+            let tick_interval = (max - min) / num_ticks;
+
             let start = (min / tick_interval).floor() * tick_interval;
             let mut ticks = Vec::new();
             let mut value = start;

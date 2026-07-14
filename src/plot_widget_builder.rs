@@ -247,18 +247,22 @@ impl PlotWidgetBuilder {
     }
 
     /// Set a custom tick producer for generating tick positions along the x-axis.
+    ///
+    /// See [`TickProducer`] for details on the function signature.
     pub fn with_x_tick_producer<F>(mut self, producer: F) -> Self
     where
-        F: Fn(f64, f64) -> Vec<Tick> + Send + Sync + 'static,
+        F: Fn(f64, f64, f64) -> Vec<Tick> + Send + Sync + 'static,
     {
         self.x_tick_producer = Some(Arc::new(producer));
         self
     }
 
     /// Set a custom tick producer for generating tick positions along the y-axis.
+    ///
+    /// See [`TickProducer`] for details on the function signature.
     pub fn with_y_tick_producer<F>(mut self, producer: F) -> Self
     where
-        F: Fn(f64, f64) -> Vec<Tick> + Send + Sync + 'static,
+        F: Fn(f64, f64, f64) -> Vec<Tick> + Send + Sync + 'static,
     {
         self.y_tick_producer = Some(Arc::new(producer));
         self
@@ -335,8 +339,8 @@ impl PlotWidgetBuilder {
 
     /// Disable background grid lines and ticks on both axes.
     pub fn without_grid(self) -> Self {
-        self.with_x_tick_producer(|_, _| Vec::new())
-            .with_y_tick_producer(|_, _| Vec::new())
+        self.with_x_tick_producer(|_, _, _| Vec::new())
+            .with_y_tick_producer(|_, _, _| Vec::new())
     }
 
     /// Default hover highlight provider that shows the tooltip text with

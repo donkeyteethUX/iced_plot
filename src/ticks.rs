@@ -39,8 +39,17 @@ impl Tick {
 pub type TickFormatter = Arc<dyn Fn(Tick) -> String + Send + Sync>;
 
 /// A function which generates tick positions along an axis.
-/// Takes a range (min, max) and returns a vector of ticks with their values and weights.
-pub type TickProducer = Arc<dyn Fn(f64, f64) -> Vec<Tick> + Send + Sync>;
+///
+/// Maps the tuple (min, max, width_pixels) to a vector of ticks.
+///
+/// ## Arguments
+/// - `min`: The minimum value of the axis in world coordinates.
+/// - `max`: The maximum value of the axis in world coordinates.
+/// - `width_pixels`: The width of the plot along this axis in pixels.
+///
+/// ## Returns
+/// A vector of `Tick` structs representing the positions and weights of ticks along the axis.
+pub type TickProducer = Arc<dyn Fn(f64, f64, f64) -> Vec<Tick> + Send + Sync>;
 
 /// A default formatter that displays values with reasonable precision.
 pub fn default_formatter(mark: Tick) -> String {
@@ -70,17 +79,24 @@ pub fn log_formatter(mark: Tick, base: f64) -> String {
 }
 
 /// A default tick producer that generates tick positions with appropriate spacing.
-pub fn default_tick_producer(min: f64, max: f64) -> Vec<Tick> {
+pub fn default_tick_producer(min: f64, max: f64, size_pixels: f64) -> Vec<Tick> {
     const GRID_TARGET_LINES: f64 = 20.0;
+    const GRID_TARGET_SPACING_PX: f64 = 15.0;
     const GRID_MAJOR_INTERVAL: i64 = 10;
     const GRID_MINOR_INTERVAL: i64 = 5;
+
+    // Limit the target number of grid lines based on the size of the viewport
+    // and desired spacing in pixels.
+    let target_lines = (size_pixels / GRID_TARGET_SPACING_PX)
+        .ceil()
+        .min(GRID_TARGET_LINES);
 
     let span = max - min;
     if !span.is_finite() || span <= 0.0 {
         return Vec::new();
     }
 
-    let step = nice_step(span / GRID_TARGET_LINES);
+    let step = nice_step(span / target_lines);
     let start = (min / step).ceil() * step;
 
     let mut ticks = Vec::new();
@@ -110,7 +126,7 @@ pub fn default_tick_producer(min: f64, max: f64) -> Vec<Tick> {
 /// A simple powers-only base-10 tick producer.
 ///
 /// Inputs are raw data-space bounds and must be positive.
-pub fn log_tick_producer(base: f64, min: f64, max: f64) -> Vec<Tick> {
+pub fn log_tick_producer(base: f64, min: f64, max: f64, size_px: f64) -> Vec<Tick> {
     let mut lo = min.min(max);
     let hi = min.max(max);
     if !lo.is_finite() || !hi.is_finite() || hi <= 0.0 {
@@ -127,8 +143,15 @@ pub fn log_tick_producer(base: f64, min: f64, max: f64) -> Vec<Tick> {
         return Vec::new();
     }
 
+    let max_ticks_for_spacing = (size_px / 30.0).ceil() + 1.0;
+    let skip = ((end_exp - start_exp + 1) as f64 / max_ticks_for_spacing).ceil() as i32;
+
     let mut out = Vec::with_capacity((end_exp - start_exp + 1) as usize);
-    for exp in start_exp..=end_exp {
+    for (i, exp) in (start_exp..=end_exp).enumerate() {
+        if i as i32 % skip != 0 {
+            continue;
+        }
+
         let value = base.powi(exp);
         if value.is_finite() {
             out.push(Tick::new(value, base, TickWeight::Major));

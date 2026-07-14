@@ -438,7 +438,7 @@ impl PlotState {
             .unwrap_or(max_x_plot);
 
         let x_tick_values = match x_tick_producer {
-            Some(producer) => producer(min_x, max_x),
+            Some(producer) => producer(min_x, max_x, self.bounds.width.into()),
             None => Vec::new(),
         };
 
@@ -468,7 +468,7 @@ impl PlotState {
             .unwrap_or(max_y_plot);
 
         let y_tick_values = match y_tick_producer {
-            Some(producer) => producer(min_y, max_y),
+            Some(producer) => producer(min_y, max_y, self.bounds.height.into()),
             None => Vec::new(),
         };
 
