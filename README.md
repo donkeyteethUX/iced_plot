@@ -32,7 +32,7 @@ See the `examples/` directory for more.
 
 ## Wasm support
 
-Iced plot works in WebGPU-enabled browsers. The examples can be served with [trunk](https://trunkrs.dev/):
+Iced plot works in WebGPU-enabled browsers. The examples can be served with [trunk](https://trunk-rs.github.io/trunk/):
 
 ```
 $ trunk serve examples/index.html --example custom_ticks
